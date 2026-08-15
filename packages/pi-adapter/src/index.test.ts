@@ -1,6 +1,13 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -33,12 +40,39 @@ afterEach(async () => {
   );
 });
 
-function manager(id: unknown): {
+function manager(
+  id: unknown,
+  cwd = "/project",
+  sessionFile = "/agent/session.jsonl",
+): {
   appendSessionInfo(name: string): void;
+  getEntries(): unknown[];
+  getHeader(): unknown;
+  getSessionFile(): string;
   getSessionId(): unknown;
 } {
+  let name = "New thread";
   return {
-    appendSessionInfo: () => undefined,
+    appendSessionInfo: (value) => {
+      name = value;
+    },
+    getEntries: () => [
+      {
+        type: "session_info",
+        id: "session-info",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        name,
+      },
+    ],
+    getHeader: () => ({
+      type: "session",
+      version: 3,
+      id,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd,
+    }),
+    getSessionFile: () => sessionFile,
     getSessionId: () => id,
   };
 }
@@ -89,13 +123,71 @@ async function fixture(): Promise<{
 }
 
 describe("PiAgentRuntime session creation boundary", () => {
-  it("returns a parsed UUID session identifier", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-web-pi-adapter-"));
+  async function creationFixture(): Promise<{
+    agentDirectory: string;
+    project: string;
+    sessionDirectory: string;
+    sessionPath: string;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-pi-adapter-create-"));
     roots.push(root);
-    sdk.create.mockReturnValue(manager(sessionId));
+    const projectPath = join(root, "project");
+    const agentDirectory = join(root, "agent");
+    await mkdir(projectPath);
+    const project = await realpath(projectPath);
+    const encodedProject = `--${project.slice(1).replaceAll("/", "-")}--`;
+    const sessionDirectory = join(agentDirectory, "sessions", encodedProject);
+    const sessionPath = join(sessionDirectory, `${sessionId}.jsonl`);
+    await mkdir(sessionDirectory, { recursive: true });
+    return { agentDirectory, project, sessionDirectory, sessionPath };
+  }
 
-    await expect(new PiAgentRuntime().create(root)).resolves.toEqual({
-      sessionId,
+  it("returns a parsed UUID only after persisting the new session", async () => {
+    const context = await creationFixture();
+    sdk.create.mockReturnValue(
+      manager(sessionId, context.project, context.sessionPath),
+    );
+
+    await expect(
+      new PiAgentRuntime(context.agentDirectory).create(context.project),
+    ).resolves.toEqual({ sessionId });
+    expect(sdk.create).toHaveBeenCalledWith(
+      context.project,
+      context.sessionDirectory,
+    );
+    await expect(readFile(context.sessionPath, "utf8")).resolves.toContain(
+      `"id":"${sessionId}"`,
+    );
+  });
+
+  it("does not overwrite an existing native session file", async () => {
+    const context = await creationFixture();
+    await writeFile(context.sessionPath, "existing\n", "utf8");
+    sdk.create.mockReturnValue(
+      manager(sessionId, context.project, context.sessionPath),
+    );
+
+    await expect(
+      new PiAgentRuntime(context.agentDirectory).create(context.project),
+    ).rejects.toMatchObject({
+      code: "unavailable",
+      message: "The native session could not be created.",
+    });
+    await expect(readFile(context.sessionPath, "utf8")).resolves.toBe(
+      "existing\n",
+    );
+  });
+
+  it("rejects a created session path outside its Pi session directory", async () => {
+    const context = await creationFixture();
+    const outside = join(dirname(context.sessionDirectory), "outside.jsonl");
+    sdk.create.mockReturnValue(manager(sessionId, context.project, outside));
+
+    await expect(
+      new PiAgentRuntime(context.agentDirectory).create(context.project),
+    ).rejects.toMatchObject({
+      code: "malformed",
+      message: "The native session returned malformed creation state.",
     });
   });
 

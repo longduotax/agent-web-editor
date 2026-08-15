@@ -6,7 +6,9 @@ The adapter discovers sessions for a canonical project, returns path-free
 session descriptors, resolves stored UUIDs through a fresh authorized listing,
 opens/creates native persistent sessions, translates active history and live Pi
 events into SDK-neutral DTOs, and owns prompt preflight, steering, abort, and
-runtime disposal.
+runtime disposal. New blank sessions are atomically materialized from narrowly
+parsed `SessionManager` state because Pi SDK 0.84.2 otherwise delays its first
+JSONL write until an assistant message exists.
 
 `PI_CODING_AGENT_DIR`, when set, must be an absolute path. The adapter
 normalizes it once during runtime construction; when absent it uses Pi's

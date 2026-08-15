@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 
 import {
   SessionManager,
@@ -38,6 +46,22 @@ const sessionInfoSchema = z.object({
 const nativeHistorySchema = z.array(z.unknown());
 const nativeSessionListSchema = z.array(z.unknown());
 const nativeSessionNameSchema = z.string().max(200).nullable();
+const createdSessionHeaderSchema = z.strictObject({
+  type: z.literal("session"),
+  version: z.literal(3),
+  id: SessionIdSchema,
+  timestamp: TimestampSchema,
+  cwd: z.string().min(1),
+  parentSession: z.string().optional(),
+});
+const createdSessionInfoSchema = z.strictObject({
+  type: z.literal("session_info"),
+  id: z.string().min(1).max(200),
+  parentId: z.null(),
+  timestamp: TimestampSchema,
+  name: z.literal("New thread"),
+});
+const createdSessionEntriesSchema = z.tuple([createdSessionInfoSchema]);
 
 type SessionInfo = z.infer<typeof sessionInfoSchema>;
 
@@ -61,8 +85,14 @@ function parseNativeHistory(value: unknown): unknown[] {
   return parsed.data;
 }
 
-async function listNativeSessions(projectPath: string): Promise<unknown[]> {
-  const result = await SessionManager.list(projectPath);
+async function listNativeSessions(
+  projectPath: string,
+  agentDirectory: string,
+): Promise<unknown[]> {
+  const result = await SessionManager.list(
+    projectPath,
+    defaultSessionDirectory(agentDirectory, projectPath),
+  );
   const parsed = nativeSessionListSchema.safeParse(result);
   if (!parsed.success)
     throw new RuntimeFailure(
@@ -182,6 +212,60 @@ function sessionIdFromManager(manager: SessionManager): string {
       "The native session returned an invalid identifier.",
     );
   return parsed.data;
+}
+
+async function persistNewSession(
+  manager: SessionManager,
+  projectPath: string,
+  agentDirectory: string,
+): Promise<string> {
+  const sessionId = sessionIdFromManager(manager);
+  const header = createdSessionHeaderSchema.safeParse(manager.getHeader());
+  const entries = createdSessionEntriesSchema.safeParse(manager.getEntries());
+  const rawSessionPath = manager.getSessionFile();
+  if (
+    !header.success ||
+    !entries.success ||
+    header.data.id !== sessionId ||
+    header.data.cwd !== projectPath ||
+    header.data.parentSession !== undefined ||
+    typeof rawSessionPath !== "string" ||
+    !isAbsolute(rawSessionPath) ||
+    extname(rawSessionPath) !== ".jsonl"
+  )
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session returned malformed creation state.",
+    );
+
+  try {
+    const expectedDirectory = await realpath(
+      defaultSessionDirectory(agentDirectory, projectPath),
+    );
+    const parentDirectory = await realpath(dirname(rawSessionPath));
+    if (parentDirectory !== expectedDirectory)
+      throw new RuntimeFailure(
+        "malformed",
+        "The native session returned malformed creation state.",
+      );
+    const sessionPath = join(expectedDirectory, basename(rawSessionPath));
+    const jsonl = [header.data, ...entries.data]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    await writeFile(sessionPath, `${jsonl}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (error instanceof RuntimeFailure) throw error;
+    throw new RuntimeFailure(
+      "unavailable",
+      "The native session could not be created.",
+      { cause: error },
+    );
+  }
+  return sessionId;
 }
 
 const baseEntrySchema = z.looseObject({
@@ -642,7 +726,7 @@ export class PiAgentRuntime implements AgentRuntime {
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }> {
     const canonical = await realpath(projectPath);
-    const infos = await listNativeSessions(canonical);
+    const infos = await listNativeSessions(canonical, this.agentDirectory);
     const sessions: RuntimeSessionDescriptor[] = [];
     const diagnostics: string[] = [];
     const seen = new Set<string>();
@@ -696,9 +780,18 @@ export class PiAgentRuntime implements AgentRuntime {
 
   public async create(projectPath: string): Promise<{ sessionId: string }> {
     const canonical = await realpath(projectPath);
-    const manager = SessionManager.create(canonical);
+    const manager = SessionManager.create(
+      canonical,
+      defaultSessionDirectory(this.agentDirectory, canonical),
+    );
     manager.appendSessionInfo("New thread");
-    return { sessionId: sessionIdFromManager(manager) };
+    return {
+      sessionId: await persistNewSession(
+        manager,
+        canonical,
+        this.agentDirectory,
+      ),
+    };
   }
 
   public async open(
@@ -706,7 +799,7 @@ export class PiAgentRuntime implements AgentRuntime {
     sessionId: string,
   ): Promise<OpenRuntimeSession> {
     const canonical = await realpath(projectPath);
-    const discovered = await listNativeSessions(canonical);
+    const discovered = await listNativeSessions(canonical, this.agentDirectory);
     const matches: SessionInfo[] = [];
     for (const raw of discovered) {
       const parsed = sessionInfoSchema.safeParse(raw);
@@ -737,6 +830,7 @@ export class PiAgentRuntime implements AgentRuntime {
       );
       const result = await createAgentSession({
         cwd: canonical,
+        agentDir: this.agentDirectory,
         sessionManager: manager,
       });
       return new PiOpenSession(result.session, manager);
