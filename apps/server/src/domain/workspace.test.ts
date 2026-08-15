@@ -80,10 +80,13 @@ class ControlledSession implements OpenRuntimeSession {
 class ControlledRuntime implements AgentRuntime {
   public readonly session = new ControlledSession();
   public created = 0;
+  public createFailure: Error | undefined;
   public discover() {
     return Promise.resolve({ sessions: [], diagnostics: [] });
   }
   public create() {
+    if (this.createFailure !== undefined)
+      return Promise.reject(this.createFailure);
     this.created += 1;
     return Promise.resolve({
       sessionId: `10000000-0000-4000-8000-${String(this.created).padStart(12, "0")}`,
@@ -221,6 +224,20 @@ describe("run coordination", () => {
     if (discarded === undefined)
       throw new Error("deferred PTY was not created");
     expect(discarded.killed).toBe(true);
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("does not persist thread metadata when native session creation fails", async () => {
+    const context = await fixture();
+    const priorThreads = context.store.listThreads(context.project.id);
+    context.runtime.createFailure = new Error("session_create_failed");
+
+    await expect(
+      context.service.createThread(context.project.id),
+    ).rejects.toThrow("session_create_failed");
+    expect(context.store.listThreads(context.project.id)).toEqual(priorThreads);
+
     await context.service.close();
     context.store.close();
   });

@@ -4,7 +4,7 @@
 
 **Subsystem:** Agent runtime abstraction, Pi sessions, runs, tools, and trust
 
-**Last verified:** 2026-08-15
+**Last verified:** 2026-08-16
 
 **Related documents:** [Initial agent workspace](../product-specs/initial-workspace.md), [initial workspace execution plan](../exec-plans/active/2026-08-15-initial-agent-workspace.md), and [Parse, Don't Validate](../architecture/data-boundaries.md)
 
@@ -29,7 +29,7 @@ No Pi class, event, content block, path, or generic SDK type crosses the adapter
 
 ## Pi sessions and import
 
-- New threads use `SessionManager.create(canonicalProjectPath)` and record the resulting Pi session UUID.
+- New threads use `SessionManager.create(canonicalProjectPath)` and record the resulting Pi session UUID. Pi SDK 0.84.2 normally defers its first JSONL write until an assistant message exists, so the adapter validates the new manager's public header, initial session-info entry, UUID, cwd, and target path, then atomically materializes that initial JSONL with exclusive creation. This makes an unprompted application thread reopenable after a server restart without overwriting an existing native session.
 - Discovery uses `SessionManager.list(canonicalProjectPath)`. The adapter parses descriptors, confirms cwd ownership, and omits native paths from returned DTOs.
 - Opening resolves the stored UUID against a fresh authorized listing before passing the private path to Pi.
 - Import adds application metadata pointing to that UUID without opening for rewrite, renaming, or copying JSONL.

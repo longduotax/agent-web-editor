@@ -16,7 +16,7 @@
 
 **Related documents or issue:** [Architecture overview](../../architecture/overview.md), [Parse, Don't Validate](../../architecture/data-boundaries.md), and the user's 2026-08-15 request for a TDD implementation plan
 
-**Last updated:** 2026-08-15
+**Last updated:** 2026-08-16
 
 ## Approved specification and approval context
 
@@ -399,6 +399,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - [ ] Milestone 1: contracts, configuration, and local-client security (baseline delivered; adversarial WebSocket matrix pending).
 - [ ] Milestone 2: metadata schema and project vertical slice (baseline delivered; migration backup/rollback matrix pending).
 - [ ] Milestone 3: threads, routes, Pi discovery/import, and history.
+  - [x] Materialize newly created blank Pi sessions atomically so they can be listed and reopened before their first prompt and after a server restart.
 - [ ] Milestone 4: runs, direct Pi execution, steering, and stop.
 - [ ] Milestone 5: snapshots, reconnection, and unread completion state.
 - [ ] Milestone 6: Files and Changes inspector views.
@@ -413,6 +414,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - Pi `prompt()` resolves only after the full run, while `preflightResult` reports acceptance earlier and synchronously. The adapter/coordinator therefore needs a tested buffer-and-commit handshake so early SDK events cannot precede the durable run record and rejected prompts cannot create phantom runs.
 - Pi currently executes enabled tools without application permission popups. The web workspace intentionally matches that behavior and must disclose the lack of approval/sandboxing.
 - Pi session history is versioned JSONL with branching and compaction. The adapter should use `SessionManager` for access but still narrow every returned/raw shape at its boundary and keep native paths server-private.
+- Pi SDK 0.84.2 does not write a newly created session until an assistant message exists. Recording that in-memory UUID as durable thread metadata made the first prompt fail because a fresh listing could not resolve it. The adapter now narrowly parses and exclusively materializes the new manager's initial JSONL before returning the UUID; temp-directory restart coverage verifies the session can be discovered and opened without a provider call.
 - “Wait until it finishes” is resolved as a local draft that can be submitted as a new run after settlement, not Pi follow-up queueing.
 - The existing working tree already contains uncommitted approved-specification and completed-plan files. They are user work and must remain intact.
 
@@ -425,6 +427,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - 2026-08-15: Use Drizzle ORM with `better-sqlite3`, prepared queries, committed migrations, backups, and runtime row parsing.
 - 2026-08-15: Match Pi's native trust and direct tool execution; defer manual and reviewer-agent command approval to a future specification.
 - 2026-08-15: Retain “wait” prompts locally until the active run settles rather than using Pi follow-up.
+- 2026-08-16: Materialize validated blank Pi session JSONL with exclusive creation because SDK 0.84.2 intentionally defers persistence, while the approved product requires unprompted threads to survive server restarts.
 
 ## Final outcomes
 
@@ -432,11 +435,13 @@ Implementation is active. The current baseline delivers migration version 1,
 credential-free loopback access, persistent projects/threads/runs, SDK-neutral
 Pi runtime ownership, prompt idempotency and project leases, snapshot/live event
 transport, bounded Files/Changes/Terminal boundaries, and the responsive browser
-workspace. Current verification passes `pnpm check`, including 90 Vitest tests
-and production builds, plus `pnpm test:e2e` (one production-build browser
-scenario).
+workspace. Current verification passes `pnpm check`, including 94 Vitest tests
+and production builds, plus the previously recorded `pnpm test:e2e` run (one
+production-build browser scenario).
 
 Before archiving, complete the remaining Milestone 3-8 adversarial adapter,
 replay/backpressure, Git/PTY lifecycle, accessibility, multi-context restart,
-and full acceptance scenarios. No credentialed provider prompt or writable test
-against existing native Pi sessions has been run.
+and full acceptance scenarios. The Vitest suite now includes temp-directory
+coverage for reopening an unprompted Pi session after runtime replacement. No
+credentialed provider prompt or writable test against existing native Pi
+sessions has been run.
