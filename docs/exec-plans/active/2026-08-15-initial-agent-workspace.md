@@ -2,42 +2,49 @@
 
 **Status:** Active
 
-**Plan version:** 1
+**Plan version:** 2
 
-**Technical approval:** Approved by the user on 2026-08-15 for plan version 1
+**Technical approval:** Approved by the user on 2026-08-16 for plan version 2
 
-**Phase:** No-authentication security revision approved; implementation active
+**Phase:** Thread-scoped run-concurrency implementation active
 
 **Subsystem:** Projects, threads, agent runs, live events, workspace UI, inspector, and terminal
 
 **Affected paths or contracts:** `apps/web/src/**`, `apps/server/src/**`, `packages/contracts/src/**`, `packages/agent-runtime/src/**`, `packages/pi-adapter/src/**`, package manifests and test configuration, `docs/design/**`, `docs/architecture/**`, and `docs/development/workflows.md`
 
-**Governing specification:** [Initial agent workspace proposed version 1](../../product-specs/initial-workspace.md)
+**Governing specification:** [Initial agent workspace proposed version 2](../../product-specs/initial-workspace.md)
 
 **Related documents or issue:** [Architecture overview](../../architecture/overview.md), [Parse, Don't Validate](../../architecture/data-boundaries.md), and the user's 2026-08-15 request for a TDD implementation plan
 
 **Last updated:** 2026-08-16
 
-## Approved specification and approval context
+## Working specification and approval context
 
-The canonical [initial agent workspace specification](../../product-specs/initial-workspace.md) is approved. On 2026-08-15 the user approved removing launch-token and browser-session authentication so starting the server and opening its plain loopback URL loads the workspace immediately. The approved revision deliberately allows any same-machine process to access the server while retaining loopback-only binding, exact Host checks, browser Origin/CSRF protections, resource ownership checks, and filesystem containment. The prior choices of a configurable port, Drizzle with SQLite, Pi direct execution, and separately designed future reviewer-agent work remain unchanged.
+The canonical [initial agent workspace specification](../../product-specs/initial-workspace.md)
+version 2 is Approved. It changes the version 1 project-wide run lease to the
+thread-scoped concurrency requirement `IAW-RUN-01`; all other version 1 product
+choices remain unchanged. The user approved specification version 2 and this
+plan version 2 on 2026-08-16.
 
-This plan and the approved technical designs reflect that revision. A renewed specification approval is required if implementation would materially change behavior, acceptance criteria, scope, non-goals, compatibility, or boundaries.
+The previously approved configurable port, credential-free loopback policy,
+Drizzle/SQLite persistence, Pi direct execution, and deferred reviewer-agent
+work remain unchanged. Implementation is isolated on the user-requested
+`feat/concurrent-project-sessions` Git worktree branch.
 
 ## Purpose and user-visible outcome
 
-Replace the static scaffold with a loopback-only browser workspace where a user can register local projects, create or import persistent Pi-backed threads, run and steer one agent at a time per project, review durable completion state, inspect files and Git changes, and use one project terminal. Routes, application metadata, native Pi history, unread completions, and reconnection behavior must survive the restarts promised by the product specification.
+Replace the static scaffold with a loopback-only browser workspace where a user can register local projects, create or import persistent Pi-backed threads, run and steer independent agents concurrently across project threads, review durable completion state, inspect files and Git changes, and use one project terminal. Routes, application metadata, native Pi history, unread completions, and reconnection behavior must survive the restarts promised by the product specification.
 
 Implementation follows strict red-green-refactor cycles. Every behavior starts with a failing test at the narrowest useful layer, adds only enough production code to pass, and is refactored while that test remains green. Cross-layer acceptance tests are added before a vertical slice is considered complete.
 
 ## Measurable acceptance criteria
 
-The implementation is complete only when all eleven product-specification acceptance criteria pass and the following evidence exists:
+The implementation is complete only when all fourteen product-specification acceptance criteria pass and the following evidence exists:
 
 1. Restart tests prove two registered projects remain present, canonical duplicate paths are rejected, and removal/re-addition restores retained metadata without touching workspace or Pi files.
 2. Persistence and route tests prove every thread belongs to exactly one project, has one opaque runtime-session reference, restores history, and can be selected independently in two browser contexts.
 3. API security tests prove the browser never supplies or receives an authoritative project path or native session path after registration.
-4. Run state-machine tests prove accepted prompts, steering, stop, direct Pi tool execution, failure, interruption, and the one-running-run-per-project constraint.
+4. Run state-machine tests prove accepted prompts, steering, stop, direct Pi tool execution, failure, interruption, concurrent runs in distinct threads of one project, and the one-running-run-per-thread constraint.
 5. Restart and UI tests prove unread completion indicators aggregate by project and clear only when the relevant completed result is viewed.
 6. Snapshot/live-event tests prove reconnecting during and after a run produces one authoritative transcript with no duplicate accepted prompt, run, message, or completion.
 7. Inspector tests prove Git unavailable/status/diff behavior, searchable file browsing and safe previews, and one project-scoped PTY with permitted browser Origin checks and resize/restart/terminate behavior.
@@ -54,7 +61,7 @@ Implementation is now underway across every target component:
 - `apps/web/src/App.tsx` composes route-owned project/thread selection, parsed Query clients, transcript/run controls, responsive navigation, and Files/Changes/Terminal inspector views.
 - `apps/server/src/app.ts` composes parsed configuration, credential-free loopback request policy, SQLite metadata, project/thread/run routes, live and terminal WebSockets, filesystem/Git boundaries, and injected Pi/fake runtimes.
 - Shared contracts, the SDK-neutral runtime interface, and the Pi adapter have concrete public APIs. Migration v1 is committed under `apps/server/migrations/`.
-- Vitest and Playwright cover contracts, configuration, request policy, persistence/restart, HTTP path redaction, run idempotency and project leases, file containment, safe Markdown, routes, and direct-execution disclosure.
+- Vitest and Playwright cover contracts, configuration, request policy, persistence/restart, HTTP path redaction, run idempotency and thread leases, file containment, safe Markdown, routes, and direct-execution disclosure.
 - The Pi SDK remains pinned to `0.84.2`; real-provider and writable native-session verification remains intentionally omitted without explicit approval.
 
 The existing dependency direction remains invariant:
@@ -76,7 +83,7 @@ Browser code must never import server, runtime, adapter, SDK, Node filesystem, G
 - Drizzle/SQLite application metadata storage, migrations, repositories, removal retention, recovery, and restart reconciliation.
 - Project registration/removal/re-addition and Pi-session discovery/import.
 - Thread creation/rename/navigation, snapshots, and native transcript translation.
-- Run lifecycle, project-level mutual exclusion, prompt idempotency, steering, stop, Pi-compatible direct tool execution, interruption, completion, and unread state.
+- Run lifecycle, thread-level mutual exclusion, concurrent independent project threads, prompt idempotency, steering, stop, Pi-compatible direct tool execution, interruption, completion, and unread state.
 - Reconnectable live events with authoritative snapshots.
 - Git status/diffs, safe file tree/search/preview, and one project-scoped PTY.
 - Dark responsive three-region React workspace with drawers, Markdown/code rendering, collapsible activity, and accessible state indicators.
@@ -85,7 +92,13 @@ Browser code must never import server, runtime, adapter, SDK, Node filesystem, G
 
 ## Explicit non-goals
 
-The product specification's non-goals remain unchanged: archival or permanent history deletion, browser editing, Git write operations, multiple concurrent runs in one project, sub-agents, manual or reviewer-agent command approval, cloud/multi-user behavior, OS/browser notifications, terminal persistence over server restarts, and any claim of OS-level sandboxing.
+The product specification's non-goals remain unchanged except that concurrent
+runs in distinct project threads move into scope. Archival or permanent history
+deletion, browser editing, Git write operations, multiple simultaneous runs in
+one thread, automatic conflict prevention or per-thread working-tree
+attribution, sub-agents, manual or reviewer-agent command approval,
+cloud/multi-user behavior, OS/browser notifications, terminal persistence over
+server restarts, and any claim of OS-level sandboxing remain excluded.
 
 Also excluded from this plan:
 
@@ -102,15 +115,46 @@ Also excluded from this plan:
 - Application metadata is relational and transactional; native Pi JSONL remains the full transcript source of truth.
 - Removal is soft deletion. Re-addition is matched by canonical path and restores retained metadata.
 - Run state uses `running`, `completed`, `failed`, and `interrupted` with explicit timestamps/references, never a single `active` boolean.
-- A database constraint and an in-process coordinator both enforce at most one `running` run per project.
+- A database constraint and an in-process preflight lease enforce at most one `running` run per thread while allowing distinct threads in one project to run concurrently.
 - Live events are transient projections. A snapshot reconstructed from parsed persistence/runtime state is authoritative after gaps or reconnects.
 - Agent tools follow Pi's native trust and direct-execution behavior with no application approval layer; the terminal remains a separate user-controlled process.
 - All rendered Markdown and command/file output is treated as untrusted display content; raw HTML is disabled or sanitized under a documented allowlist.
 - Tests inject clocks, ID generators, runtime adapters, process runners, filesystem roots, and PTY factories to remain deterministic.
 
+## Technical approach for plan version 2
+
+The concurrency change preserves one Pi runtime session per application thread
+and changes only the lease granularity:
+
+1. Add migration v2, backed up and applied transactionally, that drops
+   `runs_one_running_per_project` and creates a partial unique index on
+   `runs(thread_id)` for `state = 'running'`. Startup accepts schema versions
+   0-2, applies missing migrations in order, and continues to reject newer
+   versions without down-migration.
+2. Replace the in-process project preflight set with a thread-keyed set. Add
+   parsed store queries for one running run by thread and all running runs by
+   project. Prompt, settlement, steer, and stop resolve only the owning thread's
+   run.
+3. On project removal, request stop for every running thread, settle every still
+   running record as interrupted, publish each completion, and then dispose the
+   project's runtimes. One thread's settlement or stop must not release or
+   mutate another thread's lease.
+4. Keep HTTP and live-event contracts unchanged because commands and snapshots
+   already carry project and thread IDs. Keep runtime ownership and brokers
+   keyed by thread. The browser already renders run state per thread, so no new
+   queue, worktree, or attribution UI is introduced.
+5. Update current architecture and the runtime/persistence designs only after
+   the implementation is verified.
+
+No material technical question remains open. Command receipts remain
+project-scoped for replay/conflict detection; their UUID idempotency keys and
+thread-bearing request hashes already distinguish independent commands.
+
 ## Approved technical designs
 
-The implementation gate is satisfied by the indexed designs under `docs/design/`:
+The version 1 implementation gate was satisfied by the indexed designs under
+`docs/design/`. Their project-lease wording will be updated to the approved
+plan version 2 approach during implementation:
 
 1. No client authentication, a plain launch URL, exact Host/browser-Origin request policy, and CLI/environment/default port precedence.
 2. Drizzle ORM with `better-sqlite3`, committed migrations, runtime row parsers, transactions, backups, and soft deletion.
@@ -206,19 +250,19 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 ### Milestone 4 — run state machine, direct Pi execution, steering, and stop
 
-**Red:** Model run transitions as table-driven tests. Cover accepted/rejected prompt preflight, duplicated idempotency keys, two concurrent submissions in one project, runs in different projects, steering attached to the current run, wait-draft behavior, abort, provider/tool error, server shutdown, and illegal transitions. Start service tests with the fake runtime, then adapter tests with exhaustive controlled Pi events and native resource/trust fixtures.
+**Red:** Model run transitions as table-driven tests. Cover accepted/rejected prompt preflight, duplicated idempotency keys, simultaneous accepted prompts in two threads of one project, rejection of a second independent prompt in one running thread, runs in different projects, independent steering and stopping, multi-run project removal, wait-draft behavior, abort, provider/tool error, server shutdown, and illegal transitions. Start with migration/store tests, continue with service tests using the fake runtime, then adapter tests with exhaustive controlled Pi events and native resource/trust fixtures.
 
 **Green:**
 
 - Implement the SDK-neutral runtime interface and a per-thread runtime owner in the server.
-- Acquire the project execution lease transactionally before prompt acceptance. Buffer adapter events until Pi preflight confirms acceptance, then atomically persist command receipt/run state before publishing; discard/reconcile rejected preflight without a phantom run.
+- Acquire the thread execution lease around prompt preflight. Buffer adapter events until Pi preflight confirms acceptance, then atomically persist command receipt/run state before publishing; discard/reconcile rejected preflight without a phantom run.
 - Translate narrowed Pi messages, text deltas, tool calls/results, command cwd/output/exit state, retry/compaction, and terminal errors into application events without leaking SDK objects.
 - Implement explicit steer, wait-draft semantics, and stop commands with idempotency and ownership checks.
 - Use Pi's native resources/project trust and direct tool behavior without an application blocking hook; show the direct-execution/no-sandbox disclosure before tools are enabled.
 - Reconcile unfinished runs to `interrupted` on restart unless the adapter proves a reconnectable live runtime.
 - Render the composer, active-send choice, stop action, collapsible tool/command activity, trust warning, and accessible running/failure/interruption cues.
 
-**Refactor/gate:** Run transition tests under randomized event interleavings with fake timers. Ensure a thread can remain readable while another thread in its project owns the run lease. Any unrecognized SDK event fails at the adapter boundary or maps to an explicitly designed unsupported-event diagnostic; it is never cast through.
+**Refactor/gate:** Run transition tests under randomized event interleavings with fake timers. Ensure two threads in one project can run simultaneously, settle in either order, and remain independently readable and controllable. Any unrecognized SDK event fails at the adapter boundary or maps to an explicitly designed unsupported-event diagnostic; it is never cast through.
 
 ### Milestone 5 — authoritative snapshots, live reconnection, and unread completions
 
@@ -275,9 +319,21 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 **Refactor/gate:** Run the full verification matrix below, inspect the final diff, and record any omitted real-provider/manual checks and residual risk.
 
+## Requirement traceability for the version 2 revision
+
+| Spec requirement                                                                                    | Technical consequence                                                                                                     | Verification                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`IAW-RUN-01`](../../product-specs/initial-workspace.md#iaw-run-01--concurrent-runs-across-threads) | Replace project-scoped in-memory and SQLite leases with thread-scoped leases; make project removal enumerate active runs. | Migration/store tests plus workspace tests for concurrent start, independent steer/stop/settlement, same-thread rejection, removal, and restart. |
+| Acceptance criterion 6                                                                              | Preserve shared project-wide inspector semantics without adding per-thread attribution or worktree orchestration.         | Existing inspector tests and documentation verification; no inspector wire-contract change.                                                      |
+
 ## Untrusted-data-boundary analysis
 
-Every row below needs a concrete parser name and test path in the approved designs or implementation. Persistence and internal transport are untrusted again on read.
+No new external representation or wire shape is introduced. The v2 migration
+changes a persisted uniqueness invariant, while existing run rows continue to
+be parsed by `runRowSchema`. Migration tests must cover valid v1 and v2 schemas,
+malformed/newer schema versions, multiple historical runs, and startup rollback.
+Every row below otherwise retains its existing boundary ownership. Persistence
+and internal transport are untrusted again on read.
 
 | Source and raw representation                     | Entry/read point                      | Constructing runtime parser                                                          | Trusted output and guarantees                                        | Failure behavior                                                       | Required boundary tests                                                                                      |
 | ------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -309,6 +365,7 @@ Resource ownership follows parsing: a well-formed ID/path/command is still rejec
 
 There is no legacy product behavior or persisted application format. The touched paths are scaffold code with these current invariants to preserve:
 
+- The v1 database and `WorkspaceService` currently enforce one running run per project through a partial unique index, `activeProjects`, and `runningRunForProject()`. Replace the touched invariant completely rather than bypassing only one guard; preserve v1 databases through an explicit v2 migration and characterize same-thread rejection before refactoring.
 - `buildServer()` is injectable and importing `main.ts` is the only operation that binds a port. Preserve this separation and add characterization tests before composition grows.
 - Server and Vite development listeners are loopback-only. Preserve this in configuration/startup tests.
 - Strict TypeScript options, ESM output, package public entry points, and one-way workspace dependency ownership remain in force.
@@ -359,28 +416,29 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 
 ## Acceptance traceability
 
-| Product criterion                     | Primary automated evidence                            |
-| ------------------------------------- | ----------------------------------------------------- |
-| 1. Two durable projects               | Milestone 2 migration/restart E2E                     |
-| 2. Nested durable threads/history     | Milestone 3 repository, adapter fixture, restart E2E  |
-| 3. No browser authoritative paths     | Milestones 2/3 API shape and authorization tests      |
-| 4. Recorded streaming run states      | Milestone 4 state-machine/fake-runtime E2E            |
-| 5. Durable unread indicators          | Milestone 5 persistence/UI/restart tests              |
-| 6. Route-addressable independent tabs | Milestone 3 two-context E2E                           |
-| 7. Changes, Files, Terminal inspector | Milestones 6/7 integration and browser tests          |
-| 8. Safe remove/re-add                 | Milestone 2 byte-preservation/restart tests           |
-| 9. Pi session import without rewrite  | Milestone 3 before/after fixture-byte tests           |
-| 10. Reconnect without duplicates      | Milestone 5 snapshot/replay and E2E disconnect tests  |
-| 11. Boundary failures are scoped/safe | Boundary table suites and Milestone 8 adversarial E2E |
+| Product criterion                     | Primary automated evidence                             |
+| ------------------------------------- | ------------------------------------------------------ |
+| 1. Two durable projects               | Milestone 2 migration/restart E2E                      |
+| 2. Nested durable threads/history     | Milestone 3 repository, adapter fixture, restart E2E   |
+| 3. No browser authoritative paths     | Milestones 2/3 API shape and authorization tests       |
+| 4-6. Concurrent recorded run states   | Milestone 4 migration/state-machine/fake-runtime tests |
+| 7. Durable unread indicators          | Milestone 5 persistence/UI/restart tests               |
+| 8. Route-addressable independent tabs | Milestone 3 two-context E2E                            |
+| 9. Changes, Files, Terminal inspector | Milestones 6/7 integration and browser tests           |
+| 10. Safe remove/re-add                | Milestone 2 byte-preservation/restart tests            |
+| 11. Pi session import without rewrite | Milestone 3 before/after fixture-byte tests            |
+| 12. Reconnect without duplicates      | Milestone 5 snapshot/replay and E2E disconnect tests   |
+| 13. Boundary failures are scoped/safe | Boundary table suites and Milestone 8 adversarial E2E  |
+| 14. Credential-free loopback startup  | Milestone 1 startup/request-policy tests               |
 
 ## Compatibility, deployment, migration, recovery, and rollback
 
-- This is the first application API and metadata schema; no external wire compatibility exists. Once a slice lands, schema and route changes require explicit version/migration handling.
+- The HTTP and live-event API shapes do not change. Metadata schema v1 is now an existing persisted format; migration v2 backs it up, replaces only the running-run partial index, and preserves all rows.
 - Keep Pi-specific compatibility in `packages/pi-adapter`; pin the SDK until adapter fixtures pass against an intentional upgrade.
 - Initial metadata setup and every later migration run transactionally in the application state directory. The approved persistence design must define pre-migration backup, fsync/durability expectations, newer-version refusal, and restoration instructions. Tests may migrate only test-owned databases.
 - Soft removal is reversible by canonical-path re-add. No rollback or migration may delete project files or native Pi JSONL.
 - A corrupt project/thread/session is isolated and visible; unrelated records continue. Recovery never silently edits malformed native history.
-- Code rollback must leave a newer database untouched if the old binary cannot parse its schema; fail startup with recovery guidance rather than down-migrating automatically.
+- Code rollback to the v1 binary leaves a v2 database untouched because that binary refuses newer schema versions. Recovery uses the timestamped pre-v2 sibling backup; automatic down-migration remains forbidden.
 - Server restart interrupts non-reconnectable runs and destroys PTYs. Browser reconnect obtains fresh snapshots and may recreate terminals.
 - Production exposure beyond loopback is unsupported. Do not add `0.0.0.0`, remote proxy, or multi-user deployment instructions under this plan.
 
@@ -402,6 +460,10 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
   - [x] Materialize newly created blank Pi sessions atomically so they can be listed and reopened before their first prompt and after a server restart.
   - [x] Present native tool calls and results as compact Pi-style activity rows with readable operation summaries and expandable raw details, without changing the authoritative transcript DTO.
 - [ ] Milestone 4: runs, direct Pi execution, steering, and stop.
+  - [x] RED: add failing v1-to-v2 migration/store tests for concurrent project threads and same-thread exclusion.
+  - [x] RED: add failing workspace tests for concurrent prompt, independent settlement/steer/stop, and multi-run project removal.
+  - [x] GREEN: implement migration v2 and thread-scoped store/service leases.
+  - [x] REFACTOR: remove project-scoped run assumptions and run focused server checks (`17` focused tests) followed by `pnpm check` (`101` tests).
 - [ ] Milestone 5: snapshots, reconnection, and unread completion state.
 - [ ] Milestone 6: Files and Changes inspector views.
 - [ ] Milestone 7: project terminal.
@@ -418,7 +480,10 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - Pi SDK 0.84.2 does not write a newly created session until an assistant message exists. Recording that in-memory UUID as durable thread metadata made the first prompt fail because a fresh listing could not resolve it. The adapter now narrowly parses and exclusively materializes the new manager's initial JSONL before returning the UUID; temp-directory restart coverage verifies the session can be discovered and opened without a provider call.
 - “Wait until it finishes” is resolved as a local draft that can be submitted as a new run after settlement, not Pi follow-up queueing.
 - Native history represents a tool call and its result as separate transcript items. Rendering both as bordered raw-JSON cards duplicated every operation and overwhelmed the conversation; the Pi adapter now pairs each pending/result item by native tool-call ID before browser presentation, while preserving the parsed snapshot as authoritative state.
-- The existing working tree already contains uncommitted approved-specification and completed-plan files. They are user work and must remain intact.
+- The existing runtime map, broker, snapshot, thread summaries, and Pi adapter are already thread-scoped; the blocking assumptions are localized to the store index/query and workspace lease/lifecycle paths.
+- Shared-working-tree edit conflicts are native Pi behavior and are explicitly not solved by this revision. The inspector remains project-wide.
+- The RED store tests failed on the v1 project index and schema version, and the RED workspace tests failed with `project_busy` on the second thread. Migration v2 and thread-scoped coordination made both layers green without changing HTTP or live-event shapes.
+- The user approved product specification version 2 and technical plan version 2 on 2026-08-16 and requested implementation in a separate Git worktree. No implementation blocker or unresolved technical question remains.
 
 ## Decision log
 
@@ -431,16 +496,19 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - 2026-08-15: Retain “wait” prompts locally until the active run settles rather than using Pi follow-up.
 - 2026-08-16: Materialize validated blank Pi session JSONL with exclusive creation because SDK 0.84.2 intentionally defers persistence, while the approved product requires unprompted threads to survive server restarts.
 - 2026-08-16: Follow Pi's tool-rendering hierarchy in the browser: one compact semantic row per operation by default, status without color dependence, and bounded raw input/output only on explicit expansion.
+- 2026-08-16: Draft plan version 2 to replace the project-wide run lease with one running run per thread, using migration v2 and thread-scoped service lifecycle checks. This material revision invalidated the prior product and technical approvals.
+- 2026-08-16: The user explicitly approved product specification version 2 and technical plan version 2 and requested implementation in the `feat/concurrent-project-sessions` worktree; implementation moved to Active.
 
 ## Final outcomes
 
-Implementation is active. The current baseline delivers migration version 1,
-credential-free loopback access, persistent projects/threads/runs, SDK-neutral
-Pi runtime ownership, prompt idempotency and project leases, snapshot/live event
-transport, bounded Files/Changes/Terminal boundaries, and the responsive browser
-workspace. Current verification passes `pnpm check`, including 97 Vitest tests
-and production builds, plus the previously recorded `pnpm test:e2e` run (one
-production-build browser scenario).
+The approved version 2 concurrency revision is implemented and verified in the
+`feat/concurrent-project-sessions` worktree. The current baseline delivers
+migration version 2, credential-free loopback access, persistent
+projects/threads/runs, SDK-neutral Pi runtime ownership, prompt idempotency and
+thread leases, snapshot/live event transport, bounded Files/Changes/Terminal
+boundaries, and the responsive browser workspace. Current verification passes
+`pnpm check`, including 101 Vitest tests and production builds, plus the
+previously recorded `pnpm test:e2e` run (one production-build browser scenario).
 
 Before archiving, complete the remaining Milestone 3-8 adversarial adapter,
 replay/backpressure, Git/PTY lifecycle, accessibility, multi-context restart,

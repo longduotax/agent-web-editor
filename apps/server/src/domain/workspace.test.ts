@@ -28,9 +28,11 @@ afterEach(async () => {
 });
 
 class ControlledSession implements OpenRuntimeSession {
-  public readonly id = "10000000-0000-4000-8000-000000000001";
   public promptCount = 0;
+  public steerCount = 0;
   public stopCount = 0;
+
+  public constructor(public readonly id: string) {}
   private settle:
     ((value: "completed" | "failed" | "interrupted") => void) | undefined;
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
@@ -58,6 +60,7 @@ class ControlledSession implements OpenRuntimeSession {
     };
   }
   public steer() {
+    this.steerCount += 1;
     return Promise.resolve();
   }
   public stop() {
@@ -78,9 +81,20 @@ class ControlledSession implements OpenRuntimeSession {
 }
 
 class ControlledRuntime implements AgentRuntime {
-  public readonly session = new ControlledSession();
+  private readonly sessions = new Map<string, ControlledSession>();
   public created = 0;
   public createFailure: Error | undefined;
+
+  public get session(): ControlledSession {
+    const session = this.sessions.values().next().value;
+    if (session === undefined) throw new Error("no controlled session exists");
+    return session;
+  }
+  public sessionById(sessionId: string): ControlledSession {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) throw new Error("controlled session not found");
+    return session;
+  }
   public discover() {
     return Promise.resolve({ sessions: [], diagnostics: [] });
   }
@@ -88,12 +102,12 @@ class ControlledRuntime implements AgentRuntime {
     if (this.createFailure !== undefined)
       return Promise.reject(this.createFailure);
     this.created += 1;
-    return Promise.resolve({
-      sessionId: `10000000-0000-4000-8000-${String(this.created).padStart(12, "0")}`,
-    });
+    const sessionId = `10000000-0000-4000-8000-${String(this.created).padStart(12, "0")}`;
+    this.sessions.set(sessionId, new ControlledSession(sessionId));
+    return Promise.resolve({ sessionId });
   }
-  public open() {
-    return Promise.resolve(this.session);
+  public open(_projectPath: string, sessionId: string) {
+    return Promise.resolve(this.sessionById(sessionId));
   }
 }
 
@@ -155,6 +169,15 @@ async function fixture(terminalCleanup?: {
   const first = await service.createThread(project.id);
   const second = await service.createThread(project.id);
   return { store, runtime, service, project, projectPath, first, second };
+}
+
+function sessionFor(
+  context: Awaited<ReturnType<typeof fixture>>,
+  threadId: string,
+): ControlledSession {
+  const thread = context.store.getThread(context.project.id, threadId);
+  if (thread === null) throw new Error("fixture thread not found");
+  return context.runtime.sessionById(thread.runtime_session_id);
 }
 
 describe("run coordination", () => {
@@ -242,10 +265,12 @@ describe("run coordination", () => {
     context.store.close();
   });
 
-  it("executes an idempotent prompt once and enforces the project lease", async () => {
+  it("runs project threads independently while enforcing each thread lease", async () => {
     const context = await fixture();
+    const firstSession = sessionFor(context, context.first.id);
+    const secondSession = sessionFor(context, context.second.id);
     const key = "20000000-0000-4000-8000-000000000001";
-    const run = await context.service.prompt(
+    const firstRun = await context.service.prompt(
       context.project.id,
       context.first.id,
       "Do the work",
@@ -257,21 +282,142 @@ describe("run coordination", () => {
       "Do the work",
       key,
     );
-    expect(retry.id).toBe(run.id);
-    expect(context.runtime.session.promptCount).toBe(1);
+    expect(retry.id).toBe(firstRun.id);
+    expect(firstSession.promptCount).toBe(1);
+
+    const secondRun = await context.service.prompt(
+      context.project.id,
+      context.second.id,
+      "Other work",
+      "20000000-0000-4000-8000-000000000002",
+    );
+    expect(secondRun.state).toBe("running");
+    expect(secondSession.promptCount).toBe(1);
     await expect(
       context.service.prompt(
         context.project.id,
-        context.second.id,
-        "Other work",
-        "20000000-0000-4000-8000-000000000002",
+        context.first.id,
+        "Conflicting work",
+        "20000000-0000-4000-8000-000000000003",
       ),
     ).rejects.toThrow("project_busy");
 
-    context.runtime.session.complete();
+    await context.service.steer(
+      context.project.id,
+      context.first.id,
+      "Adjust first",
+      "20000000-0000-4000-8000-000000000004",
+    );
+    await context.service.steer(
+      context.project.id,
+      context.second.id,
+      "Adjust second",
+      "20000000-0000-4000-8000-000000000005",
+    );
+    expect(firstSession.steerCount).toBe(1);
+    expect(secondSession.steerCount).toBe(1);
+
+    firstSession.complete();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(context.store.latestRun(context.first.id)?.state).toBe("completed");
-    expect(context.store.unreadCount(context.project.id)).toBe(1);
+    expect(context.store.latestRun(context.first.id)).toMatchObject({
+      id: firstRun.id,
+      state: "completed",
+    });
+    expect(context.store.latestRun(context.second.id)).toMatchObject({
+      id: secondRun.id,
+      state: "running",
+    });
+    await context.service.stop(
+      context.project.id,
+      context.second.id,
+      "20000000-0000-4000-8000-000000000006",
+    );
+    expect(secondSession.stopCount).toBe(1);
+    expect(context.store.unreadCount(context.project.id)).toBe(2);
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("preflights different project threads concurrently", async () => {
+    const context = await fixture();
+    const firstSession = sessionFor(context, context.first.id);
+    const secondSession = sessionFor(context, context.second.id);
+    let releaseFirst: (() => void) | undefined;
+    let releaseSecond: (() => void) | undefined;
+    firstSession.promptGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    secondSession.promptGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+
+    const first = context.service.prompt(
+      context.project.id,
+      context.first.id,
+      "First work",
+      "21000000-0000-4000-8000-000000000001",
+    );
+    const second = context.service.prompt(
+      context.project.id,
+      context.second.id,
+      "Second work",
+      "21000000-0000-4000-8000-000000000002",
+    );
+    await vi.waitFor(() => {
+      expect(firstSession.promptCount).toBe(1);
+      expect(secondSession.promptCount).toBe(1);
+    });
+
+    releaseFirst?.();
+    releaseSecond?.();
+    await Promise.all([first, second]);
+    await context.service.stop(
+      context.project.id,
+      context.first.id,
+      "21000000-0000-4000-8000-000000000003",
+    );
+    await context.service.stop(
+      context.project.id,
+      context.second.id,
+      "21000000-0000-4000-8000-000000000004",
+    );
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("rejects a distinct same-thread prompt while preflight is pending", async () => {
+    const context = await fixture();
+    const firstSession = sessionFor(context, context.first.id);
+    let release: (() => void) | undefined;
+    firstSession.promptGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = context.service.prompt(
+      context.project.id,
+      context.first.id,
+      "First work",
+      "22000000-0000-4000-8000-000000000001",
+    );
+    await vi.waitFor(() => {
+      expect(firstSession.promptCount).toBe(1);
+    });
+
+    await expect(
+      context.service.prompt(
+        context.project.id,
+        context.first.id,
+        "Conflicting work",
+        "22000000-0000-4000-8000-000000000002",
+      ),
+    ).rejects.toThrow("project_busy");
+
+    release?.();
+    await first;
+    await context.service.stop(
+      context.project.id,
+      context.first.id,
+      "22000000-0000-4000-8000-000000000003",
+    );
     await context.service.close();
     context.store.close();
   });
@@ -421,28 +567,42 @@ describe("run coordination", () => {
     context.store.close();
   });
 
-  it("releases an active run when its project is removed and restored", async () => {
+  it("releases every active run when its project is removed and restored", async () => {
     const context = await fixture();
-    const run = await context.service.prompt(
+    const firstSession = sessionFor(context, context.first.id);
+    const secondSession = sessionFor(context, context.second.id);
+    const firstRun = await context.service.prompt(
       context.project.id,
       context.first.id,
       "Remove this project",
       "50000000-0000-4000-8000-000000000001",
     );
-
-    await context.service.removeProject(
+    const secondRun = await context.service.prompt(
       context.project.id,
+      context.second.id,
+      "Also remove this",
       "50000000-0000-4000-8000-000000000002",
     );
 
-    const interrupted = context.store.latestRun(context.first.id);
-    expect(interrupted).toMatchObject({
-      id: run.id,
+    await context.service.removeProject(
+      context.project.id,
+      "50000000-0000-4000-8000-000000000003",
+    );
+
+    expect(context.store.latestRun(context.first.id)).toMatchObject({
+      id: firstRun.id,
       state: "interrupted",
       failure_code: "project_removed",
       failure_message: "Interrupted because the project was removed.",
     });
-    expect(context.runtime.session.stopCount).toBe(1);
+    expect(context.store.latestRun(context.second.id)).toMatchObject({
+      id: secondRun.id,
+      state: "interrupted",
+      failure_code: "project_removed",
+      failure_message: "Interrupted because the project was removed.",
+    });
+    expect(firstSession.stopCount).toBe(1);
+    expect(secondSession.stopCount).toBe(1);
 
     const restored = await context.service.registerSelectedProject(
       context.projectPath,
@@ -453,13 +613,13 @@ describe("run coordination", () => {
       restored.id,
       context.first.id,
       "Start again",
-      "50000000-0000-4000-8000-000000000003",
+      "50000000-0000-4000-8000-000000000004",
     );
     expect(replacement.state).toBe("running");
     await context.service.stop(
       restored.id,
       context.first.id,
-      "50000000-0000-4000-8000-000000000004",
+      "50000000-0000-4000-8000-000000000005",
     );
     await context.service.close();
     context.store.close();

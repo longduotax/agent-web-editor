@@ -48,10 +48,10 @@ The UI displays command/tool input, cwd, bounded output, exit/error state, and a
 
 ## Run lifecycle
 
-- A project coordinator serializes prompt, steer, and stop commands and enforces the database one-running-run lease.
+- Each thread owns an independent Pi runtime session. A thread-scoped preflight lease and database constraint permit one running run per thread while allowing distinct threads in the same project to run concurrently.
 - Pi `prompt()` begins with `preflightResult`; adapter events are buffered until acceptance is known.
 - On acceptance, the server atomically persists the command receipt and `running` run before publishing buffered events. Rejection creates no run.
-- `steer()` contributes to the existing run.
+- `steer()` and stop resolve the running run through its owning thread and do not affect other active project threads.
 - “Wait until it finishes” retains the browser draft and submits it only after settlement as a new run; it does not use Pi follow-up queueing.
 - Stop calls `abort()` and transitions to `interrupted` after authoritative settlement.
 - Completion/provider/tool errors transition exactly once to completed or failed.
@@ -78,7 +78,7 @@ The adapter exhaustively narrows every used Pi event/message/tool shape. Unknown
 
 ## Failure and recovery
 
-Missing/corrupt sessions affect only their thread. Provider/tool failures map to safe failed-run categories while Pi history remains authoritative. Runtime disposal unsubscribes listeners and releases the project lease. Reopening reconstructs from Pi history plus application metadata and never resubmits an accepted prompt.
+Missing/corrupt sessions affect only their thread. Provider/tool failures map to safe failed-run categories while Pi history remains authoritative. Runtime disposal unsubscribes listeners and releases the thread lease. Removing a project interrupts every running child thread. Reopening reconstructs from Pi history plus application metadata and never resubmits an accepted prompt.
 
 ## Required tests
 
@@ -86,6 +86,6 @@ Missing/corrupt sessions affect only their thread. Provider/tool failures map to
 - Session discovery/open/import with v1-v3, branch, compaction, malformed, missing, duplicate UUID, cwd mismatch, and no-rewrite byte assertions.
 - Controlled Pi event fixtures, unknown events, partial streaming, SDK throws, and output bounds.
 - Prompt event-before-preflight, reject, accept then resolve/reject, duplicate callback defense, and buffered ordering.
-- Concurrent submissions, steering, wait draft, stop, completed/failed/interrupted settlement, and restart reconciliation.
+- Concurrent submissions in distinct project threads, same-thread exclusion, independent steering/stop/settlement, multi-run project removal, wait draft, and restart reconciliation.
 - Pi resource/trust fixture tests proving behavior matches SDK `0.84.2` without an application approval hook.
 - UI disclosure that enabled tools execute with user permissions and no sandbox/approval.

@@ -143,7 +143,7 @@ function safeError(error: unknown): {
       project_busy: {
         status: 409,
         code: "project_busy",
-        message: "Another agent run is active in this project.",
+        message: "Another agent run is active in this thread.",
       },
       run_not_active: {
         status: 409,

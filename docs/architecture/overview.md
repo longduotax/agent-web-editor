@@ -4,7 +4,7 @@
 
 **Subsystem:** Initial local agent workspace
 
-**Last verified:** 2026-08-15
+**Last verified:** 2026-08-16
 
 Pi Web Workspace is a local-first React application backed by a loopback-only
 Fastify process. The server owns request-integrity policy, SQLite metadata,
@@ -57,10 +57,11 @@ local backend, frontend, and state-directory settings.
 
 ## Persistence and project organization
 
-`apps/server/src/db/schema.ts` owns the Drizzle relational schema. The committed
-`apps/server/migrations/0001_initial.sql` migration creates projects, threads,
-runs, command receipts, ownership constraints, and the partial one-running-run
-index. `MetadataStore` opens `metadata.sqlite` under `PI_WEB_STATE_DIR` or
+`apps/server/src/db/schema.ts` owns the Drizzle relational schema. Committed
+migrations create projects, threads, runs, command receipts, and ownership
+constraints; migration v2 replaces the original project-wide running-run index
+with a partial one-running-run-per-thread index. `MetadataStore` opens
+`metadata.sqlite` under `PI_WEB_STATE_DIR` or
 `~/.pi/web-workspace`, enables foreign keys and WAL, parses every selected row,
 and interrupts unfinished runs during restart reconciliation.
 
@@ -73,8 +74,11 @@ opaque Pi session UUID; full transcripts stay in native Pi JSONL.
 `WorkspaceService` resolves project/thread ownership and owns open runtime
 instances. `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi
 listing for the canonical project before opening private native paths. Prompt
-preflight acceptance precedes atomic run/receipt creation. A project-level
-in-process lease and SQLite partial unique index prevent simultaneous runs.
+preflight acceptance precedes atomic run/receipt creation. A thread-level
+in-process preflight lease and SQLite partial unique index prevent simultaneous
+runs in one thread while allowing independent Pi sessions in distinct threads
+of the same project to run concurrently. Those sessions share the project
+working directory and project-wide inspector state.
 
 HTTP snapshots reconstructed from native history plus run metadata are
 authoritative. `LiveBroker` adds process-epoch, monotonic sequence events and a

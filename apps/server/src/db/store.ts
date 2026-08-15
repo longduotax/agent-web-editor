@@ -171,31 +171,34 @@ export class MetadataStore {
       const versionValue = sqlite.pragma("user_version", { simple: true });
       if (typeof versionValue !== "number" || !Number.isInteger(versionValue))
         throw new Error("Database schema version is malformed");
-      if (versionValue > 1)
+      if (versionValue > 2)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
-      if (versionValue < 1) {
-        if (existed) {
-          const count = sqlite
-            .prepare(
-              "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'",
-            )
-            .get();
-          if (
-            typeof count === "object" &&
-            count !== null &&
-            "count" in count &&
-            typeof count.count === "number" &&
-            count.count > 0
-          ) {
-            const backup = join(
-              options.stateDirectory,
-              `metadata-before-v1-${String(Date.now())}.sqlite`,
-            );
-            await sqlite.backup(backup);
-          }
-        }
+      const backupBefore = async (version: number): Promise<void> => {
+        if (!existed) return;
+        const count = sqlite
+          .prepare(
+            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'",
+          )
+          .get();
+        if (
+          typeof count !== "object" ||
+          count === null ||
+          !("count" in count) ||
+          typeof count.count !== "number" ||
+          count.count === 0
+        )
+          return;
+        const backup = join(
+          options.stateDirectory,
+          `metadata-before-v${String(version)}-${String(Date.now())}.sqlite`,
+        );
+        await sqlite.backup(backup);
+      };
+      let schemaVersion = versionValue;
+      if (schemaVersion < 1) {
+        await backupBefore(1);
         const migrationPath = new URL(
           "../../migrations/0001_initial.sql",
           import.meta.url,
@@ -204,6 +207,19 @@ export class MetadataStore {
         sqlite.transaction(() => {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 1");
+        })();
+        schemaVersion = 1;
+      }
+      if (schemaVersion < 2) {
+        if (versionValue >= 1) await backupBefore(2);
+        const migrationPath = new URL(
+          "../../migrations/0002_thread_run_lease.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 2");
         })();
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
@@ -446,15 +462,26 @@ export class MetadataStore {
       : parseRow(runRowSchema, row, "run", threadId);
   }
 
-  public runningRunForProject(projectId: ProjectId): RunRecord | null {
+  public runningRunForThread(threadId: ThreadId): RunRecord | null {
     const row = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE project_id = ? AND state = 'running'",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE thread_id = ? AND state = 'running'",
       )
-      .get(projectId);
+      .get(threadId);
     return row === undefined
       ? null
-      : parseRow(runRowSchema, row, "run", projectId);
+      : parseRow(runRowSchema, row, "run", threadId);
+  }
+
+  public runningRunsForProject(projectId: ProjectId): RunRecord[] {
+    const rows = this.sqlite
+      .prepare(
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE project_id = ? AND state = 'running' ORDER BY started_at, id",
+      )
+      .all(projectId);
+    return rows.map((row, index) =>
+      parseRow(runRowSchema, row, "run", `${projectId}:${String(index)}`),
+    );
   }
 
   public createRun(
