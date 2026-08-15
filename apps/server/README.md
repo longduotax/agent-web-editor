@@ -7,7 +7,10 @@ Loopback-only Fastify process for the local agent workspace.
 The server owns parsed startup configuration, process-local launch/session
 authentication, Drizzle/SQLite metadata and migrations, project/thread/run
 coordination, Pi adapter composition, live WebSockets, bounded file and Git
-inspection, and project PTYs. Browser requests identify persisted records with
+inspection, project PTYs, and the macOS/Windows native project-directory
+chooser. The chooser is server-owned and injectable; bounded native JSON output
+is parsed before existing project canonicalization, and selected paths are not
+returned to the browser. Browser requests identify persisted records with
 opaque IDs; project roots and native Pi session paths remain server-private.
 
 `buildServer()` is injectable and does not listen. `src/main.ts` is the only

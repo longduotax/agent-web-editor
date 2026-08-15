@@ -16,3 +16,7 @@ specifications, designs, code, or tests.
 - [Monorepo and documentation scaffold](2026-08-15-monorepo-and-documentation-scaffold.md)
   — initialized the root toolchain, five workspace packages, documentation
   conventions, and static environment verification.
+- [Native project directory picker](2026-08-15-native-project-directory-picker.md)
+  — replaced typed project paths with an authenticated, server-owned macOS and
+  Windows native directory chooser while keeping canonical paths out of the
+  browser.

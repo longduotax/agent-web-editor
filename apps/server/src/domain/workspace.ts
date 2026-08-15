@@ -141,10 +141,24 @@ export class WorkspaceService {
     displayName?: string,
     idempotencyKey?: string,
   ): Promise<Project> {
-    const canonical = await realpath(path);
-    const info = await stat(canonical);
+    let canonical: string;
+    try {
+      canonical = await realpath(path);
+    } catch {
+      throw new Error("project_unavailable");
+    }
+    let info: Awaited<ReturnType<typeof stat>>;
+    try {
+      info = await stat(canonical);
+    } catch {
+      throw new Error("project_unavailable");
+    }
     if (!info.isDirectory()) throw new Error("project_not_directory");
-    await access(canonical, constants.R_OK | constants.X_OK);
+    try {
+      await access(canonical, constants.R_OK | constants.X_OK);
+    } catch {
+      throw new Error("project_unavailable");
+    }
     if (idempotencyKey === undefined) {
       return await this.projectDto(
         this.store.registerProject(canonical, displayName),

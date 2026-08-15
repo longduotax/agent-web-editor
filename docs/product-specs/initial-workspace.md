@@ -116,10 +116,17 @@ client or an unpermitted browser origin.
 
 ### Adding projects
 
-The user can add a directory visible to the local server. The server resolves
-and records its canonical path and rejects a missing, inaccessible, or already
-registered project. A project may be usable without Git, but Git-dependent
-inspector features then show a clear unavailable state.
+The user can add a directory visible to the local server. On macOS and Windows,
+the project sidebar presents a single Browse control rather than a path text
+field. Activating it opens the server host's native directory chooser; selecting
+a directory registers it immediately, while canceling leaves the workspace
+unchanged. The browser neither supplies nor receives the selected native path.
+If the chooser cannot be opened, the application shows a safe, visible error.
+
+The server resolves and records the selected directory's canonical path and
+rejects a missing, inaccessible, or already registered project. A project may
+be usable without Git, but Git-dependent inspector features then show a clear
+unavailable state.
 
 A successfully added project remains in the sidebar across browser refreshes,
 browser restarts, and server restarts until the user explicitly removes it.
@@ -281,8 +288,10 @@ must make that limitation explicit before executable agent tools are enabled.
 
 ## Acceptance criteria
 
-1. A user can add two projects, reload the browser and server, and find both
-   projects still present until explicitly removed.
+1. On macOS and Windows, a user can add two projects through the native Browse
+   chooser without typing a path, reload the browser and server, and find both
+   projects still present until explicitly removed; canceling the chooser adds
+   nothing.
 2. Threads appear indented under exactly one project and remain available with
    their history after a restart.
 3. Opening a project or thread never depends on a browser-provided filesystem or
@@ -315,6 +324,7 @@ must make that limitation explicit before executable agent tools are enabled.
 - Parent/child agent views and sub-agent chat panels
 - Selecting and packaging context for a delegated sub-agent
 - Cloud-hosted workspaces or multi-user collaboration
+- Native project-directory pickers on platforms other than macOS and Windows
 - Browser or operating-system completion notifications
 - Persistent terminal processes across server restarts
 - Per-command manual approval or automatic approval by a reviewer agent

@@ -38,7 +38,12 @@ is the only module that binds a listener. `buildServer()` remains injectable for
 test-owned stores, runtimes, clocks, and PTYs.
 
 The configured host is always `127.0.0.1`. `--port` takes precedence over
-`PI_WEB_PORT`, with `3001` as the default. Startup creates a process-only launch
+`PI_WEB_PORT`, with `3001` as the default. Project registration can invoke an
+injectable server-owned native directory chooser: `/usr/bin/osascript` on macOS
+or PowerShell with WinForms on Windows. Commands run without a shell, and their
+bounded JSON output is parsed into either cancellation or an absolute native
+path before existing canonicalization and access checks. Startup creates a
+process-only launch
 token and prints it in the URL fragment. `/api/auth/bootstrap` consumes that
 token once and returns an HttpOnly, SameSite=Strict process-session cookie.
 Product APIs and WebSockets require the cookie and exact Host/Origin policy;
@@ -98,8 +103,11 @@ The route is the selected-thread authority:
 - `/projects/:projectId`
 - `/projects/:projectId/threads/:threadId`
 
-TanStack Query owns parsed server state. The workspace renders a nested project
-and thread sidebar, Markdown transcript and activity, explicit steer/wait/stop
+TanStack Query owns parsed server state. The project sidebar uses one Browse
+control backed by an authenticated browse-and-register mutation; selected
+canonical paths never enter browser state or wire responses. The workspace
+renders a nested project and thread sidebar, Markdown transcript and activity,
+explicit steer/wait/stop
 controls, direct-execution disclosure, Files/Changes/Terminal inspector, and
 responsive drawers. Local storage is limited to unsent per-thread drafts.
 

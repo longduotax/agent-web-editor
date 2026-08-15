@@ -9,6 +9,7 @@ import type { RawData } from "ws";
 import {
   AddProjectRequestSchema,
   BootstrapRequestSchema,
+  BrowseProjectRequestSchema,
   CommandRequestSchema,
   CreateThreadRequestSchema,
   ImportThreadRequestSchema,
@@ -39,6 +40,10 @@ import {
 } from "./auth.js";
 import { parseConfig, type ServerConfig } from "./config.js";
 import { MetadataStore, ReceiptConflictError } from "./db/store.js";
+import {
+  createNativeDirectoryPicker,
+  type DirectoryPicker,
+} from "./directory-picker/native.js";
 import { WorkspaceService } from "./domain/workspace.js";
 import { previewProjectFile, listProjectFiles } from "./inspector/files.js";
 import { getGitDiff, getGitStatus } from "./inspector/git.js";
@@ -66,6 +71,7 @@ export interface BuildServerOptions {
   runtime?: AgentRuntime;
   auth?: ProcessAuth;
   ptyFactory?: PtyFactory;
+  directoryPicker?: DirectoryPicker;
   logger?: boolean;
 }
 
@@ -122,6 +128,26 @@ function safeError(error: unknown): {
         status: 409,
         code: "project_already_registered",
         message: "This directory is already registered.",
+      },
+      project_not_directory: {
+        status: 400,
+        code: "project_not_directory",
+        message: "The selected item is not a directory.",
+      },
+      project_unavailable: {
+        status: 400,
+        code: "project_unavailable",
+        message: "The selected directory is unavailable or inaccessible.",
+      },
+      directory_picker_unsupported: {
+        status: 501,
+        code: "directory_picker_unsupported",
+        message: "Folder browsing is supported on macOS and Windows.",
+      },
+      directory_picker_failed: {
+        status: 500,
+        code: "directory_picker_failed",
+        message: "The folder browser could not be opened.",
       },
       project_busy: {
         status: 409,
@@ -206,6 +232,8 @@ export async function buildServer(
     broker,
   );
   const terminals = new ProjectTerminalManager(options.ptyFactory);
+  const directoryPicker =
+    options.directoryPicker ?? createNativeDirectoryPicker();
   const launchPort = config.production ? config.port : config.devPort;
   const launchUrl = `http://127.0.0.1:${String(launchPort)}/#token=${encodeURIComponent(auth.launchToken)}`;
   const context: ServerContext = { config, store, auth, workspace, launchUrl };
@@ -273,6 +301,17 @@ export async function buildServer(
   });
 
   server.get("/api/projects", async () => await workspace.list());
+  server.post("/api/projects/browse", async (request) => {
+    const body = BrowseProjectRequestSchema.parse(request.body);
+    const selectedPath = await directoryPicker.chooseDirectory();
+    if (selectedPath === null) return { outcome: "cancelled" } as const;
+    const project = await workspace.addProject(
+      selectedPath,
+      undefined,
+      body.idempotencyKey,
+    );
+    return { outcome: "selected", project } as const;
+  });
   server.post("/api/projects", async (request) => {
     const body = AddProjectRequestSchema.parse(request.body);
     const project = await workspace.addProject(

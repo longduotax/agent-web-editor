@@ -1,6 +1,7 @@
 import {
   ApiErrorSchema,
   BootstrapResponseSchema,
+  BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -79,10 +80,10 @@ export async function bootstrap(token: string) {
 export async function getWorkspace() {
   return await request("/api/projects", ProjectsResponseSchema);
 }
-export async function addProject(path: string) {
-  return await request("/api/projects", ProjectMutationResponseSchema, {
+export async function browseProject() {
+  return await request("/api/projects/browse", BrowseProjectResponseSchema, {
     method: "POST",
-    body: body({ path, idempotencyKey: commandId() }),
+    body: body({ idempotencyKey: commandId() }),
   });
 }
 export async function removeProject(projectId: ProjectId) {

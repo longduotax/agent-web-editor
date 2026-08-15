@@ -59,7 +59,7 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     cliPort(argv) ?? environment.PI_WEB_PORT,
     options.allowTestPortZero === true,
   );
-  const devPort = parsePort(environment.PI_WEB_DEV_PORT);
+  const devPort = parsePort(environment.PI_WEB_DEV_PORT ?? "5173");
   const configuredState = environment.PI_WEB_STATE_DIR;
   const stateDirectory =
     configuredState ?? join(homedir(), ".pi", "web-workspace");

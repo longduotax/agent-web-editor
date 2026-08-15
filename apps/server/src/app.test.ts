@@ -4,12 +4,14 @@ import { join } from "node:path";
 
 import type { AgentRuntime, OpenRuntimeSession } from "@pi-web/agent-runtime";
 import {
+  BrowseProjectResponseSchema,
   ProjectMutationResponseSchema,
   ProjectsResponseSchema,
 } from "@pi-web/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildServer } from "./app.js";
+import type { DirectoryPicker } from "./directory-picker/native.js";
 import { parseConfig } from "./config.js";
 
 const roots: string[] = [];
@@ -98,6 +100,120 @@ describe("authenticated project API", () => {
       },
     });
     expect(rejected.statusCode).toBe(403);
+    await server.close();
+  });
+
+  it("registers a browsed directory without returning its native path", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const chooseDirectory = vi.fn().mockResolvedValue(paths.project);
+    const directoryPicker: DirectoryPicker = { chooseDirectory };
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      directoryPicker,
+      logger: false,
+    });
+    const cookie = await sessionCookie(server);
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const result = BrowseProjectResponseSchema.parse(response.json());
+    expect(result.outcome).toBe("selected");
+    expect(response.body).not.toContain(paths.project);
+    expect(chooseDirectory).toHaveBeenCalledOnce();
+    await server.close();
+  });
+
+  it("treats browse cancellation as a no-op and parses the request strictly", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const chooseDirectory = vi.fn().mockResolvedValue(null);
+    const directoryPicker: DirectoryPicker = { chooseDirectory };
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      directoryPicker,
+      logger: false,
+    });
+    const cookie = await sessionCookie(server);
+    const cancelled = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+      },
+    });
+    expect(BrowseProjectResponseSchema.parse(cancelled.json())).toEqual({
+      outcome: "cancelled",
+    });
+    expect((await server.workspaceContext.workspace.list()).projects).toEqual(
+      [],
+    );
+
+    const malformed = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000002",
+        path: paths.project,
+      },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(chooseDirectory).toHaveBeenCalledOnce();
+    await server.close();
+  });
+
+  it("redacts native picker failures", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const directoryPicker: DirectoryPicker = {
+      chooseDirectory: vi
+        .fn()
+        .mockRejectedValue(new Error("directory_picker_failed")),
+    };
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      directoryPicker,
+      logger: false,
+    });
+    const cookie = await sessionCookie(server);
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        code: "directory_picker_failed",
+        message: "The folder browser could not be opened.",
+      },
+    });
+    expect(response.body).not.toContain(paths.project);
     await server.close();
   });
 

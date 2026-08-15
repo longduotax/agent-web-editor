@@ -38,7 +38,9 @@ Malformed or unknown-version local values are discarded explicitly. Project/thre
 
 - `app/`: router, providers, authentication/bootstrap boundary, fatal shell errors.
 - `api/`: relative HTTP client, response parsers, error mapping, idempotency helpers, and live client.
-- `features/projects`: project tree, add/remove/expand/unavailable states.
+- `features/projects`: project tree, server-owned native Browse registration,
+  remove/expand/unavailable states. The browser never receives or constructs the
+  selected absolute project path.
 - `features/threads`: route loader, thread list/rename, transcript and activity rendering.
 - `features/runs`: composer, active-send choice, stop, status, trust disclosure, and streaming reducer.
 - `features/inspector`: resizable shell and Changes/Files/Terminal tabs.
@@ -86,6 +88,10 @@ Tests query by role/name/state rather than class names or implementation details
 
 - **A single global store for server, route, and stream state:** rejected because it recreates selection conflicts and obscures authoritative ownership.
 - **Browser reads native Pi files:** rejected by security and package boundaries.
+- **Browser directory input or File System Access picker:** rejected because web
+  pickers do not provide the server-visible absolute native path. The
+  authenticated loopback server instead owns macOS and Windows chooser
+  invocation and combines selection with registration.
 - **Trust `response.json()` through a TypeScript cast:** rejected; contracts must parse at runtime.
 - **Enable raw Markdown HTML then sanitize broadly:** rejected for the initial release; disabling raw HTML is simpler and safer.
 - **Build a terminal emulator:** rejected in favor of xterm's maintained terminal behavior.

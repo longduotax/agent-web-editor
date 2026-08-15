@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   AddProjectRequestSchema,
+  BrowseProjectRequestSchema,
+  BrowseProjectResponseSchema,
   ProjectIdSchema,
   RelativePathSchema,
   TerminalClientFrameSchema,
@@ -17,6 +19,27 @@ describe("wire contracts", () => {
         path: "/tmp/project",
         idempotencyKey: id,
         extra: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses strict browse requests and selected or cancelled outcomes", () => {
+    expect(BrowseProjectRequestSchema.parse({ idempotencyKey: id })).toEqual({
+      idempotencyKey: id,
+    });
+    expect(
+      BrowseProjectRequestSchema.safeParse({
+        idempotencyKey: id,
+        path: "/tmp/project",
+      }).success,
+    ).toBe(false);
+    expect(BrowseProjectResponseSchema.parse({ outcome: "cancelled" })).toEqual(
+      { outcome: "cancelled" },
+    );
+    expect(
+      BrowseProjectResponseSchema.safeParse({
+        outcome: "cancelled",
+        path: "/tmp/project",
       }).success,
     ).toBe(false);
   });

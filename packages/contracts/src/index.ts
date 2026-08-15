@@ -122,6 +122,11 @@ export const ProjectsResponseSchema = z.object({
 export const ProjectMutationResponseSchema = z.object({
   project: ProjectSchema,
 });
+export const BrowseProjectResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("selected"), project: ProjectSchema }).strict(),
+  z.object({ outcome: z.literal("cancelled") }).strict(),
+]);
+export type BrowseProjectResponse = z.infer<typeof BrowseProjectResponseSchema>;
 export const ThreadMutationResponseSchema = z.object({
   thread: ThreadSummarySchema,
 });
@@ -138,6 +143,9 @@ export const AddProjectRequestSchema = z
     displayName: z.string().trim().min(1).max(200).optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
+  .strict();
+export const BrowseProjectRequestSchema = z
+  .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();
 export const UpdateProjectRequestSchema = z
   .object({

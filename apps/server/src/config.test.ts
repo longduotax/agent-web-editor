@@ -24,12 +24,12 @@ describe("server configuration", () => {
         },
       }).port,
     ).toBe(4200);
-    expect(
-      parseConfig({
-        argv: [],
-        environment: { PI_WEB_STATE_DIR: resolve("tmp-state") },
-      }).port,
-    ).toBe(3001);
+    const defaults = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: resolve("tmp-state") },
+    });
+    expect(defaults.port).toBe(3001);
+    expect(defaults.devPort).toBe(5173);
   });
 
   it.each(["", "-1", "1.5", "65536", "abc"])(

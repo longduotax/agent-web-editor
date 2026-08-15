@@ -94,9 +94,18 @@ test.beforeAll(async () => {
     argv: ["--port", String(port)],
     environment: { NODE_ENV: "production", PI_WEB_STATE_DIR: state },
   });
+  let browseCount = 0;
   server = await buildServer({
     config,
     runtime: new BrowserRuntime(),
+    directoryPicker: {
+      chooseDirectory: () => {
+        const currentBrowse = browseCount++;
+        if (currentBrowse === 0) return Promise.resolve(projectPath);
+        if (currentBrowse === 1) return Promise.resolve(null);
+        return Promise.reject(new Error("directory_picker_failed"));
+      },
+    },
     logger: false,
   });
   await server.listen({ host: config.host, port });
@@ -113,11 +122,23 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
 }) => {
   await page.goto(launchUrl);
   await expect(page.getByText("No projects yet")).toBeVisible();
-  await page.getByLabel("Add local project").fill(projectPath);
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByPlaceholder("/absolute/project/path")).toHaveCount(0);
+  await page.getByRole("button", { name: "Browse…" }).click();
   const projectName = basename(projectPath);
   const projectLink = page.getByRole("link", { name: new RegExp(projectName) });
   await expect(projectLink).toBeVisible();
+
+  const browse = page.getByRole("button", { name: "Browse…" });
+  await browse.click();
+  await expect(browse).toBeEnabled();
+  await expect(projectLink).toHaveCount(1);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  await browse.click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "The folder browser could not be opened.",
+  );
+
   await projectLink.hover();
   await page
     .getByRole("button", { name: `New thread in ${projectName}` })

@@ -104,7 +104,7 @@ a:focus-visible {
   padding: 0.8rem;
   border-bottom: 1px solid var(--border);
 }
-.add-project label {
+.add-project-title {
   display: block;
   margin-bottom: 0.4rem;
   color: var(--muted);
@@ -113,10 +113,6 @@ a:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.add-project div {
-  display: flex;
-}
-.add-project input,
 .file-search {
   width: 100%;
   min-width: 0;
@@ -127,9 +123,10 @@ a:focus-visible {
   background: #0f1217;
 }
 .add-project button {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
   border: 1px solid #3c66a2;
-  border-left: 0;
-  border-radius: 0 0.4rem 0.4rem 0;
+  border-radius: 0.4rem;
   background: #244c82;
 }
 .project-list {

@@ -26,8 +26,8 @@ import {
 
 import {
   ApiClientError,
-  addProject,
   bootstrap,
+  browseProject,
   createThread,
   getDiff,
   getFile,
@@ -90,10 +90,11 @@ function Sidebar({
     queryKey: ["workspace"],
     queryFn: getWorkspace,
   });
-  const add = useMutation({
-    mutationFn: addProject,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+  const browse = useMutation({
+    mutationFn: browseProject,
+    onSuccess: async (result) => {
+      if (result.outcome === "selected")
+        await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
   const create = useMutation({
@@ -106,16 +107,6 @@ function Sidebar({
     },
   });
 
-  const submitProject = (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    const path = data.get("path");
-    if (typeof path === "string" && path.trim() !== "") {
-      add.mutate(path);
-      event.currentTarget.reset();
-    }
-  };
-
   return (
     <nav className="sidebar" aria-label="Projects and threads">
       <header className="brand">
@@ -125,21 +116,19 @@ function Sidebar({
           <small>Local agent projects</small>
         </div>
       </header>
-      <form className="add-project" onSubmit={submitProject}>
-        <label htmlFor="project-path">Add local project</label>
-        <div>
-          <input
-            id="project-path"
-            name="path"
-            placeholder="/absolute/project/path"
-            required
-          />
-          <button type="submit" disabled={add.isPending}>
-            Add
-          </button>
-        </div>
-      </form>
-      {add.error !== null && <ErrorNotice error={add.error} />}
+      <div className="add-project">
+        <span className="add-project-title">Add local project</span>
+        <button
+          type="button"
+          disabled={browse.isPending}
+          onClick={() => {
+            browse.mutate();
+          }}
+        >
+          {browse.isPending ? "Opening…" : "Browse…"}
+        </button>
+      </div>
+      {browse.error !== null && <ErrorNotice error={browse.error} />}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
