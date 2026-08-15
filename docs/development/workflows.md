@@ -1,0 +1,125 @@
+# Development workflows
+
+**Status:** Current
+
+**Last verified:** 2026-08-15
+
+The repository is a pnpm workspace with centralized tooling and package-local
+application/build commands.
+
+## Prerequisites
+
+- Node.js 22.19 or later (required by the Pi SDK)
+- pnpm 11.1.2 through Corepack or an equivalent installation
+- Python 3 for `scripts/check_docs.py`
+
+Do not print `.env` files or secrets. Treat every database configured in `.env`
+or `.env.*` as production unless the user identifies a disposable,
+non-production target. Without explicit permission, database access is read-only.
+
+## Install dependencies
+
+From the repository root:
+
+```sh
+pnpm install
+```
+
+Use the committed `pnpm-lock.yaml`. `pnpm-workspace.yaml` explicitly allows the
+lifecycle scripts required by `esbuild`, `protobufjs`, and `@google/genai`;
+review any new lifecycle-script request rather than approving all dependency
+builds. Add dependencies to the package that owns them instead of the workspace
+root unless they are repository-wide tools:
+
+```sh
+pnpm --filter @pi-web/server add package-name
+pnpm --filter @pi-web/web add -D package-name
+```
+
+## Static verification
+
+Run the full static gate:
+
+```sh
+pnpm check
+```
+
+Or run checks separately:
+
+```sh
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm docs:check
+```
+
+Build and typecheck are intentionally separate. Vite transforms TypeScript, but
+`apps/web` runs `tsc --noEmit` before its build. Vitest currently passes with no
+test files because no product behavior exists; add focused tests with the first
+behavior.
+
+Generated `dist/`, coverage, and TypeScript build-info files are ignored.
+
+## Development processes
+
+The root command starts both applications and stays attached:
+
+```sh
+pnpm dev
+```
+
+Focused alternatives are:
+
+```sh
+pnpm --filter @pi-web/web dev
+pnpm --filter @pi-web/server dev
+```
+
+The web process listens on `127.0.0.1:5173`; the server listens on
+`127.0.0.1:3001`. Do not start either process unless the current task requires
+runtime work or verification. Static setup and checks do not require services.
+
+After building, the backend can also be started with:
+
+```sh
+pnpm --filter @pi-web/server start
+```
+
+## Focused package checks
+
+```sh
+pnpm --filter @pi-web/contracts typecheck
+pnpm --filter @pi-web/agent-runtime build
+pnpm --filter @pi-web/pi-adapter build
+pnpm --filter @pi-web/server typecheck
+pnpm --filter @pi-web/web build
+```
+
+Run one future Vitest file from the root with:
+
+```sh
+pnpm vitest run path/to/example.test.ts
+```
+
+## Configuration and data stores
+
+The scaffold has no application configuration schema, database, migration
+system, queue, or external-service setup. Do not introduce an environment read
+without an explicit parser and startup failure policy. Do not run database or
+migration commands as a documentation or build verification step.
+
+When persistence is introduced, document its local setup, migration ownership,
+recovery, and safe test isolation here before relying on it.
+
+## Completion workflow
+
+1. Inspect all changed files (and `git diff` when the directory is under Git).
+2. Run focused checks while iterating, then `pnpm check` for repository-wide
+   changes.
+3. Update architecture only for implemented structure, specifications for
+   durable behavior, and designs for consequential decisions.
+4. Run `pnpm docs:check` after documentation links, indexes, or plans change.
+5. Report omitted checks and why. Never use service startup, database access, or
+   deployment as an incidental verification step.
