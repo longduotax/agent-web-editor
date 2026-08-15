@@ -280,13 +280,13 @@ const messageShapeSchema = z.looseObject({
 });
 const toolCallBlockSchema = z.looseObject({
   type: z.literal("toolCall"),
-  id: z.string().min(1),
+  id: z.string().min(1).max(200),
   name: z.string().min(1),
   arguments: z.unknown(),
 });
 const toolResultMessageSchema = z.looseObject({
   role: z.literal("toolResult"),
-  toolCallId: z.string().min(1),
+  toolCallId: z.string().min(1).max(200),
   toolName: z.string().min(1),
   content: z.unknown(),
   isError: z.boolean(),
@@ -377,7 +377,7 @@ function translateToolResult(
   timestamp: string | null,
   raw: unknown,
   inputs: ReadonlyMap<string, string>,
-): TranscriptItem | null {
+): { item: TranscriptItem; toolCallId: string } | null {
   const parsed = toolResultMessageSchema.safeParse(raw);
   if (!parsed.success) return null;
   const metadata = toolMetadata(parsed.data.details);
@@ -392,7 +392,9 @@ function translateToolResult(
     exitCode: metadata.exitCode,
     timestamp,
   });
-  return item.success ? item.data : null;
+  return item.success
+    ? { item: item.data, toolCallId: parsed.data.toolCallId }
+    : null;
 }
 
 function translateBashExecution(
@@ -449,6 +451,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
   const transcript: TranscriptItem[] = [];
   const diagnostics: string[] = [];
   const toolInputs = new Map<string, string>();
+  const toolIndexes = new Map<string, number | null>();
   for (const raw of parseNativeHistory(manager.getBranch())) {
     const parsed = baseEntrySchema.safeParse(raw);
     if (!parsed.success) {
@@ -464,7 +467,13 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
         toolInputs,
       );
       if (result !== null) {
-        transcript.push(result);
+        const callIndex = toolIndexes.get(result.toolCallId);
+        if (callIndex === undefined || callIndex === null)
+          transcript.push(result.item);
+        else {
+          transcript[callIndex] = result.item;
+          toolIndexes.delete(result.toolCallId);
+        }
         continue;
       }
       const bash = translateBashExecution(
@@ -513,9 +522,16 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
                 return;
               }
               const call = toolCallBlockSchema.safeParse(block);
-              if (call.success && tool.kind === "tool")
-                toolInputs.set(call.data.id, tool.input);
-              transcript.push(tool);
+              const toolIndex = transcript.push(tool) - 1;
+              if (call.success && tool.kind === "tool") {
+                if (toolIndexes.has(call.data.id)) {
+                  toolIndexes.set(call.data.id, null);
+                  toolInputs.delete(call.data.id);
+                } else {
+                  toolIndexes.set(call.data.id, toolIndex);
+                  toolInputs.set(call.data.id, tool.input);
+                }
+              }
             });
         }
       }

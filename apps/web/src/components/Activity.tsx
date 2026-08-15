@@ -141,51 +141,15 @@ function formattedInput(input: string): string {
   }
 }
 
-function toolKey(item: ToolActivity): string {
-  return JSON.stringify([item.name, item.input]);
-}
-
-/**
- * Native history contains both the pending call and its later result. Present
- * those as one operation, matching Pi's in-place tool row, without changing the
- * authoritative transcript DTO.
- */
-export function compactTranscript(
+export function displayTranscript(
   items: readonly TranscriptItem[],
 ): TranscriptItem[] {
-  const compacted: TranscriptItem[] = [];
-  const pending = new Map<string, number[]>();
-
-  for (const item of items) {
-    if (
-      item.kind === "message" &&
-      item.role === "assistant" &&
-      item.text.trim() === ""
-    )
-      continue;
-
-    if (item.kind !== "tool") {
-      compacted.push(item);
-      continue;
-    }
-
-    const key = toolKey(item);
-    if (item.status === "running") {
-      const index = compacted.push(item) - 1;
-      const indexes = pending.get(key) ?? [];
-      indexes.push(index);
-      pending.set(key, indexes);
-      continue;
-    }
-
-    const indexes = pending.get(key);
-    const pendingIndex = indexes?.shift();
-    if (pendingIndex === undefined) compacted.push(item);
-    else compacted[pendingIndex] = item;
-    if (indexes?.length === 0) pending.delete(key);
-  }
-
-  return compacted;
+  return items.filter(
+    (item) =>
+      item.kind !== "message" ||
+      item.role !== "assistant" ||
+      item.text.trim() !== "",
+  );
 }
 
 export function Activity({

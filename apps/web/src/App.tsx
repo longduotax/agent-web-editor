@@ -44,7 +44,7 @@ import {
   stop,
   webSocketUrl,
 } from "./api/client.js";
-import { Activity, compactTranscript } from "./components/Activity.js";
+import { Activity, displayTranscript } from "./components/Activity.js";
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
@@ -466,7 +466,7 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
           </span>
         </div>
       )}
-      {compactTranscript(snapshot.transcript).map((item) =>
+      {displayTranscript(snapshot.transcript).map((item) =>
         item.kind === "message" ? (
           <article className={`message message-${item.role}`} key={item.id}>
             <header>

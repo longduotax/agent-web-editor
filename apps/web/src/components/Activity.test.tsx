@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
-import { Activity, compactTranscript } from "./Activity.js";
+import { Activity, displayTranscript } from "./Activity.js";
 
 const runningRead: TranscriptItem = {
   id: "call",
@@ -48,7 +48,7 @@ describe("agent tool activity", () => {
     ).toBeVisible();
   });
 
-  it("coalesces a tool call with its result and omits empty assistant shells", () => {
+  it("omits empty assistant shells without guessing tool-call identity", () => {
     const items: TranscriptItem[] = [
       {
         id: "assistant",
@@ -61,7 +61,7 @@ describe("agent tool activity", () => {
       completedRead,
     ];
 
-    expect(compactTranscript(items)).toEqual([completedRead]);
+    expect(displayTranscript(items)).toEqual([runningRead, completedRead]);
   });
 
   it("falls back safely for malformed or custom tool input", () => {

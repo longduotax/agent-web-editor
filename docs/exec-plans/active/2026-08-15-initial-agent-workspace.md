@@ -417,7 +417,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - Pi session history is versioned JSONL with branching and compaction. The adapter should use `SessionManager` for access but still narrow every returned/raw shape at its boundary and keep native paths server-private.
 - Pi SDK 0.84.2 does not write a newly created session until an assistant message exists. Recording that in-memory UUID as durable thread metadata made the first prompt fail because a fresh listing could not resolve it. The adapter now narrowly parses and exclusively materializes the new manager's initial JSONL before returning the UUID; temp-directory restart coverage verifies the session can be discovered and opened without a provider call.
 - “Wait until it finishes” is resolved as a local draft that can be submitted as a new run after settlement, not Pi follow-up queueing.
-- Native history represents a tool call and its result as separate transcript items. Rendering both as bordered raw-JSON cards duplicated every operation and overwhelmed the conversation; the browser now pairs matching pending/result items for presentation only, while preserving the parsed snapshot as authoritative state.
+- Native history represents a tool call and its result as separate transcript items. Rendering both as bordered raw-JSON cards duplicated every operation and overwhelmed the conversation; the Pi adapter now pairs each pending/result item by native tool-call ID before browser presentation, while preserving the parsed snapshot as authoritative state.
 - The existing working tree already contains uncommitted approved-specification and completed-plan files. They are user work and must remain intact.
 
 ## Decision log
