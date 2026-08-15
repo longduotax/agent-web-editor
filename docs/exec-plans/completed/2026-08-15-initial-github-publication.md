@@ -1,6 +1,6 @@
 # Initial GitHub publication
 
-**Status:** Active
+**Status:** Completed
 
 **Subsystem:** Repository operations
 
@@ -74,10 +74,11 @@ No application deployment or migration occurs. Before push, recovery is removal 
 
 - [x] Remote reachability and emptiness verified.
 - [x] Working specification approved.
-- [ ] Git initialized and staged contents reviewed.
-- [ ] Static checks passed.
-- [ ] Plan archived and initial commit created.
-- [ ] `main` pushed and local/remote state verified.
+- [x] Git initialized and staged contents reviewed.
+- [x] Static checks passed.
+- [x] Initial commit created and published.
+- [x] `main` pushed and local/remote state verified.
+- [x] Plan archived.
 
 ## Discoveries and blockers
 
@@ -90,4 +91,10 @@ No application deployment or migration occurs. Before push, recovery is removal 
 
 ## Final outcomes
 
-Pending.
+Git was initialized on `main` with the supplied SSH remote. The reviewed 56-file
+scaffold was committed as `2b2d1167d541619c1c1effd606ea38729ecca98b` and pushed
+without force. Dependencies, build outputs, caches, environment files, and other
+ignored paths were absent from the commit. The full static gate passed, local
+`main` tracks `origin/main`, and local and remote commit IDs matched after the
+initial push. This plan is archived in a follow-up documentation commit so its
+lifecycle records the verified publication truthfully.

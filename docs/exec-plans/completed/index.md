@@ -4,6 +4,9 @@ Completed, superseded, and abandoned plans are retained here as historical
 implementation context. They are not authoritative over current architecture,
 specifications, designs, code, or tests.
 
+- [Initial GitHub publication](2026-08-15-initial-github-publication.md)
+  — initialized `main`, published the reviewed scaffold to GitHub, and verified
+  local/remote commit parity.
 - [Fast and Plan implementation lanes](2026-08-15-fast-plan-lanes.md)
   — simplified change classification to Fast or Plan, with approved
   specifications and living ExecPlans required for every non-Fast change.
