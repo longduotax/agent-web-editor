@@ -1,13 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-import cookie from "@fastify/cookie";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import type { AgentRuntime } from "@pi-web/agent-runtime";
 import type { RawData } from "ws";
 import {
-  BootstrapRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
   CreateThreadRequestSchema,
@@ -31,12 +29,8 @@ import { z, ZodError } from "zod";
 import {
   checkHost,
   checkOrigin,
-  clearSessionCookie,
   enforceRequestPolicy,
-  ProcessAuth,
-  sessionCookie,
-  setSessionCookie,
-} from "./auth.js";
+} from "./request-policy.js";
 import { parseConfig, type ServerConfig } from "./config.js";
 import { MetadataStore, ReceiptConflictError } from "./db/store.js";
 import {
@@ -68,7 +62,6 @@ export interface BuildServerOptions {
   config?: ServerConfig;
   store?: MetadataStore;
   runtime?: AgentRuntime;
-  auth?: ProcessAuth;
   ptyFactory?: PtyFactory;
   directoryPicker?: DirectoryPicker;
   logger?: boolean;
@@ -77,7 +70,6 @@ export interface BuildServerOptions {
 export interface ServerContext {
   config: ServerConfig;
   store: MetadataStore;
-  auth: ProcessAuth;
   workspace: WorkspaceService;
   launchUrl: string;
 }
@@ -211,8 +203,6 @@ function requireSocketPolicy(
     !checkOrigin(request, context.config.allowedOrigins)
   )
     throw new Error("socket_forbidden");
-  if (!context.auth.verify(sessionCookie(request)))
-    throw new Error("socket_unauthorized");
 }
 
 export async function buildServer(
@@ -223,7 +213,6 @@ export async function buildServer(
   const store =
     options.store ??
     (await MetadataStore.open({ stateDirectory: config.stateDirectory }));
-  const auth = options.auth ?? new ProcessAuth();
   const broker = new LiveBroker();
   const terminals = new ProjectTerminalManager(options.ptyFactory);
   const workspace = new WorkspaceService(
@@ -235,14 +224,13 @@ export async function buildServer(
   const directoryPicker =
     options.directoryPicker ?? createNativeDirectoryPicker();
   const launchPort = config.production ? config.port : config.devPort;
-  const launchUrl = `http://127.0.0.1:${String(launchPort)}/#token=${encodeURIComponent(auth.launchToken)}`;
-  const context: ServerContext = { config, store, auth, workspace, launchUrl };
+  const launchUrl = `http://127.0.0.1:${String(launchPort)}/`;
+  const context: ServerContext = { config, store, workspace, launchUrl };
   const server: WorkspaceServer = Object.assign(
     Fastify({ logger: options.logger ?? true, bodyLimit: config.bodyLimit }),
     { workspaceContext: context },
   );
 
-  await server.register(cookie);
   await server.register(websocket, {
     options: { maxPayload: config.bodyLimit },
   });
@@ -251,13 +239,11 @@ export async function buildServer(
     enforceRequestPolicy({
       allowedHosts: config.allowedHosts,
       allowedOrigins: config.allowedOrigins,
-      auth,
     }),
   );
   server.addHook("onClose", async () => {
     terminals.close();
     broker.clear();
-    auth.clear();
     await workspace.close();
     if (ownedStore) store.close();
   });
@@ -271,34 +257,6 @@ export async function buildServer(
   });
 
   server.get("/api/ready", () => ({ ready: true }));
-  server.post("/api/auth/bootstrap", async (request, reply) => {
-    if (
-      !checkOrigin(request, config.allowedOrigins) ||
-      request.headers["x-pi-web-request"] !== "1"
-    )
-      return await reply.code(403).send({
-        error: {
-          code: "forbidden_request",
-          message: "Request origin is invalid.",
-        },
-      });
-    const body = BootstrapRequestSchema.parse(request.body);
-    const sessionId = auth.consumeLaunchToken(body.token);
-    if (sessionId === null)
-      return await reply.code(401).send({
-        error: {
-          code: "invalid_launch_token",
-          message: "The launch link is invalid or expired.",
-        },
-      });
-    setSessionCookie(reply, sessionId);
-    return { authenticated: true };
-  });
-  server.post("/api/auth/logout", async (request, reply) => {
-    auth.logout(sessionCookie(request));
-    clearSessionCookie(reply);
-    return { authenticated: false };
-  });
 
   server.get("/api/projects", async () => await workspace.list());
   server.post("/api/projects/browse", async (request) => {
@@ -471,7 +429,7 @@ export async function buildServer(
     try {
       requireSocketPolicy(request, server.workspaceContext);
     } catch {
-      socket.close(1008, "Not authorized");
+      socket.close(1008, "Not permitted");
       return;
     }
     let unsubscribe: (() => void) | undefined;
@@ -501,7 +459,7 @@ export async function buildServer(
     try {
       requireSocketPolicy(request, server.workspaceContext);
     } catch {
-      socket.close(1008, "Not authorized");
+      socket.close(1008, "Not permitted");
       return;
     }
     let detach: (() => void) | undefined;

@@ -18,7 +18,7 @@ The combination is efficient for small local metadata: synchronous in-process ac
 
 - `PI_WEB_STATE_DIR`, when present, is parsed as an absolute state directory.
 - The default is `~/.pi/web-workspace/`.
-- The directory contains `metadata.sqlite` and bounded migration backups. Authentication state is process-local and is not stored here.
+- The directory contains `metadata.sqlite` and bounded migration backups. There is no client-authentication state.
 - Startup creates state with user-only permissions and rejects malformed, symlink-escaped, or insecure locations.
 - SQLite enables foreign keys, WAL, a bounded busy timeout, and explicit close/checkpoint behavior.
 
@@ -65,7 +65,7 @@ Opaque application IDs are server-generated UUIDv4 strings. Times are UTC ISO-86
 
 ### `command_receipts`
 
-- process-authenticated scope, idempotency key, operation, canonical request hash
+- application scope, idempotency key, operation, canonical request hash
 - accepted result reference and timestamps
 - unique scope/key so retries return one outcome and conflicting reuse fails
 

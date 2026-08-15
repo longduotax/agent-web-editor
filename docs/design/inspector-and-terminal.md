@@ -12,7 +12,7 @@
 
 Inspector endpoints accept an opaque project ID and a normalized project-relative path only. The server resolves the canonical project from metadata, resolves the requested target to a canonical target, verifies containment, and performs reads against that canonical target. Git is invoked without a shell and parsed from machine-oriented output. Files and diffs are bounded.
 
-Use `node-pty` behind a server-owned adapter for one on-demand terminal process per project and `@xterm/xterm` in the browser. Terminal attachment uses a separate authenticated WebSocket. The terminal is an unrestricted user shell with the user's permissions, not an agent tool or sandbox.
+Use `node-pty` behind a server-owned adapter for one on-demand terminal process per project and `@xterm/xterm` in the browser. Terminal attachment uses a separate credential-free WebSocket with exact Host and browser Origin checks. The terminal is an unrestricted user shell with the user's permissions, not an agent tool or sandbox, and any same-machine process can access it while the server runs.
 
 ## File path and read policy
 
@@ -40,10 +40,10 @@ The Changes view is always labeled as current project-wide working-tree state, n
 ## PTY lifecycle and protocol
 
 - `node-pty` is isolated behind `PtyFactory`/`ProjectTerminalManager` interfaces so tests use a fake process.
-- A project terminal is created only on explicit user action. Exactly one PTY exists per active project; multiple authorized tabs may attach to it.
+- A project terminal is created only on explicit user action. Exactly one PTY exists per active project; multiple tabs from permitted browser origins may attach to it.
 - Shell selection parses an absolute `$SHELL` that exists and is executable, with a platform fallback such as `/bin/sh`. The initial cwd is the project's current canonical root.
 - The environment is the server user's normal shell environment with application secrets and agent-specific session variables removed where practical. The terminal still has the user's ordinary permissions.
-- The terminal WebSocket authenticates during upgrade and parses versioned `attach`, `input`, `resize`, `restart`, and `terminate` frames. Input is capped at 64 KiB per frame; dimensions are integers within 2–500 columns and 2–200 rows.
+- The terminal WebSocket checks exact Host and Origin headers during upgrade, requires no credential, and parses versioned `attach`, `input`, `resize`, `restart`, and `terminate` frames. Input is capped at 64 KiB per frame; dimensions are integers within 2–500 columns and 2–200 rows.
 - PTY output is opaque terminal data carried in bounded server frames. A 1 MiB per-project replay ring supports a newly attached tab; overflow drops oldest output and emits a reset/truncation marker.
 - Disconnecting a browser does not terminate the PTY. Explicit terminate, restart, project removal, child exit, or server shutdown cleans up the process tree, listeners, buffers, and attachments.
 - PTYs do not survive server restart. A client with a stale terminal ID receives a gone state and may explicitly create another.

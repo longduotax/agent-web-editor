@@ -56,8 +56,9 @@ pnpm docs:check
 ```
 
 Build and typecheck are intentionally separate. Vite transforms TypeScript, but
-`apps/web` runs `tsc --noEmit` before its build. Vitest includes contract, configuration, authentication, temporary SQLite,
-HTTP, run-coordination, filesystem, and browser rendering tests. The root test
+`apps/web` runs `tsc --noEmit` before its build. Vitest includes contract,
+configuration, request-policy, temporary SQLite, HTTP, run-coordination,
+filesystem, and browser rendering tests. The root test
 command first builds shared package entry points so Node tests exercise the same
 public runtime exports as the applications.
 
@@ -82,7 +83,8 @@ The web process listens on `127.0.0.1` at `PI_WEB_DEV_PORT` or default `5173`;
 the server listens on `127.0.0.1` at `--port`, `PI_WEB_PORT`, or default `3001`.
 Vite proxies relative API and WebSocket traffic to the backend port. Copy
 `.env.example` to the ignored repository-root `.env.local` to store both values.
-Startup prints the one-use tokenized URL using the configured development port.
+Startup prints a plain URL using the configured development port; opening it
+loads the workspace without authentication.
 Do not start either process unless the current task requires runtime work or
 verification.
 

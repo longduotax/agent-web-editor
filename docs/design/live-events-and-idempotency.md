@@ -10,7 +10,7 @@
 
 ## Decision summary
 
-Use authenticated JSON HTTP endpoints for snapshots and commands and one authenticated WebSocket for live thread subscriptions. Terminal traffic uses a separate WebSocket and protocol. Every mutation carries a database-backed idempotency key. Live thread events have an in-memory epoch and monotonic sequence; reconnect either replays a bounded contiguous suffix or instructs the browser to replace state from an authoritative snapshot.
+Use credential-free JSON HTTP endpoints for snapshots and commands and one credential-free WebSocket for live thread subscriptions. Exact Host checks apply to HTTP; browser mutations and WebSocket upgrades retain the configured Origin/CSRF policy. Terminal traffic uses a separate WebSocket and protocol. Every mutation carries a database-backed idempotency key. Live thread events have an in-memory epoch and monotonic sequence; reconnect either replays a bounded contiguous suffix or instructs the browser to replace state from an authoritative snapshot.
 
 Live events are not durable transcript storage. Pi history plus application metadata reconstructs the truth.
 
@@ -41,7 +41,7 @@ Each live event contains `version`, `threadId`, `epoch`, positive integer `seque
 
 Each live thread coordinator is an actor/serialized queue:
 
-1. Authenticate and parse a subscribe command.
+1. Apply the WebSocket Host/Origin policy and parse a subscribe command.
 2. Add the connection as paused so newly emitted events are buffered for it.
 3. In the same coordinator queue, capture the adapter/application snapshot and current high-water sequence.
 4. Send the snapshot, then buffered events with a greater sequence, then mark the subscriber live.
@@ -83,6 +83,6 @@ Malformed frames close the subscription with a stable protocol error. An expired
 - Receipt retry, conflicting reuse, concurrent duplicate, process restart, and timeout-after-acceptance.
 - Prompt preflight buffering and receipt/run atomicity.
 - Subscribe/snapshot race, event during snapshot, monotonic sequence, duplicate/out-of-order/gap, matching/different epoch, ring overflow, and runtime replacement.
-- Slow consumer, heartbeat, malformed/oversized frame, unauthorized subscription, and listener cleanup.
+- Slow consumer, heartbeat, malformed/oversized frame, unpermitted Origin or unknown-thread subscription, and listener cleanup.
 - Reducer idempotency when snapshot/replay is applied twice.
 - Two independent browser contexts, reconnect during streaming/completion, already-viewing completion, and local wait-draft behavior.

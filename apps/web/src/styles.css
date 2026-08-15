@@ -602,8 +602,7 @@ a:focus-visible {
 }
 .project-empty,
 .welcome,
-.loading,
-.auth-screen {
+.loading {
   align-items: center;
   justify-content: center;
   padding: 2rem;
@@ -611,8 +610,7 @@ a:focus-visible {
   text-align: center;
 }
 .project-empty h1,
-.welcome h1,
-.auth-screen h1 {
+.welcome h1 {
   margin: 0.5rem 0;
   color: #e9ebf1;
   font-size: 1.6rem;
@@ -622,12 +620,6 @@ a:focus-visible {
   font:
     5rem Georgia,
     serif;
-}
-.auth-screen {
-  display: flex;
-  min-height: 100vh;
-  flex-direction: column;
-  background: var(--surface-0);
 }
 .drawer-backdrop {
   display: none;

@@ -2,7 +2,7 @@
 
 **Status:** Active
 
-**Phase:** Revised specification and technical designs approved; implementation ready
+**Phase:** No-authentication security revision approved; implementation active
 
 **Subsystem:** Projects, threads, agent runs, live events, workspace UI, inspector, and terminal
 
@@ -14,7 +14,7 @@
 
 ## Approved specification and approval context
 
-The canonical [initial agent workspace specification](../../product-specs/initial-workspace.md) is marked **Approved, not implemented**. On 2026-08-15 the user requested test-driven implementation, then explicitly approved a revision that simplifies process-local security, makes the loopback port user-configurable, uses Drizzle with SQLite, and follows Pi's direct tool-execution behavior without initial command approvals. The user also directed that a future, separately designed reviewer agent may approve or reject main-agent command requests.
+The canonical [initial agent workspace specification](../../product-specs/initial-workspace.md) is approved. On 2026-08-15 the user approved removing launch-token and browser-session authentication so starting the server and opening its plain loopback URL loads the workspace immediately. The approved revision deliberately allows any same-machine process to access the server while retaining loopback-only binding, exact Host checks, browser Origin/CSRF protections, resource ownership checks, and filesystem containment. The prior choices of a configurable port, Drizzle with SQLite, Pi direct execution, and separately designed future reviewer-agent work remain unchanged.
 
 This plan and the approved technical designs reflect that revision. A renewed specification approval is required if implementation would materially change behavior, acceptance criteria, scope, non-goals, compatibility, or boundaries.
 
@@ -34,20 +34,21 @@ The implementation is complete only when all eleven product-specification accept
 4. Run state-machine tests prove accepted prompts, steering, stop, direct Pi tool execution, failure, interruption, and the one-running-run-per-project constraint.
 5. Restart and UI tests prove unread completion indicators aggregate by project and clear only when the relevant completed result is viewed.
 6. Snapshot/live-event tests prove reconnecting during and after a run produces one authoritative transcript with no duplicate accepted prompt, run, message, or completion.
-7. Inspector tests prove Git unavailable/status/diff behavior, searchable file browsing and safe previews, and one authenticated PTY per project with resize/restart/terminate behavior.
+7. Inspector tests prove Git unavailable/status/diff behavior, searchable file browsing and safe previews, and one project-scoped PTY with permitted browser Origin checks and resize/restart/terminate behavior.
 8. Boundary tests cover every source in the boundary inventory below with valid, malformed, missing, unauthorized, and relevant legacy/corrupt cases.
 9. Accessibility tests prove every run state has text or an icon label in addition to color, the direct-execution warning is visible, and narrow-screen sidebar/inspector drawers are operable.
 10. The deterministic fake-runtime end-to-end suite passes without provider credentials or access to a real user database; a real Pi adapter smoke test uses only controlled session fixtures unless the user explicitly opts into a credentialed runtime test.
 11. `pnpm check` and the dedicated integration and end-to-end commands documented during implementation pass.
+12. Startup prints a plain loopback URL and credential-free HTTP/WebSocket tests prove the workspace works without tokens or cookies while Host, browser Origin/CSRF, ownership, and containment checks remain enforced.
 
 ## Current behavior and affected components
 
 Implementation is now underway across every target component:
 
 - `apps/web/src/App.tsx` composes route-owned project/thread selection, parsed Query clients, transcript/run controls, responsive navigation, and Files/Changes/Terminal inspector views.
-- `apps/server/src/app.ts` composes parsed configuration, process authentication, SQLite metadata, project/thread/run routes, live and terminal WebSockets, filesystem/Git boundaries, and injected Pi/fake runtimes.
+- `apps/server/src/app.ts` composes parsed configuration, credential-free loopback request policy, SQLite metadata, project/thread/run routes, live and terminal WebSockets, filesystem/Git boundaries, and injected Pi/fake runtimes.
 - Shared contracts, the SDK-neutral runtime interface, and the Pi adapter have concrete public APIs. Migration v1 is committed under `apps/server/migrations/`.
-- Vitest and Playwright cover contracts, configuration, auth, persistence/restart, HTTP path redaction, run idempotency and project leases, file containment, safe Markdown, routes, and direct-execution disclosure.
+- Vitest and Playwright cover contracts, configuration, request policy, persistence/restart, HTTP path redaction, run idempotency and project leases, file containment, safe Markdown, routes, and direct-execution disclosure.
 - The Pi SDK remains pinned to `0.84.2`; real-provider and writable native-session verification remains intentionally omitted without explicit approval.
 
 The existing dependency direction remains invariant:
@@ -65,7 +66,7 @@ Browser code must never import server, runtime, adapter, SDK, Node filesystem, G
 ## Scope
 
 - Shared parsed HTTP, live-event, inspector, and terminal wire contracts.
-- User-selected loopback port and process-local client authentication/authorization.
+- User-selected loopback port, plain launch URL, and credential-free request policy with retained Host, browser Origin/CSRF, resource ownership, and containment checks.
 - Drizzle/SQLite application metadata storage, migrations, repositories, removal retention, recovery, and restart reconciliation.
 - Project registration/removal/re-addition and Pi-session discovery/import.
 - Thread creation/rename/navigation, snapshots, and native transcript translation.
@@ -90,7 +91,7 @@ Also excluded from this plan:
 
 ## Assumptions and implementation invariants
 
-- The server remains bound to `127.0.0.1` on a parsed user-selected port; loopback binding alone is not authentication.
+- The server remains bound to `127.0.0.1` on a parsed user-selected port and intentionally has no client authentication; any same-machine process can access it.
 - The browser uses opaque application IDs. A server repository lookup, not a browser path, resolves project roots and native sessions.
 - Application metadata is relational and transactional; native Pi JSONL remains the full transcript source of truth.
 - Removal is soft deletion. Re-addition is matched by canonical path and restores retained metadata.
@@ -105,11 +106,11 @@ Also excluded from this plan:
 
 The implementation gate is satisfied by the indexed designs under `docs/design/`:
 
-1. Process-local launch token/session authentication, exact Host/Origin checks, and CLI/environment/default port precedence.
+1. No client authentication, a plain launch URL, exact Host/browser-Origin request policy, and CLI/environment/default port precedence.
 2. Drizzle ORM with `better-sqlite3`, committed migrations, runtime row parsers, transactions, backups, and soft deletion.
 3. SDK-neutral Pi session/runtime translation using Pi's native resources, project trust, and direct tool execution with an explicit no-sandbox warning.
 4. Idempotent HTTP commands plus bounded sequenced WebSocket snapshots/replay.
-5. Canonically contained file access, machine-parsed Git, and one authenticated PTY per project.
+5. Canonically contained file access, machine-parsed Git, and one Origin-restricted browser PTY per project that remains accessible to same-machine processes.
 6. React Router, TanStack Query, parsed browser boundaries, safe Markdown, xterm, responsive layout, and accessibility behavior.
 
 Future reviewer-agent command approval is not part of this implementation. It requires a new approved specification/design and forward migrations rather than speculative initial contracts.
@@ -121,7 +122,7 @@ Exact filenames may be refined by the approved designs, but ownership should con
 - `packages/contracts/src/`: branded opaque IDs; timestamp and error schemas; project/thread/run DTOs; snapshot and sequenced-event envelopes; HTTP command schemas; Git/file DTOs; terminal client/server frame schemas. Public types are inferred from runtime schemas.
 - `packages/agent-runtime/src/`: SDK-neutral session discovery/open/create, snapshot, prompt acceptance, steering, stop, event, capability, and typed failure interfaces. A deterministic fake belongs in tests, not the public production adapter.
 - `packages/pi-adapter/src/`: Pi session discovery/locator, native-session parser/translator, `AgentSession` ownership, resource/trust integration, SDK-event narrowing, prompt preflight/event buffering, and error mapping. Only this package imports the Pi SDK.
-- `apps/server/src/config`, `auth`, `db`, `domain`, `routes`, `live`, `inspector`, and `terminal`: composition and boundary adapters. Fastify route handlers parse then call services; services do not receive raw requests, rows, SDK events, paths, or process output.
+- `apps/server/src/config`, `request-policy`, `db`, `domain`, `routes`, `live`, `inspector`, and `terminal`: composition and boundary adapters. Fastify route handlers parse then call services; services do not receive raw requests, rows, SDK events, paths, or process output.
 - `apps/web/src/app`, `api`, `features/projects`, `features/threads`, `features/runs`, `features/inspector`, and `components`: route-owned selection, parsed API/live clients, feature state, and accessible views.
 - `apps/**/__tests__`, colocated `*.test.ts(x)`, package tests, `test/fixtures`, and `e2e/`: tests at their narrowest owner, with shared fixtures containing no secrets or user paths.
 
@@ -154,19 +155,20 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 **Refactor/gate:** Run harness tests twice to detect leaked handles or shared state. No provider call, user project scan, configured database access, or production service startup occurs in this milestone.
 
-### Milestone 1 — contracts, configuration, and local-client security
+### Milestone 1 — contracts, configuration, and local-client request security
 
-**Red:** Start with schema tests for every opaque ID, command body, response, event envelope, and terminal frame. Add startup tests for missing/malformed configuration and Fastify tests for missing credentials, wrong Host/Origin, CSRF attempts, malformed JSON, oversized payloads, and unauthorized WebSocket upgrade.
+**Red:** Start with schema tests for every opaque ID, command body, response, event envelope, and terminal frame. Add startup tests for missing/malformed configuration and Fastify tests for credential-free access, wrong Host/Origin, CSRF attempts, malformed JSON, oversized payloads, and rejected WebSocket upgrades.
 
 **Green:**
 
 - Implement schema-first exports in `packages/contracts`, deriving all wire types from Zod.
-- Parse state-directory, port, host, limits, and authentication settings exactly once at startup; fail safely without logging secrets.
-- Implement the approved bootstrap/session mechanism and exact origin policy.
+- Parse state-directory, port, host, and limits exactly once at startup; fail safely without logging secrets.
+- Remove launch tokens, sessions, cookies, bootstrap/logout routes, browser auth state, and their contracts/dependency; print a plain loopback launch URL.
+- Retain exact Host checks for HTTP, exact Host/Origin checks for WebSockets, and Origin plus `X-Pi-Web-Request` checks for unsafe HTTP methods.
 - Add a non-sensitive readiness endpoint and stable error envelope, without exposing paths, credentials, stack traces, or adapter internals.
 - Configure development proxying and production static hosting according to the design.
 
-**Refactor/gate:** Centralize request parsing and error mapping without hiding authorization checks. Run contract tests in both browser and Node build contexts and server authentication integration tests over HTTP and WebSocket.
+**Refactor/gate:** Centralize request parsing and error mapping without hiding resource ownership checks. Run contract tests in both browser and Node build contexts and credential-free request-policy integration tests over HTTP and WebSocket.
 
 ### Milestone 2 — metadata schema and project vertical slice
 
@@ -218,7 +220,7 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 **Green:**
 
-- Implement authenticated live subscriptions using the approved protocol, bounded buffers, heartbeat/dead-client cleanup, and parsed sequence/cursor frames.
+- Implement credential-free live subscriptions using the approved Host/Origin policy, bounded buffers, heartbeat/dead-client cleanup, and parsed sequence/cursor frames.
 - Construct authoritative thread snapshots from parsed Pi history plus application run metadata. Atomically register a subscriber around snapshot capture so no event is lost between snapshot and live delivery.
 - On unknown/expired cursor or malformed client state, send a reset instruction and a fresh snapshot rather than guessing or replaying duplicates.
 - Persist completion and viewed markers transactionally; derive project unread state from retained thread/run metadata.
@@ -241,13 +243,13 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 ### Milestone 7 — project terminal
 
-**Red:** Write terminal-manager tests against a fake PTY for lazy creation, exactly one session per project, two clients attaching, authorized project ownership, input/resize bounds, replay buffer policy, restart, terminate, socket disconnect, child exit, project removal, and server shutdown. Add malformed binary/text frame, origin, credential, and cross-project attachment tests. Write terminal UI tests before mounting the emulator.
+**Red:** Write terminal-manager tests against a fake PTY for lazy creation, exactly one session per project, two clients attaching, project ownership, input/resize bounds, replay buffer policy, restart, terminate, socket disconnect, child exit, project removal, and server shutdown. Add malformed binary/text frame, unpermitted-origin, credential-free, and cross-project attachment tests. Write terminal UI tests before mounting the emulator.
 
 **Green:**
 
 - Implement the approved PTY adapter and project terminal manager behind an injectable interface.
 - Start the parsed user shell in the canonical project directory only on demand; keep it alive while the server PTY lives; bound output buffering and dimensions.
-- Authenticate and parse every attach/input/resize/restart/terminate frame and reject unauthorized origins/IDs.
+- Parse every attach/input/resize/restart/terminate frame and reject unpermitted browser origins or invalid/cross-project IDs; no client credential is required.
 - Mount the approved browser terminal renderer, fit/resize it, expose restart/terminate controls and trust warning, and integrate it into the inspector drawer/panel.
 - Dispose process trees, listeners, buffers, and sockets deterministically. On server restart, report the prior terminal as gone and permit clean recreation.
 
@@ -274,7 +276,7 @@ Every row below needs a concrete parser name and test path in the approved desig
 | Source and raw representation                     | Entry/read point                      | Constructing runtime parser                                                          | Trusted output and guarantees                                        | Failure behavior                                                       | Required boundary tests                                                                                      |
 | ------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Environment/CLI strings                           | server startup                        | configuration schema plus path/port/limit constructors                               | complete immutable startup config; loopback host only                | fail startup with non-secret diagnostic                                | valid, missing default/required, wrong type/range, unknown or insecure host                                  |
-| Host, Origin, cookies/tokens, CSRF headers        | Fastify hook and WebSocket upgrade    | auth/origin parsers plus process-session verifier                                    | authenticated local client for the current process                   | 401/403 and close socket; no CORS reflection                           | absent, hostile website, forged Host, expired/restarted session, selected-port dev/prod origins              |
+| Host, Origin, CSRF headers                        | Fastify hook and WebSocket upgrade    | exact Host/Origin membership and mutation-header checks                              | request satisfies configured routing/browser-integrity policy        | 403 or close socket; no CORS reflection                                | absent, hostile website, forged Host, credential-free access, selected-port dev/prod origins                 |
 | HTTP params/query/body and content type           | each route                            | exported Zod wire schema followed by ownership lookup                                | normalized command/ID scoped to authorized records                   | stable 400/404/409 without path or secret leakage                      | valid, malformed, missing, oversized, unknown ID, cross-project ID                                           |
 | Browser command idempotency key                   | prompt/steer/stop and metadata routes | branded key parser plus receipt repository                                           | one principal/action/payload identity                                | return prior result or conflict; never execute twice                   | retries, same key/different payload, concurrent duplicates, restart                                          |
 | Browser live-event cursor and socket frames       | live connection                       | event command/frame schemas                                                          | bounded known subscription/control command                           | reject/reset/close according to protocol                               | malformed JSON/binary, stale/future cursor, duplicate/out-of-order, oversized                                |
@@ -295,7 +297,7 @@ Every row below needs a concrete parser name and test path in the approved desig
 | Markdown/code/tool/command strings                | web render boundary                   | contract parser plus Markdown renderer configured without raw HTML or with sanitizer | DOM content that cannot execute attacker HTML/URLs                   | render escaped text or safe error                                      | script/event handlers, dangerous URLs, raw HTML, huge code/output                                            |
 | Browser route and persisted UI values             | router/startup                        | route schemas and explicit UI-storage parser                                         | per-tab selection and supported durable UI settings                  | canonical fallback/not-found; clear only invalid UI cache              | malformed/deleted IDs, project-only fallback, two tabs, stale UI version                                     |
 
-Authorization follows parsing: a well-formed ID/path/command is still rejected if it is not owned by the authenticated project/thread/run/terminal relationship.
+Resource ownership follows parsing: a well-formed ID/path/command is still rejected if it does not belong to the requested project/thread/run/terminal relationship. This scoping does not authenticate the caller.
 
 ## Touched-legacy-code analysis
 
@@ -383,7 +385,10 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - [x] Reviewed the pinned Pi SDK session, runtime, steering, event, resource/trust, and session-format APIs needed to make the milestones concrete.
 - [x] Created and indexed this living TDD ExecPlan.
 - [x] Drafted, revised, approved, and indexed the six technical designs required by the implementation gate.
-- [x] Revised the canonical specification for configurable port, simple process authentication, Drizzle/SQLite, direct Pi execution, and deferred reviewer-agent approval.
+- [x] Revised the canonical specification for configurable port, Drizzle/SQLite, direct Pi execution, and deferred reviewer-agent approval.
+- [x] Received approval for and documented removal of process/browser authentication while retaining loopback and request-integrity boundaries.
+- [x] Removed authentication implementation/contracts/UI/dependency and added credential-free HTTP, WebSocket, launch URL, and immediate-rendering regression coverage.
+- [x] Verified the no-authentication revision with `pnpm check` and `pnpm test:e2e`.
 - [ ] Milestone 0: establish the test harness and efficient dependency baseline (baseline delivered; full fixture/leak gate pending).
 - [ ] Milestone 1: contracts, configuration, and local-client security (baseline delivered; adversarial WebSocket matrix pending).
 - [ ] Milestone 2: metadata schema and project vertical slice (baseline delivered; migration backup/rollback matrix pending).
@@ -398,7 +403,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 ## Discoveries and blockers
 
 - The specification and six designs are approved; no design blocker remains for initial implementation.
-- The first implementation pass delivered migration v1, process auth, project/thread/run APIs, Pi session ownership, live events, inspector/PTY boundaries, the responsive workspace, 32 deterministic Vitest cases, and a production-build Playwright route scenario. Milestones 3-8 retain hardening work before this plan can be archived.
+- The first implementation pass delivered migration v1, project/thread/run APIs, Pi session ownership, live events, inspector/PTY boundaries, the responsive workspace, deterministic Vitest coverage, and a production-build Playwright route scenario. The initially delivered process authentication has been removed under the approved no-authentication revision. Milestones 3-8 retain hardening work before this plan can be archived.
 - Pi `prompt()` resolves only after the full run, while `preflightResult` reports acceptance earlier and synchronously. The adapter/coordinator therefore needs a tested buffer-and-commit handshake so early SDK events cannot precede the durable run record and rejected prompts cannot create phantom runs.
 - Pi currently executes enabled tools without application permission popups. The web workspace intentionally matches that behavior and must disclose the lack of approval/sandboxing.
 - Pi session history is versioned JSONL with branching and compaction. The adapter should use `SessionManager` for access but still narrow every returned/raw shape at its boundary and keep native paths server-private.
@@ -410,7 +415,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - 2026-08-15: Classify the work as Plan lane and keep the canonical product specification authoritative.
 - 2026-08-15: Use vertical slices with red-green-refactor at contract, service, adapter, UI, and acceptance levels rather than implementing all backend layers before tests/UI.
 - 2026-08-15: Require deterministic fake-runtime E2E tests and controlled Pi fixtures; real provider access is optional, explicit, and separately reported.
-- 2026-08-15: Approve simple process-local authentication on a configurable loopback port; no persistent auth/account subsystem.
+- 2026-08-15: Supersede the earlier process-local authentication decision: use no client authentication, print a plain loopback URL, accept same-machine process access, and retain Host/browser-Origin/CSRF defenses.
 - 2026-08-15: Use Drizzle ORM with `better-sqlite3`, prepared queries, committed migrations, backups, and runtime row parsing.
 - 2026-08-15: Match Pi's native trust and direct tool execution; defer manual and reviewer-agent command approval to a future specification.
 - 2026-08-15: Retain “wait” prompts locally until the active run settles rather than using Pi follow-up.
@@ -418,11 +423,12 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 ## Final outcomes
 
 Implementation is active. The current baseline delivers migration version 1,
-loopback launch authentication, persistent projects/threads/runs, SDK-neutral Pi
-runtime ownership, prompt idempotency and project leases, snapshot/live event
+credential-free loopback access, persistent projects/threads/runs, SDK-neutral
+Pi runtime ownership, prompt idempotency and project leases, snapshot/live event
 transport, bounded Files/Changes/Terminal boundaries, and the responsive browser
-workspace. Current verification passes `pnpm test` (32 tests), `pnpm build`, and
-`pnpm test:e2e` (one production-build browser scenario).
+workspace. Current verification passes `pnpm check`, including 90 Vitest tests
+and production builds, plus `pnpm test:e2e` (one production-build browser
+scenario).
 
 Before archiving, complete the remaining Milestone 3-8 adversarial adapter,
 replay/backpressure, Git/PTY lifecycle, accessibility, multi-context restart,

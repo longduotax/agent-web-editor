@@ -1,6 +1,5 @@
 import {
   ApiErrorSchema,
-  BootstrapResponseSchema,
   BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
@@ -43,7 +42,6 @@ async function request<T>(
   const response = await fetch(path, {
     ...init,
     headers,
-    credentials: "same-origin",
   });
   const value: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
@@ -71,12 +69,6 @@ export function commandId(): string {
 }
 const body = (value: unknown): string => JSON.stringify(value);
 
-export async function bootstrap(token: string) {
-  return await request("/api/auth/bootstrap", BootstrapResponseSchema, {
-    method: "POST",
-    body: body({ token }),
-  });
-}
 export async function getWorkspace() {
   return await request("/api/projects", ProjectsResponseSchema);
 }

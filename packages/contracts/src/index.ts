@@ -134,12 +134,6 @@ export const ThreadMutationResponseSchema = z.object({
   thread: ThreadSummarySchema,
 });
 
-export const BootstrapRequestSchema = z
-  .object({ token: z.string().min(32).max(512) })
-  .strict();
-export const BootstrapResponseSchema = z.object({
-  authenticated: z.literal(true),
-});
 export const BrowseProjectRequestSchema = z
   .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();

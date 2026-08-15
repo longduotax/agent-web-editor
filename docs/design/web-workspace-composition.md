@@ -36,7 +36,7 @@ Malformed or unknown-version local values are discarded explicitly. Project/thre
 
 ## Component structure
 
-- `app/`: router, providers, authentication/bootstrap boundary, fatal shell errors.
+- `app/`: router, providers, and fatal shell errors; there is no authentication/bootstrap boundary.
 - `api/`: relative HTTP client, response parsers, error mapping, idempotency helpers, and live client.
 - `features/projects`: project tree, server-owned native Browse registration,
   remove/expand/unavailable states. The browser never receives or constructs the
@@ -90,7 +90,7 @@ Tests query by role/name/state rather than class names or implementation details
 - **Browser reads native Pi files:** rejected by security and package boundaries.
 - **Browser directory input or File System Access picker:** rejected because web
   pickers do not provide the server-visible absolute native path. The
-  authenticated loopback server instead owns macOS and Windows chooser
+  loopback server instead owns macOS and Windows chooser
   invocation and combines selection with registration.
 - **Trust `response.json()` through a TypeScript cast:** rejected; contracts must parse at runtime.
 - **Enable raw Markdown HTML then sanitize broadly:** rejected for the initial release; disabling raw HTML is simpler and safer.
@@ -99,11 +99,11 @@ Tests query by role/name/state rather than class names or implementation details
 
 ## Failure and recovery
 
-401 enters the bootstrap/re-auth screen without discarding local drafts. A malformed server response/frame becomes a scoped protocol error and triggers snapshot recovery where possible. Deleted/missing route IDs render not-found/recovery states. Inspector failures do not replace the transcript. A terminal failure leaves Files/Changes usable. Error boundaries are scoped by route/inspector rather than making unrelated projects unavailable.
+There is no bootstrap or re-authentication screen. A malformed server response/frame becomes a scoped protocol error and triggers snapshot recovery where possible. Deleted/missing route IDs render not-found/recovery states. Inspector failures do not replace the transcript. A terminal failure leaves Files/Changes usable. Error boundaries are scoped by route/inspector rather than making unrelated projects unavailable.
 
 ## Required tests
 
-- Response/frame parser execution, malformed values, 401, stable errors, idempotent retry, and snapshot reset.
+- Response/frame parser execution, malformed values, stable errors, credential-free initial rendering, idempotent retry, and snapshot reset.
 - Project-only fallback, deep-link refresh, deleted/mismatched route IDs, and two independent tabs.
 - Add/remove/expand/rename/order/unread/status UI behavior.
 - Composer multiline, steer/wait/stop, draft restoration, direct-execution disclosure, and streaming de-duplication.

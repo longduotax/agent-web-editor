@@ -25,8 +25,6 @@ import {
 } from "react-router-dom";
 
 import {
-  ApiClientError,
-  bootstrap,
   browseProject,
   createThread,
   discoverSessions,
@@ -49,26 +47,6 @@ import {
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
-
-let authenticationAttempt: Promise<void> | undefined;
-function authenticate(): Promise<void> {
-  if (authenticationAttempt !== undefined) return authenticationAttempt;
-  const hash = window.location.hash;
-  const token = hash.startsWith("#token=")
-    ? decodeURIComponent(hash.slice(7))
-    : null;
-  if (token !== null) {
-    history.replaceState(
-      null,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
-    authenticationAttempt = bootstrap(token).then(() => undefined);
-  } else {
-    authenticationAttempt = getWorkspace().then(() => undefined);
-  }
-  return authenticationAttempt;
-}
 
 function ErrorNotice({ error }: { error: unknown }) {
   const message =
@@ -1016,42 +994,6 @@ function EmptyRoot() {
 }
 
 export function App() {
-  const [authState, setAuthState] = useState<"checking" | "ready" | "required">(
-    "checking",
-  );
-  const [authError, setAuthError] = useState<string | null>(null);
-  useEffect(() => {
-    void authenticate()
-      .then(() => {
-        setAuthState("ready");
-      })
-      .catch((error: unknown) => {
-        setAuthState("required");
-        setAuthError(
-          error instanceof ApiClientError
-            ? error.message
-            : "Open the current launch URL printed by the server.",
-        );
-      });
-  }, []);
-  if (authState === "checking")
-    return (
-      <div className="auth-screen">
-        <span className="hero-mark">π</span>
-        <p>Opening local workspace…</p>
-      </div>
-    );
-  if (authState === "required")
-    return (
-      <div className="auth-screen">
-        <span className="hero-mark">π</span>
-        <h1>Launch link required</h1>
-        <p>{authError}</p>
-        <p>
-          Restart or check the server terminal, then open its new tokenized URL.
-        </p>
-      </div>
-    );
   return (
     <Routes>
       <Route path="/" element={<EmptyRoot />} />

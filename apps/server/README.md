@@ -4,8 +4,8 @@ Loopback-only Fastify process for the local agent workspace.
 
 ## Ownership
 
-The server owns parsed startup configuration, process-local launch/session
-authentication, Drizzle/SQLite metadata and migrations, project/thread/run
+The server owns parsed startup configuration, credential-free loopback request
+policy, Drizzle/SQLite metadata and migrations, project/thread/run
 coordination, Pi adapter composition, live WebSockets, bounded file and Git
 inspection, project PTYs, and the macOS/Windows native project-directory
 chooser. The chooser is server-owned and injectable; bounded native JSON output
@@ -24,8 +24,9 @@ and approved designs under `docs/design/`.
   default `5173`.
 - The repository-root `.env.local` stores optional local development values.
 - `PI_WEB_STATE_DIR` must be absolute; default `~/.pi/web-workspace/`.
-- Production binds only `127.0.0.1`, serves the built SPA, and prints a one-use
-  tokenized launch URL.
+- Production binds only `127.0.0.1`, serves the built SPA, and prints a plain
+  launch URL. No token, cookie, or login is required; any same-machine process
+  can access the server while it runs.
 - Metadata migration v1 is committed under `migrations/`.
 
 Tests use newly created temporary state/project directories and injected

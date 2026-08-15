@@ -6,9 +6,9 @@ current architecture or implementation task lists.
 
 The approved initial-workspace designs are:
 
-- [Local-client security](local-client-security.md) — configurable loopback
-  launch URL, process-local authentication, cookies, Host/Origin policy, CSRF,
-  and WebSocket access.
+- [Local-client security](local-client-security.md) — configurable plain
+  loopback launch URL, deliberate absence of client authentication, Host/Origin
+  policy, CSRF signal, and WebSocket access.
 - [Application persistence](application-persistence.md) — Drizzle with SQLite,
   metadata schema, runtime row parsing, transactions, migrations, backups, and
   recovery.
@@ -18,7 +18,7 @@ The approved initial-workspace designs are:
 - [Live events and idempotency](live-events-and-idempotency.md) — durable command
   receipts, snapshots, sequenced WebSocket events, replay, and reset behavior.
 - [Inspector and terminal boundaries](inspector-and-terminal.md) — safe file and
-  Git access plus authenticated project PTY lifecycle.
+  Git access plus Origin-restricted browser PTY lifecycle.
 - [Web workspace composition](web-workspace-composition.md) — routes, browser
   state ownership, safe rendering, responsive layout, accessibility, and test
   stack.

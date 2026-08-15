@@ -28,8 +28,12 @@ The primary user flow is:
 
 The server listens only on `127.0.0.1`. At startup the user may choose its port
 through a command-line option or environment variable; otherwise it uses port
-`3001`. The application presents the resulting launch URL, and an unavailable
-or invalid selected port fails visibly rather than silently choosing another.
+`3001`. The application presents the resulting plain launch URL, and opening it loads
+the workspace immediately without a token, login, or browser session. An
+unavailable or invalid selected port fails visibly rather than silently choosing
+another. The loopback server intentionally has no client-authentication layer,
+so any process running as a local user can access its APIs and terminal while the
+server is running.
 
 ## Terminology
 
@@ -108,9 +112,10 @@ exclusively by the selected thread. A full manual code editor and line-level
 patch acceptance are deferred.
 
 The terminal is an explicit user-controlled local shell, not an agent tool and
-not a sandbox. It may exercise the user's normal shell permissions, does not
-survive a server restart, and must not be reachable by an unauthenticated local
-client or an unpermitted browser origin.
+not a sandbox. It may exercise the user's normal shell permissions and does not
+survive a server restart. It is reachable by local processes because the
+loopback server intentionally has no client authentication, but browser
+WebSocket upgrades must come from an explicitly permitted origin.
 
 ## Project behavior
 
@@ -265,8 +270,8 @@ The implementation must:
   at their read or entry boundaries;
 - keep provider credentials and unrestricted native session paths out of
   browser responses and logs;
-- restrict terminal attachment and input to the authenticated local client and
-  project terminal session; and
+- restrict browser terminal attachment and input to an explicitly permitted
+  origin and the requested project terminal session; and
 - surface malformed or unavailable persisted state without silently guessing or
   deleting it.
 
@@ -313,6 +318,9 @@ must make that limitation explicit before executable agent tools are enabled.
     view without duplicating accepted work.
 11. Invalid identifiers, malformed persisted data, unavailable paths, and
     malformed adapter output fail at their boundaries with safe, visible errors.
+12. Starting the server prints a plain loopback URL; opening it, refreshing it,
+    or opening it in another tab loads the workspace without a launch token,
+    cookie, login, or re-authentication step.
 
 ## Initial non-goals
 
@@ -340,9 +348,9 @@ features, but it must not add speculative approval or sub-agent behavior now.
 ## Remaining design work before implementation
 
 The durable behavior above is approved. The approved implementation designs use
-a small process-local launch session for local-client authentication, a
-user-selected loopback port, Drizzle with SQLite for application metadata, Pi's
-direct tool-execution and native project-trust behavior, a reconnectable live
-event protocol, and bounded inspector and PTY lifecycles. Those designs may
-refine internal mechanisms but must not change this product contract without
-renewed approval.
+a client-unauthenticated, loopback-only server with exact Host checks and browser
+Origin/CSRF protections, a user-selected loopback port, Drizzle with SQLite for
+application metadata, Pi's direct tool-execution and native project-trust
+behavior, a reconnectable live event protocol, and bounded inspector and PTY
+lifecycles. Those designs may refine internal mechanisms but must not change
+this product contract without renewed approval.

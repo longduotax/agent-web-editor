@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
-  bootstrap: vi.fn(),
   discoverSessions: vi.fn(),
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
@@ -32,6 +31,29 @@ afterEach(() => {
 });
 
 describe("safe and accessible workspace rendering", () => {
+  it("renders the workspace immediately without an authentication screen", () => {
+    api.getWorkspace.mockResolvedValue({
+      projects: [],
+      threads: [],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("Steer your coding agent")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Opening local workspace…"),
+    ).not.toBeInTheDocument();
+  });
+
   it("gives run states a non-color cue and accessible label", () => {
     render(<Status state="running" unread={false} />);
     expect(screen.getByLabelText("Running")).toHaveTextContent("Running");

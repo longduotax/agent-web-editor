@@ -7,19 +7,20 @@
 **Last verified:** 2026-08-15
 
 Pi Web Workspace is a local-first React application backed by a loopback-only
-Fastify process. The server owns authentication, SQLite metadata, local
-filesystem and Git access, PTYs, runtime coordination, and the Pi SDK adapter.
+Fastify process. The server owns request-integrity policy, SQLite metadata,
+local filesystem and Git access, PTYs, runtime coordination, and the Pi SDK
+adapter. It intentionally does not authenticate local clients.
 The browser receives only parsed DTOs and opaque application identifiers.
 
 ## Repository shape
 
-| Area                      | Responsibility                                                                        | Technology                                       |
-| ------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `apps/web/`               | Route-owned workspace UI, parsed API clients, Markdown, inspector, and terminal       | React, React Router, TanStack Query, xterm, Vite |
-| `apps/server/`            | Process auth, metadata, APIs, live events, project coordination, files, Git, and PTYs | Fastify, Drizzle, SQLite, WebSocket, node-pty    |
-| `packages/contracts/`     | Executable wire schemas and inferred DTO types                                        | Zod                                              |
-| `packages/agent-runtime/` | SDK-neutral persistent-session and run interfaces                                     | TypeScript                                       |
-| `packages/pi-adapter/`    | Pi session discovery/opening, transcript translation, and live runtime ownership      | Pi SDK 0.84.2                                    |
+| Area                      | Responsibility                                                                          | Technology                                       |
+| ------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `apps/web/`               | Route-owned workspace UI, parsed API clients, Markdown, inspector, and terminal         | React, React Router, TanStack Query, xterm, Vite |
+| `apps/server/`            | Request policy, metadata, APIs, live events, project coordination, files, Git, and PTYs | Fastify, Drizzle, SQLite, WebSocket, node-pty    |
+| `packages/contracts/`     | Executable wire schemas and inferred DTO types                                          | Zod                                              |
+| `packages/agent-runtime/` | SDK-neutral persistent-session and run interfaces                                       | TypeScript                                       |
+| `packages/pi-adapter/`    | Pi session discovery/opening, transcript translation, and live runtime ownership        | Pi SDK 0.84.2                                    |
 
 Dependency direction remains:
 
@@ -42,12 +43,12 @@ The configured host is always `127.0.0.1`. `--port` takes precedence over
 injectable server-owned native directory chooser: `/usr/bin/osascript` on macOS
 or PowerShell with WinForms on Windows. Commands run without a shell, and their
 bounded JSON output is parsed into either cancellation or an absolute native
-path before existing canonicalization and access checks. Startup creates a
-process-only launch
-token and prints it in the URL fragment. `/api/auth/bootstrap` consumes that
-token once and returns an HttpOnly, SameSite=Strict process-session cookie.
-Product APIs and WebSockets require the cookie and exact Host/Origin policy;
-mutations additionally require `X-Pi-Web-Request: 1`.
+path before existing canonicalization and access checks. Startup prints a plain loopback URL. Product APIs and WebSockets require no
+client credential or cookie. Every HTTP request requires an exact configured
+Host; mutations additionally require an exact configured browser Origin and
+`X-Pi-Web-Request: 1`, while WebSocket upgrades require exact Host and Origin
+headers. Any same-machine process can forge these headers and access the server;
+that exposure is deliberate under the no-authentication local workflow.
 
 Production serves `apps/web/dist` from the same Fastify origin. Development uses
 the loopback Vite server at `PI_WEB_DEV_PORT` (default `5173`) and proxies
@@ -77,7 +78,7 @@ in-process lease and SQLite partial unique index prevent simultaneous runs.
 
 HTTP snapshots reconstructed from native history plus run metadata are
 authoritative. `LiveBroker` adds process-epoch, monotonic sequence events and a
-bounded replay ring for authenticated WebSocket subscribers. Browser queries
+bounded replay ring for Origin-permitted WebSocket subscribers. Browser queries
 invalidate and replace snapshots after events or replay gaps; browser stream
 state is never durable truth.
 
@@ -104,7 +105,7 @@ The route is the selected-thread authority:
 - `/projects/:projectId/threads/:threadId`
 
 TanStack Query owns parsed server state. The project sidebar uses one Browse
-control backed by an authenticated browse-and-register mutation; selected
+control backed by a request-policy-protected browse-and-register mutation; selected
 canonical paths never enter browser state or wire responses. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
 explicit steer/wait/stop
