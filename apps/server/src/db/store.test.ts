@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MetadataStore } from "./store.js";
 
@@ -100,6 +100,31 @@ describe("metadata persistence", () => {
     store.close();
   });
 
+  it("does not create a run after its project is soft-removed", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-15T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const thread = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    store.removeProject(project.id);
+
+    expect(
+      store.createRunIfProjectActive(
+        project.id,
+        thread.id,
+        "20000000-0000-4000-8000-000000000001",
+      ),
+    ).toBeNull();
+    expect(store.runningRunForThread(thread.id)).toBeNull();
+    store.close();
+  });
+
   it("migrates a populated v1 database to the thread run lease with a backup", async () => {
     const state = await stateDirectory();
     let store = await MetadataStore.open({
@@ -156,6 +181,69 @@ describe("metadata persistence", () => {
 
     expect(await readdir(state)).toContainEqual(
       expect.stringMatching(/^metadata-before-v2-\d+\.sqlite$/),
+    );
+  });
+
+  it("rejects malformed SQLite metadata aggregate rows before migration", async () => {
+    const state = await stateDirectory();
+    const databasePath = join(state, "metadata.sqlite");
+    const database = new Database(databasePath);
+    database.exec(
+      "CREATE TABLE legacy_data (id INTEGER); PRAGMA user_version = 1;",
+    );
+    database.close();
+
+    const metadataCountQuery =
+      "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'";
+    // The original method is called with the intercepted database as `this`.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const originalPrepare = Database.prototype.prepare;
+    const prepare = vi
+      .spyOn(Database.prototype, "prepare")
+      .mockImplementation(function (
+        this: Database.Database,
+        source: string,
+      ): Database.Statement {
+        if (source === metadataCountQuery)
+          return {
+            get: () => ({ count: -1 }),
+          } as unknown as Database.Statement;
+        return originalPrepare.call(this, source);
+      });
+    try {
+      await expect(
+        MetadataStore.open({ stateDirectory: state }),
+      ).rejects.toThrow();
+    } finally {
+      prepare.mockRestore();
+    }
+
+    const unchanged = new Database(databasePath);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(1);
+    unchanged.close();
+    expect(await readdir(state)).not.toContainEqual(
+      expect.stringMatching(/^metadata-before-v2-\d+\.sqlite$/),
+    );
+  });
+
+  it("rejects a negative persisted schema version before backup or migration", async () => {
+    const state = await stateDirectory();
+    const databasePath = join(state, "metadata.sqlite");
+    const database = new Database(databasePath);
+    database.exec(
+      "CREATE TABLE legacy_data (id INTEGER); PRAGMA user_version = -1;",
+    );
+    database.close();
+
+    await expect(
+      MetadataStore.open({ stateDirectory: state }),
+    ).rejects.toThrow();
+
+    const unchanged = new Database(databasePath);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(-1);
+    unchanged.close();
+    expect(await readdir(state)).not.toContainEqual(
+      expect.stringMatching(/^metadata-before-v1-\d+\.sqlite$/),
     );
   });
 

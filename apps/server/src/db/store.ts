@@ -56,6 +56,10 @@ const receiptRowSchema = z.object({
   request_hash: z.string(),
   response_json: z.string(),
 });
+const sqliteAggregateCountSchema = z.object({
+  count: z.number().int().nonnegative(),
+});
+const sqliteSchemaVersionSchema = z.number().int().nonnegative();
 
 export type ProjectRecord = z.infer<typeof projectRowSchema>;
 export type ThreadRecord = z.infer<typeof threadRowSchema>;
@@ -168,36 +172,31 @@ export class MetadataStore {
       sqlite.pragma("foreign_keys = ON");
       sqlite.pragma("journal_mode = WAL");
       sqlite.pragma("busy_timeout = 5000");
-      const versionValue = sqlite.pragma("user_version", { simple: true });
-      if (typeof versionValue !== "number" || !Number.isInteger(versionValue))
-        throw new Error("Database schema version is malformed");
-      if (versionValue > 2)
+      const schemaVersion = sqliteSchemaVersionSchema.parse(
+        sqlite.pragma("user_version", { simple: true }),
+      );
+      if (schemaVersion > 2)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
       const backupBefore = async (version: number): Promise<void> => {
         if (!existed) return;
-        const count = sqlite
-          .prepare(
-            "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'",
-          )
-          .get();
-        if (
-          typeof count !== "object" ||
-          count === null ||
-          !("count" in count) ||
-          typeof count.count !== "number" ||
-          count.count === 0
-        )
-          return;
+        const count = sqliteAggregateCountSchema.parse(
+          sqlite
+            .prepare(
+              "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table'",
+            )
+            .get(),
+        );
+        if (count.count === 0) return;
         const backup = join(
           options.stateDirectory,
           `metadata-before-v${String(version)}-${String(Date.now())}.sqlite`,
         );
         await sqlite.backup(backup);
       };
-      let schemaVersion = versionValue;
-      if (schemaVersion < 1) {
+      let migratedSchemaVersion = schemaVersion;
+      if (migratedSchemaVersion < 1) {
         await backupBefore(1);
         const migrationPath = new URL(
           "../../migrations/0001_initial.sql",
@@ -208,10 +207,10 @@ export class MetadataStore {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 1");
         })();
-        schemaVersion = 1;
+        migratedSchemaVersion = 1;
       }
-      if (schemaVersion < 2) {
-        if (versionValue >= 1) await backupBefore(2);
+      if (migratedSchemaVersion < 2) {
+        if (schemaVersion >= 1) await backupBefore(2);
         const migrationPath = new URL(
           "../../migrations/0002_thread_run_lease.sql",
           import.meta.url,
@@ -506,6 +505,34 @@ export class MetadataStore {
     return requireRecord(this.latestRun(threadId), "run_insert_failed");
   }
 
+  public createRunIfProjectActive(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    acceptedCommandId: string,
+  ): RunRecord | null {
+    const id = RunIdSchema.parse(this.id());
+    const now = this.now();
+    return this.sqlite.transaction((): RunRecord | null => {
+      const inserted = this.sqlite
+        .prepare(
+          "INSERT INTO runs (id, thread_id, project_id, state, started_at, ended_at, accepted_command_id, failure_code, failure_message) SELECT ?, t.id, p.id, 'running', ?, NULL, ?, NULL, NULL FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL",
+        )
+        .run(id, now, acceptedCommandId, threadId, projectId);
+      if (inserted.changes === 0) return null;
+      this.sqlite
+        .prepare(
+          "UPDATE threads SET last_activity_at = ? WHERE id = ? AND project_id = ?",
+        )
+        .run(now, threadId, projectId);
+      const row = this.sqlite
+        .prepare(
+          "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE id = ?",
+        )
+        .get(id);
+      return parseRow(runRowSchema, row, "run", id);
+    })();
+  }
+
   public settleRun(
     runId: RunId,
     state: Exclude<RunState, "running">,
@@ -559,7 +586,7 @@ export class MetadataStore {
         "SELECT count(*) AS count FROM threads WHERE project_id = ? AND last_completed_run_id IS NOT NULL AND (last_viewed_completed_run_id IS NULL OR last_viewed_completed_run_id <> last_completed_run_id)",
       )
       .get(projectId);
-    return z.object({ count: z.number().int().nonnegative() }).parse(row).count;
+    return sqliteAggregateCountSchema.parse(row).count;
   }
 
   public isUnread(thread: ThreadRecord): boolean {

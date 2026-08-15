@@ -173,7 +173,7 @@ function safeError(error: unknown): {
     };
     const mapped = known[error.message];
     if (mapped !== undefined) return mapped;
-    if (error.message.includes("UNIQUE constraint failed: runs.project_id"))
+    if (error.message.includes("UNIQUE constraint failed: runs.thread_id"))
       return known.project_busy as {
         status: number;
         code: string;

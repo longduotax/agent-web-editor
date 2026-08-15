@@ -51,6 +51,9 @@ The UI displays command/tool input, cwd, bounded output, exit/error state, and a
 - Each thread owns an independent Pi runtime session. A thread-scoped preflight lease and database constraint permit one running run per thread while allowing distinct threads in the same project to run concurrently.
 - Pi `prompt()` begins with `preflightResult`; adapter events are buffered until acceptance is known.
 - On acceptance, the server atomically persists the command receipt and `running` run before publishing buffered events. Rejection creates no run.
+- Project removal synchronously fences new prompt acceptance, then interrupts
+  running child work and cancels already-started preflight work before disposal
+  and soft removal complete.
 - `steer()` and stop resolve the running run through its owning thread and do not affect other active project threads.
 - “Wait until it finishes” retains the browser draft and submits it only after settlement as a new run; it does not use Pi follow-up queueing.
 - Stop calls `abort()` and transitions to `interrupted` after authoritative settlement.
@@ -78,7 +81,7 @@ The adapter exhaustively narrows every used Pi event/message/tool shape. Unknown
 
 ## Failure and recovery
 
-Missing/corrupt sessions affect only their thread. Provider/tool failures map to safe failed-run categories while Pi history remains authoritative. Runtime disposal unsubscribes listeners and releases the thread lease. Removing a project interrupts every running child thread. Reopening reconstructs from Pi history plus application metadata and never resubmits an accepted prompt.
+Missing/corrupt sessions affect only their thread. Provider/tool failures map to safe failed-run categories while Pi history remains authoritative. Runtime disposal unsubscribes listeners and releases the thread lease. Removing a project fences new prompts and interrupts or cancels every already-started child run or preflight. Reopening reconstructs from Pi history plus application metadata and never resubmits an accepted prompt.
 
 ## Required tests
 

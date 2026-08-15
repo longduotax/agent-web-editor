@@ -78,7 +78,9 @@ preflight acceptance precedes atomic run/receipt creation. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads
 of the same project to run concurrently. Those sessions share the project
-working directory and project-wide inspector state.
+working directory and project-wide inspector state. Project removal first
+fences new prompt acceptance, then interrupts or cancels already-started
+running and preflight work before soft-removing its metadata.
 
 HTTP snapshots reconstructed from native history plus run metadata are
 authoritative. `LiveBroker` adds process-epoch, monotonic sequence events and a

@@ -463,7 +463,8 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
   - [x] RED: add failing v1-to-v2 migration/store tests for concurrent project threads and same-thread exclusion.
   - [x] RED: add failing workspace tests for concurrent prompt, independent settlement/steer/stop, and multi-run project removal.
   - [x] GREEN: implement migration v2 and thread-scoped store/service leases.
-  - [x] REFACTOR: remove project-scoped run assumptions and run focused server checks (`17` focused tests) followed by `pnpm check` (`101` tests).
+  - [x] REFACTOR: remove project-scoped run assumptions and run focused persistence/domain/API tests followed by the full `pnpm check` gate.
+  - [x] REVIEW: Loop Review fixed the SQLite busy fallback, parsed migration metadata boundaries, and project-removal/preflight races; the final normal and Parse Boundary reviews approved the resulting fingerprint.
 - [ ] Milestone 5: snapshots, reconnection, and unread completion state.
 - [ ] Milestone 6: Files and Changes inspector views.
 - [ ] Milestone 7: project terminal.
@@ -507,7 +508,7 @@ migration version 2, credential-free loopback access, persistent
 projects/threads/runs, SDK-neutral Pi runtime ownership, prompt idempotency and
 thread leases, snapshot/live event transport, bounded Files/Changes/Terminal
 boundaries, and the responsive browser workspace. Current verification passes
-`pnpm check`, including 101 Vitest tests and production builds, plus the
+`pnpm check`, including the full Vitest suite and production builds, plus the
 previously recorded `pnpm test:e2e` run (one production-build browser scenario).
 
 Before archiving, complete the remaining Milestone 3-8 adversarial adapter,
