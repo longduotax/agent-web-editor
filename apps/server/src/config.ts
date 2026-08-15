@@ -70,7 +70,10 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
   const production = environment.NODE_ENV === "production";
   const hosts = new Set([`127.0.0.1:${String(port)}`]);
   const origins = new Set([origin]);
-  if (port === 80) hosts.add("127.0.0.1");
+  if (port === 80) {
+    hosts.add("127.0.0.1");
+    origins.add("http://127.0.0.1");
+  }
   if (!production) origins.add(`http://127.0.0.1:${String(devPort)}`);
   return {
     host: "127.0.0.1",

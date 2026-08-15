@@ -2,13 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { TerminalServerFrameSchema, type ProjectId } from "@pi-web/contracts";
+import {
+  TerminalServerFrameSchema,
+  type ProjectId,
+  type TerminalId,
+} from "@pi-web/contracts";
 
 import { webSocketUrl } from "../api/client.js";
 
 export function TerminalView({ projectId }: { projectId: ProjectId }) {
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);
+  const terminalId = useRef<TerminalId | null>(null);
   const [status, setStatus] = useState("Starting terminal…");
 
   useEffect(() => {
@@ -26,6 +31,7 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
     fit.fit();
     const ws = new WebSocket(webSocketUrl("/api/terminal"));
     socket.current = ws;
+    terminalId.current = null;
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({ version: 1, type: "attach", projectId }));
     });
@@ -42,9 +48,13 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
         setStatus("Terminal protocol error");
         return;
       }
-      if (parsed.data.type === "ready") setStatus("Terminal running");
-      else if (parsed.data.type === "output") terminal.write(parsed.data.data);
+      if (parsed.data.type === "ready") {
+        terminalId.current = parsed.data.terminalId;
+        setStatus("Terminal running");
+      } else if (parsed.data.type === "output")
+        terminal.write(parsed.data.data);
       else if (parsed.data.type === "exit") {
+        terminalId.current = null;
         terminal.writeln(
           `\r\n[process exited ${String(parsed.data.exitCode)}]`,
         );
@@ -58,20 +68,32 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
       }
     });
     ws.addEventListener("close", () => {
+      terminalId.current = null;
       setStatus("Terminal disconnected");
     });
     const input = terminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ version: 1, type: "input", projectId, data }));
+      const currentTerminalId = terminalId.current;
+      if (ws.readyState === WebSocket.OPEN && currentTerminalId !== null)
+        ws.send(
+          JSON.stringify({
+            version: 1,
+            type: "input",
+            projectId,
+            terminalId: currentTerminalId,
+            data,
+          }),
+        );
     });
     const resize = new ResizeObserver(() => {
       fit.fit();
-      if (ws.readyState === WebSocket.OPEN)
+      const currentTerminalId = terminalId.current;
+      if (ws.readyState === WebSocket.OPEN && currentTerminalId !== null)
         ws.send(
           JSON.stringify({
             version: 1,
             type: "resize",
             projectId,
+            terminalId: currentTerminalId,
             columns: terminal.cols,
             rows: terminal.rows,
           }),
@@ -83,18 +105,40 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
       input.dispose();
       ws.close();
       terminal.dispose();
+      terminalId.current = null;
       socket.current = null;
     };
   }, [projectId]);
 
-  const send = (type: "restart" | "terminate") => {
+  const attach = () => {
     if (socket.current?.readyState === WebSocket.OPEN)
-      socket.current.send(JSON.stringify({ version: 1, type, projectId }));
+      socket.current.send(
+        JSON.stringify({ version: 1, type: "attach", projectId }),
+      );
+  };
+
+  const send = (type: "restart" | "terminate") => {
+    const currentTerminalId = terminalId.current;
+    if (
+      socket.current?.readyState === WebSocket.OPEN &&
+      currentTerminalId !== null
+    )
+      socket.current.send(
+        JSON.stringify({
+          version: 1,
+          type,
+          projectId,
+          terminalId: currentTerminalId,
+        }),
+      );
   };
   return (
     <div className="terminal-panel">
       <div className="terminal-toolbar">
         <span>{status}</span>
+        {terminalId.current === null && (
+          <button onClick={attach}>Start terminal</button>
+        )}
         <button
           onClick={() => {
             send("restart");

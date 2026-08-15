@@ -6,6 +6,7 @@ export const ThreadIdSchema = uuid.brand<"ThreadId">();
 export const RunIdSchema = uuid.brand<"RunId">();
 export const EventIdSchema = uuid.brand<"EventId">();
 export const TerminalIdSchema = uuid.brand<"TerminalId">();
+export const SessionIdSchema = uuid.brand<"SessionId">();
 export const IdempotencyKeySchema = uuid.brand<"IdempotencyKey">();
 export const TimestampSchema = z.iso.datetime({ offset: true });
 export const RunStateSchema = z.enum([
@@ -18,6 +19,8 @@ export const RunStateSchema = z.enum([
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 export type ThreadId = z.infer<typeof ThreadIdSchema>;
 export type RunId = z.infer<typeof RunIdSchema>;
+export type TerminalId = z.infer<typeof TerminalIdSchema>;
+export type SessionId = z.infer<typeof SessionIdSchema>;
 export type IdempotencyKey = z.infer<typeof IdempotencyKeySchema>;
 export type RunState = z.infer<typeof RunStateSchema>;
 
@@ -137,13 +140,6 @@ export const BootstrapRequestSchema = z
 export const BootstrapResponseSchema = z.object({
   authenticated: z.literal(true),
 });
-export const AddProjectRequestSchema = z
-  .object({
-    path: z.string().trim().min(1).max(4096),
-    displayName: z.string().trim().min(1).max(200).optional(),
-    idempotencyKey: IdempotencyKeySchema,
-  })
-  .strict();
 export const BrowseProjectRequestSchema = z
   .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();
@@ -170,7 +166,7 @@ export const RenameThreadRequestSchema = z
   .strict();
 export const ImportThreadRequestSchema = z
   .object({
-    runtimeSessionId: z.uuid(),
+    runtimeSessionId: SessionIdSchema,
     title: z.string().trim().min(1).max(200).optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
@@ -323,12 +319,14 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("input"),
     projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
     data: z.string().max(65_536),
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("resize"),
     projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
     columns: z.number().int().min(2).max(500),
     rows: z.number().int().min(2).max(200),
   }),
@@ -336,11 +334,13 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("restart"),
     projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("terminate"),
     projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
   }),
 ]);
 export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
@@ -376,6 +376,7 @@ export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
     message: z.string().max(500),
   }),
 ]);
+export type TerminalServerFrame = z.infer<typeof TerminalServerFrameSchema>;
 
 export function parseContract<T>(schema: z.ZodType<T>, value: unknown): T {
   return schema.parse(value);

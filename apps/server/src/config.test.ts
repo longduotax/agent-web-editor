@@ -51,6 +51,21 @@ describe("server configuration", () => {
     expect(config.allowedOrigins.has("http://127.0.0.1:5300")).toBe(true);
   });
 
+  it("allows both explicit and canonical default-port origins", () => {
+    const config = parseConfig({
+      argv: ["--port", "80"],
+      environment: { PI_WEB_STATE_DIR: resolve("tmp-state") },
+    });
+    expect(config.allowedOrigins).toEqual(
+      new Set([
+        "http://127.0.0.1:80",
+        "http://127.0.0.1",
+        "http://127.0.0.1:5173",
+      ]),
+    );
+    expect(config.allowedHosts).toEqual(new Set(["127.0.0.1:80", "127.0.0.1"]));
+  });
+
   it("rejects an invalid development web port", () => {
     expect(() =>
       parseConfig({

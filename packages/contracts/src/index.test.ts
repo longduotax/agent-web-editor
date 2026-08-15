@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AddProjectRequestSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
   ProjectIdSchema,
+  SessionIdSchema,
   RelativePathSchema,
   TerminalClientFrameSchema,
 } from "./index.js";
@@ -12,15 +12,9 @@ import {
 const id = "00000000-0000-4000-8000-000000000001";
 
 describe("wire contracts", () => {
-  it("constructs opaque identifiers and strict command bodies", () => {
+  it("constructs opaque identifiers", () => {
     expect(ProjectIdSchema.parse(id)).toBe(id);
-    expect(
-      AddProjectRequestSchema.safeParse({
-        path: "/tmp/project",
-        idempotencyKey: id,
-        extra: true,
-      }).success,
-    ).toBe(false);
+    expect(SessionIdSchema.parse(id)).toBe(id);
   });
 
   it("parses strict browse requests and selected or cancelled outcomes", () => {
@@ -73,5 +67,32 @@ describe("wire contracts", () => {
         rows: 24,
       }).success,
     ).toBe(false);
+  });
+
+  it("requires a terminal ID for terminal controls", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      TerminalClientFrameSchema.parse({
+        version: 1,
+        type: "input",
+        projectId: id,
+        terminalId,
+        data: "echo ready",
+      }),
+    ).toMatchObject({ type: "input", terminalId });
+    for (const frame of [
+      { version: 1, type: "input", projectId: id, data: "echo missing" },
+      {
+        version: 1,
+        type: "resize",
+        projectId: id,
+        terminalId: "not-a-uuid",
+        columns: 80,
+        rows: 24,
+      },
+      { version: 1, type: "restart", projectId: id },
+      { version: 1, type: "terminate", projectId: id },
+    ])
+      expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
   });
 });

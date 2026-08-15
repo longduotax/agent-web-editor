@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   SessionManager,
   createAgentSession,
   type AgentSession,
-  type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import type {
   AgentRuntime,
@@ -18,13 +19,14 @@ import type {
 import { RuntimeFailure } from "@pi-web/agent-runtime";
 import {
   TimestampSchema,
+  SessionIdSchema,
   TranscriptItemSchema,
   type TranscriptItem,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
 const sessionInfoSchema = z.object({
-  id: z.uuid(),
+  id: SessionIdSchema,
   cwd: z.string(),
   name: z.string().optional(),
   path: z.string().min(1),
@@ -33,6 +35,154 @@ const sessionInfoSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   firstMessage: z.string(),
 });
+const nativeHistorySchema = z.array(z.unknown());
+const nativeSessionListSchema = z.array(z.unknown());
+const nativeSessionNameSchema = z.string().max(200).nullable();
+
+type SessionInfo = z.infer<typeof sessionInfoSchema>;
+
+interface NativeSessionDescriptor {
+  readonly id: string;
+  readonly name: string | null;
+  readonly createdAt: string;
+  readonly modifiedAt: string;
+  readonly messageCount: number;
+  readonly preview: string;
+  readonly path: string;
+}
+
+function parseNativeHistory(value: unknown): unknown[] {
+  const parsed = nativeHistorySchema.safeParse(value);
+  if (!parsed.success)
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session history is malformed.",
+    );
+  return parsed.data;
+}
+
+async function listNativeSessions(projectPath: string): Promise<unknown[]> {
+  const result = await SessionManager.list(projectPath);
+  const parsed = nativeSessionListSchema.safeParse(result);
+  if (!parsed.success)
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session list is malformed.",
+    );
+  return parsed.data;
+}
+
+function parseAgentDirectory(value: unknown): string {
+  if (value === undefined) return join(homedir(), ".pi", "agent");
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute(value))
+    throw new RuntimeFailure(
+      "malformed",
+      "The Pi agent directory configuration is invalid.",
+    );
+  return resolve(value);
+}
+
+function defaultSessionDirectory(
+  agentDirectory: string,
+  projectPath: string,
+): string {
+  const safeProjectPath = `--${projectPath
+    .replace(/^[/\\]/, "")
+    .replace(/[/\\:]/g, "-")}--`;
+  return join(agentDirectory, "sessions", safeProjectPath);
+}
+
+function isContainedBy(path: string, directory: string): boolean {
+  const pathFromDirectory = relative(directory, path);
+  return (
+    pathFromDirectory.length > 0 &&
+    !pathFromDirectory.startsWith(
+      `..${process.platform === "win32" ? "\\" : "/"}`,
+    ) &&
+    pathFromDirectory !== ".." &&
+    !isAbsolute(pathFromDirectory)
+  );
+}
+
+async function parseNativeSessionDescriptor(
+  projectPath: string,
+  agentDirectory: string,
+  descriptor: SessionInfo,
+): Promise<NativeSessionDescriptor> {
+  let owner: string;
+  try {
+    owner = await realpath(descriptor.cwd);
+  } catch (error) {
+    throw new RuntimeFailure(
+      "unavailable",
+      "The native session project is unavailable.",
+      { cause: error },
+    );
+  }
+  if (owner !== projectPath)
+    throw new RuntimeFailure(
+      "unauthorized",
+      "The native session does not belong to this project.",
+    );
+  if (!isAbsolute(descriptor.path))
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session descriptor is malformed.",
+    );
+  let sessionPath: string;
+  try {
+    sessionPath = await realpath(descriptor.path);
+    const info = await stat(sessionPath);
+    if (!info.isFile() || extname(sessionPath) !== ".jsonl")
+      throw new RuntimeFailure(
+        "malformed",
+        "The native session descriptor is malformed.",
+      );
+  } catch (error) {
+    if (error instanceof RuntimeFailure) throw error;
+    throw new RuntimeFailure(
+      "unavailable",
+      "The native session is unavailable.",
+      { cause: error },
+    );
+  }
+  let expectedDirectory: string;
+  try {
+    expectedDirectory = await realpath(
+      defaultSessionDirectory(agentDirectory, projectPath),
+    );
+  } catch (error) {
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session descriptor is malformed.",
+      { cause: error },
+    );
+  }
+  if (!isContainedBy(sessionPath, expectedDirectory))
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session descriptor is malformed.",
+    );
+  return {
+    id: descriptor.id,
+    name: nativeSessionNameSchema.parse(descriptor.name ?? null),
+    createdAt: descriptor.created.toISOString(),
+    modifiedAt: descriptor.modified.toISOString(),
+    messageCount: descriptor.messageCount,
+    preview: descriptor.firstMessage.slice(0, 500),
+    path: sessionPath,
+  };
+}
+
+function sessionIdFromManager(manager: SessionManager): string {
+  const parsed = SessionIdSchema.safeParse(manager.getSessionId());
+  if (!parsed.success)
+    throw new RuntimeFailure(
+      "malformed",
+      "The native session returned an invalid identifier.",
+    );
+  return parsed.data;
+}
 
 const baseEntrySchema = z.looseObject({
   id: z.string().min(1),
@@ -44,6 +194,28 @@ const messageShapeSchema = z.looseObject({
   role: z.string(),
   content: z.unknown(),
 });
+const toolCallBlockSchema = z.looseObject({
+  type: z.literal("toolCall"),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.unknown(),
+});
+const toolResultMessageSchema = z.looseObject({
+  role: z.literal("toolResult"),
+  toolCallId: z.string().min(1),
+  toolName: z.string().min(1),
+  content: z.unknown(),
+  isError: z.boolean(),
+  details: z.unknown().optional(),
+});
+const bashExecutionMessageSchema = z.looseObject({
+  role: z.literal("bashExecution"),
+  command: z.string(),
+  output: z.string(),
+  exitCode: z.number().int().nullable().optional(),
+  cancelled: z.boolean(),
+});
+const preflightAcceptedSchema = z.boolean();
 
 function safeTimestamp(value: string): string | null {
   const parsed = TimestampSchema.safeParse(value);
@@ -63,6 +235,105 @@ function textFromContent(content: unknown): string {
     }
   }
   return output.join("").slice(0, 2_000_000);
+}
+
+function textFromUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
+}
+
+function transcriptId(base: string, suffix: string): string {
+  return `${base.slice(0, Math.max(1, 200 - suffix.length))}${suffix}`;
+}
+
+function toolMetadata(value: unknown): {
+  cwd: string | null;
+  exitCode: number | null;
+} {
+  const parsed = z
+    .looseObject({
+      cwd: z.string().max(500).optional(),
+      exitCode: z.number().int().nullable().optional(),
+    })
+    .safeParse(value);
+  if (!parsed.success) return { cwd: null, exitCode: null };
+  return {
+    cwd: parsed.data.cwd ?? null,
+    exitCode: parsed.data.exitCode ?? null,
+  };
+}
+
+function translateToolCall(
+  id: string,
+  timestamp: string | null,
+  raw: unknown,
+): TranscriptItem | null {
+  const parsed = toolCallBlockSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const item = TranscriptItemSchema.safeParse({
+    id,
+    kind: "tool",
+    name: parsed.data.name,
+    status: "running",
+    input: textFromUnknown(parsed.data.arguments).slice(0, 200_000),
+    output: "",
+    cwd: toolMetadata(parsed.data.arguments).cwd,
+    exitCode: null,
+    timestamp,
+  });
+  return item.success ? item.data : null;
+}
+
+function translateToolResult(
+  id: string,
+  timestamp: string | null,
+  raw: unknown,
+  inputs: ReadonlyMap<string, string>,
+): TranscriptItem | null {
+  const parsed = toolResultMessageSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const metadata = toolMetadata(parsed.data.details);
+  const item = TranscriptItemSchema.safeParse({
+    id,
+    kind: "tool",
+    name: parsed.data.toolName,
+    status: parsed.data.isError ? "failed" : "completed",
+    input: (inputs.get(parsed.data.toolCallId) ?? "").slice(0, 200_000),
+    output: textFromContent(parsed.data.content),
+    cwd: metadata.cwd,
+    exitCode: metadata.exitCode,
+    timestamp,
+  });
+  return item.success ? item.data : null;
+}
+
+function translateBashExecution(
+  id: string,
+  timestamp: string | null,
+  raw: unknown,
+): TranscriptItem | null {
+  const parsed = bashExecutionMessageSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const exitCode = parsed.data.exitCode ?? null;
+  const item = TranscriptItemSchema.safeParse({
+    id,
+    kind: "tool",
+    name: "bash",
+    status:
+      parsed.data.cancelled || (exitCode !== null && exitCode !== 0)
+        ? "failed"
+        : "completed",
+    input: parsed.data.command.slice(0, 200_000),
+    output: parsed.data.output.slice(0, 1_000_000),
+    cwd: null,
+    exitCode,
+    timestamp,
+  });
+  return item.success ? item.data : null;
 }
 
 function translateMessage(
@@ -93,54 +364,128 @@ function translateMessage(
 function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
   const transcript: TranscriptItem[] = [];
   const diagnostics: string[] = [];
-  for (const raw of manager.getBranch()) {
+  const toolInputs = new Map<string, string>();
+  for (const raw of parseNativeHistory(manager.getBranch())) {
     const parsed = baseEntrySchema.safeParse(raw);
     if (!parsed.success) {
       diagnostics.push("A malformed native session entry was omitted.");
       continue;
     }
     if (parsed.data.type === "message") {
+      const timestamp = safeTimestamp(parsed.data.timestamp);
+      const result = translateToolResult(
+        parsed.data.id,
+        timestamp,
+        parsed.data.message,
+        toolInputs,
+      );
+      if (result !== null) {
+        transcript.push(result);
+        continue;
+      }
+      const bash = translateBashExecution(
+        parsed.data.id,
+        timestamp,
+        parsed.data.message,
+      );
+      if (bash !== null) {
+        transcript.push(bash);
+        continue;
+      }
       const item = translateMessage(
         parsed.data.id,
-        safeTimestamp(parsed.data.timestamp),
+        timestamp,
         parsed.data.message,
       );
       if (item === null)
         diagnostics.push("An unsupported native message was omitted.");
-      else transcript.push(item);
+      else {
+        transcript.push(item);
+        if (
+          parsed.data.message !== null &&
+          typeof parsed.data.message === "object"
+        ) {
+          const content = z
+            .looseObject({
+              role: z.literal("assistant"),
+              content: z.array(z.unknown()),
+            })
+            .safeParse(parsed.data.message);
+          if (content.success)
+            content.data.content.forEach((block, index) => {
+              const tool = translateToolCall(
+                transcriptId(parsed.data.id, `:tool:${String(index)}`),
+                safeTimestamp(parsed.data.timestamp),
+                block,
+              );
+              if (tool === null) {
+                const isTool = z
+                  .looseObject({ type: z.literal("toolCall") })
+                  .safeParse(block);
+                if (isTool.success)
+                  diagnostics.push(
+                    "A malformed native tool activity was omitted.",
+                  );
+                return;
+              }
+              const call = toolCallBlockSchema.safeParse(block);
+              if (call.success && tool.kind === "tool")
+                toolInputs.set(call.data.id, tool.input);
+              transcript.push(tool);
+            });
+        }
+      }
     } else if (
       parsed.data.type === "compaction" &&
       typeof parsed.data.summary === "string"
     ) {
-      transcript.push({
+      const item = TranscriptItemSchema.safeParse({
         id: parsed.data.id,
         kind: "diagnostic",
         level: "info",
         text: `Earlier context was compacted: ${parsed.data.summary.slice(0, 1_500)}`,
         timestamp: safeTimestamp(parsed.data.timestamp),
       });
+      if (item.success) transcript.push(item.data);
+      else diagnostics.push("A malformed native session entry was omitted.");
     } else if (
       parsed.data.type === "custom_message" &&
       parsed.data.display === true
     ) {
-      transcript.push({
+      const item = TranscriptItemSchema.safeParse({
         id: parsed.data.id,
         kind: "message",
         role: "system",
         text: textFromContent(parsed.data.content),
         timestamp: safeTimestamp(parsed.data.timestamp),
       });
+      if (item.success) transcript.push(item.data);
+      else diagnostics.push("A malformed native session entry was omitted.");
     }
   }
-  return { sessionId: manager.getSessionId(), transcript, diagnostics };
+  return { sessionId: sessionIdFromManager(manager), transcript, diagnostics };
 }
 
-function mapEvent(event: AgentSessionEvent): RuntimeEvent | null {
-  if (event.type === "message_end") {
+const eventSchema = z.looseObject({ type: z.string() });
+const retryEventSchema = z.looseObject({
+  type: z.literal("auto_retry_start"),
+  attempt: z.number().int().nonnegative().max(1_000),
+  maxAttempts: z.number().int().positive().max(1_000),
+});
+
+function mapEvent(event: unknown): RuntimeEvent {
+  const parsed = eventSchema.safeParse(event);
+  if (!parsed.success)
+    return {
+      type: "diagnostic",
+      level: "warning",
+      message: "Pi emitted an unsupported event.",
+    };
+  if (parsed.data.type === "message_end") {
     const item = translateMessage(
       `live-${randomUUID()}`,
       new Date().toISOString(),
-      event.message,
+      parsed.data.message,
     );
     return item === null
       ? {
@@ -150,23 +495,41 @@ function mapEvent(event: AgentSessionEvent): RuntimeEvent | null {
         }
       : { type: "transcript", item };
   }
-  if (event.type === "message_update") {
+  if (parsed.data.type === "message_update") {
     const item = translateMessage(
       "streaming-assistant",
       new Date().toISOString(),
-      event.message,
+      parsed.data.message,
     );
-    return item === null ? null : { type: "transcript-update", item };
+    return item === null
+      ? {
+          type: "diagnostic",
+          level: "warning",
+          message: "Pi emitted an unsupported message.",
+        }
+      : { type: "transcript-update", item };
   }
-  if (event.type === "agent_settled")
+  if (parsed.data.type === "agent_settled")
     return { type: "settled", outcome: "completed" };
-  if (event.type === "auto_retry_start")
+  if (parsed.data.type === "auto_retry_start") {
+    const retry = retryEventSchema.safeParse(event);
+    if (!retry.success)
+      return {
+        type: "diagnostic",
+        level: "warning",
+        message: "Pi emitted an unsupported event.",
+      };
     return {
       type: "diagnostic",
       level: "info",
-      message: `Provider retry ${String(event.attempt)} of ${String(event.maxAttempts)}.`,
+      message: `Provider retry ${String(retry.data.attempt)} of ${String(retry.data.maxAttempts)}.`,
     };
-  return null;
+  }
+  return {
+    type: "diagnostic",
+    level: "warning",
+    message: "Pi emitted an unsupported event.",
+  };
 }
 
 class PiOpenSession implements OpenRuntimeSession {
@@ -181,18 +544,17 @@ class PiOpenSession implements OpenRuntimeSession {
   ) {
     this.unsubscribe = session.subscribe((event) => {
       const mapped = mapEvent(event);
-      if (mapped === null) return;
       if (this.bufferedEvents !== null) this.bufferedEvents.push(mapped);
       else for (const listener of this.listeners) listener(mapped);
     });
   }
 
   public get id(): string {
-    return this.manager.getSessionId();
+    return sessionIdFromManager(this.manager);
   }
 
   public snapshot(): Promise<RuntimeSnapshot> {
-    return Promise.resolve(transcriptFromManager(this.manager));
+    return Promise.resolve().then(() => transcriptFromManager(this.manager));
   }
 
   public async prompt(text: string): Promise<PromptAcceptance> {
@@ -211,7 +573,8 @@ class PiOpenSession implements OpenRuntimeSession {
       preflightResult: (accepted) => {
         if (!acceptedKnown) {
           acceptedKnown = true;
-          preflightResolve?.(accepted);
+          const parsed = preflightAcceptedSchema.safeParse(accepted);
+          preflightResolve?.(parsed.success ? parsed.data : false);
         }
       },
     });
@@ -267,11 +630,19 @@ class PiOpenSession implements OpenRuntimeSession {
 }
 
 export class PiAgentRuntime implements AgentRuntime {
+  private readonly agentDirectory: string;
+
+  public constructor(
+    agentDirectory: unknown = process.env.PI_CODING_AGENT_DIR,
+  ) {
+    this.agentDirectory = parseAgentDirectory(agentDirectory);
+  }
+
   public async discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }> {
     const canonical = await realpath(projectPath);
-    const infos = await SessionManager.list(canonical);
+    const infos = await listNativeSessions(canonical);
     const sessions: RuntimeSessionDescriptor[] = [];
     const diagnostics: string[] = [];
     const seen = new Set<string>();
@@ -286,27 +657,39 @@ export class PiAgentRuntime implements AgentRuntime {
         continue;
       }
       seen.add(parsed.data.id);
-      let owner: string;
       try {
-        owner = await realpath(parsed.data.cwd);
-      } catch {
-        diagnostics.push("A Pi session has an unavailable project directory.");
-        continue;
-      }
-      if (owner !== canonical) {
-        diagnostics.push(
-          "A Pi session belonging to another project was omitted.",
+        const descriptor = await parseNativeSessionDescriptor(
+          canonical,
+          this.agentDirectory,
+          parsed.data,
         );
-        continue;
+        sessions.push({
+          id: descriptor.id,
+          name: descriptor.name,
+          createdAt: descriptor.createdAt,
+          modifiedAt: descriptor.modifiedAt,
+          messageCount: descriptor.messageCount,
+          preview: descriptor.preview,
+        });
+      } catch (error) {
+        if (error instanceof RuntimeFailure && error.code === "unauthorized")
+          diagnostics.push(
+            "A Pi session belonging to another project was omitted.",
+          );
+        else if (
+          error instanceof RuntimeFailure &&
+          error.message === "The native session project is unavailable."
+        )
+          diagnostics.push(
+            "A Pi session has an unavailable project directory.",
+          );
+        else if (
+          error instanceof RuntimeFailure &&
+          error.code === "unavailable"
+        )
+          diagnostics.push("A Pi session is unavailable.");
+        else diagnostics.push("A malformed Pi session descriptor was omitted.");
       }
-      sessions.push({
-        id: parsed.data.id,
-        name: parsed.data.name ?? null,
-        createdAt: parsed.data.created.toISOString(),
-        modifiedAt: parsed.data.modified.toISOString(),
-        messageCount: parsed.data.messageCount,
-        preview: parsed.data.firstMessage.slice(0, 500),
-      });
     }
     return { sessions, diagnostics };
   }
@@ -315,7 +698,7 @@ export class PiAgentRuntime implements AgentRuntime {
     const canonical = await realpath(projectPath);
     const manager = SessionManager.create(canonical);
     manager.appendSessionInfo("New thread");
-    return { sessionId: manager.getSessionId() };
+    return { sessionId: sessionIdFromManager(manager) };
   }
 
   public async open(
@@ -323,39 +706,32 @@ export class PiAgentRuntime implements AgentRuntime {
     sessionId: string,
   ): Promise<OpenRuntimeSession> {
     const canonical = await realpath(projectPath);
-    const discovered = await SessionManager.list(canonical);
-    const matches = discovered
-      .map((item) => sessionInfoSchema.safeParse(item))
-      .filter((result) => result.success && result.data.id === sessionId);
+    const discovered = await listNativeSessions(canonical);
+    const matches: SessionInfo[] = [];
+    for (const raw of discovered) {
+      const parsed = sessionInfoSchema.safeParse(raw);
+      if (parsed.success && parsed.data.id === sessionId)
+        matches.push(parsed.data);
+    }
     if (matches.length !== 1)
       throw new RuntimeFailure(
         matches.length > 1 ? "malformed" : "unavailable",
         "The native session is unavailable.",
       );
-    const descriptor = matches[0];
-    if (!descriptor?.success)
-      throw new RuntimeFailure(
-        "malformed",
-        "The native session descriptor is malformed.",
-      );
-    let owner: string;
-    try {
-      owner = await realpath(descriptor.data.cwd);
-    } catch (error) {
+    const listedDescriptor = matches[0];
+    if (listedDescriptor === undefined)
       throw new RuntimeFailure(
         "unavailable",
-        "The native session project is unavailable.",
-        { cause: error },
+        "The native session is unavailable.",
       );
-    }
-    if (owner !== canonical)
-      throw new RuntimeFailure(
-        "unauthorized",
-        "The native session does not belong to this project.",
-      );
+    const descriptor = await parseNativeSessionDescriptor(
+      canonical,
+      this.agentDirectory,
+      listedDescriptor,
+    );
     try {
       const manager = SessionManager.open(
-        descriptor.data.path,
+        descriptor.path,
         undefined,
         canonical,
       );

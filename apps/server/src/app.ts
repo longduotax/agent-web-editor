@@ -7,7 +7,6 @@ import websocket from "@fastify/websocket";
 import type { AgentRuntime } from "@pi-web/agent-runtime";
 import type { RawData } from "ws";
 import {
-  AddProjectRequestSchema,
   BootstrapRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
@@ -226,12 +225,13 @@ export async function buildServer(
     (await MetadataStore.open({ stateDirectory: config.stateDirectory }));
   const auth = options.auth ?? new ProcessAuth();
   const broker = new LiveBroker();
+  const terminals = new ProjectTerminalManager(options.ptyFactory);
   const workspace = new WorkspaceService(
     store,
     options.runtime ?? new PiAgentRuntime(),
     broker,
+    terminals,
   );
-  const terminals = new ProjectTerminalManager(options.ptyFactory);
   const directoryPicker =
     options.directoryPicker ?? createNativeDirectoryPicker();
   const launchPort = config.production ? config.port : config.devPort;
@@ -303,39 +303,26 @@ export async function buildServer(
   server.get("/api/projects", async () => await workspace.list());
   server.post("/api/projects/browse", async (request) => {
     const body = BrowseProjectRequestSchema.parse(request.body);
-    const selectedPath = await directoryPicker.chooseDirectory();
-    if (selectedPath === null) return { outcome: "cancelled" } as const;
-    const project = await workspace.addProject(
-      selectedPath,
-      undefined,
+    return await workspace.browseProject(
       body.idempotencyKey,
+      async () => await directoryPicker.chooseDirectory(),
     );
-    return { outcome: "selected", project } as const;
-  });
-  server.post("/api/projects", async (request) => {
-    const body = AddProjectRequestSchema.parse(request.body);
-    const project = await workspace.addProject(
-      body.path,
-      body.displayName,
-      body.idempotencyKey,
-    );
-    return { project };
   });
   server.patch("/api/projects/:projectId", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     const body = UpdateProjectRequestSchema.parse(request.body);
-    workspace.requireProject(params.projectId);
-    store.setProjectExpanded(params.projectId, body.sidebarExpanded);
     return {
-      project: await workspace.projectDto(
-        workspace.requireProject(params.projectId),
+      project: await workspace.setProjectExpanded(
+        params.projectId,
+        body.sidebarExpanded,
+        body.idempotencyKey,
       ),
     };
   });
   server.delete("/api/projects/:projectId", async (request) => {
     const params = projectParamsSchema.parse(request.params);
-    RemoveProjectRequestSchema.parse(request.body);
-    await workspace.removeProject(params.projectId);
+    const body = RemoveProjectRequestSchema.parse(request.body);
+    await workspace.removeProject(params.projectId, body.idempotencyKey);
     return { removed: true };
   });
 
@@ -347,7 +334,11 @@ export async function buildServer(
     const params = projectParamsSchema.parse(request.params);
     const body = CreateThreadRequestSchema.parse(request.body);
     return {
-      thread: await workspace.createThread(params.projectId, body.title),
+      thread: await workspace.createThread(
+        params.projectId,
+        body.title,
+        body.idempotencyKey,
+      ),
     };
   });
   server.post("/api/projects/:projectId/threads/import", async (request) => {
@@ -358,6 +349,7 @@ export async function buildServer(
         params.projectId,
         body.runtimeSessionId,
         body.title,
+        body.idempotencyKey,
       ),
     };
   });
@@ -369,6 +361,7 @@ export async function buildServer(
         params.projectId,
         params.threadId,
         body.title,
+        body.idempotencyKey,
       ),
     };
   });
@@ -402,6 +395,7 @@ export async function buildServer(
           params.projectId,
           params.threadId,
           body.prompt,
+          body.idempotencyKey,
         ),
       };
     },
@@ -410,16 +404,27 @@ export async function buildServer(
     "/api/projects/:projectId/threads/:threadId/stop",
     async (request) => {
       const params = threadParamsSchema.parse(request.params);
-      CommandRequestSchema.parse(request.body);
-      return { run: await workspace.stop(params.projectId, params.threadId) };
+      const body = CommandRequestSchema.parse(request.body);
+      return {
+        run: await workspace.stop(
+          params.projectId,
+          params.threadId,
+          body.idempotencyKey,
+        ),
+      };
     },
   );
   server.post(
     "/api/projects/:projectId/threads/:threadId/runs/:runId/viewed",
     (request) => {
       const params = runParamsSchema.parse(request.params);
-      CommandRequestSchema.parse(request.body);
-      workspace.markViewed(params.projectId, params.threadId, params.runId);
+      const body = CommandRequestSchema.parse(request.body);
+      workspace.markViewed(
+        params.projectId,
+        params.threadId,
+        params.runId,
+        body.idempotencyKey,
+      );
       return { viewed: true };
     },
   );
@@ -427,15 +432,15 @@ export async function buildServer(
   server.get("/api/projects/:projectId/files", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     const query = fileQuerySchema.parse(request.query);
-    const project = workspace.requireProject(params.projectId);
+    const root = await workspace.requireProjectRoot(params.projectId);
     if (query.path !== "") RelativePathSchema.parse(query.path);
     const target =
       query.path === ""
-        ? project.canonical_path
+        ? root
         : (
             await (
               await import("./inspector/files.js")
-            ).resolveContained(project.canonical_path, query.path, true)
+            ).resolveContained(root, query.path, true)
           ).target;
     return await listProjectFiles(target, query.search);
   });
@@ -443,21 +448,21 @@ export async function buildServer(
     const params = projectParamsSchema.parse(request.params);
     const query = z.object({ path: RelativePathSchema }).parse(request.query);
     return await previewProjectFile(
-      workspace.requireProject(params.projectId).canonical_path,
+      await workspace.requireProjectRoot(params.projectId),
       query.path,
     );
   });
   server.get("/api/projects/:projectId/git/status", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     return await getGitStatus(
-      workspace.requireProject(params.projectId).canonical_path,
+      await workspace.requireProjectRoot(params.projectId),
     );
   });
   server.get("/api/projects/:projectId/git/diff", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     const query = z.object({ path: RelativePathSchema }).parse(request.query);
     return await getGitDiff(
-      workspace.requireProject(params.projectId).canonical_path,
+      await workspace.requireProjectRoot(params.projectId),
       query.path,
     );
   });
@@ -507,24 +512,26 @@ export async function buildServer(
           if (Buffer.byteLength(text) > config.bodyLimit)
             throw new Error("frame_too_large");
           const frame = TerminalClientFrameSchema.parse(JSON.parse(text));
-          const project = workspace.requireProject(frame.projectId);
+          const root = await workspace.requireProjectRoot(frame.projectId);
           if (frame.type === "attach") {
             detach?.();
-            detach = await terminals.attach(
-              frame.projectId,
-              project.canonical_path,
-              {
-                send: (message) => {
-                  socket.send(JSON.stringify(message));
-                },
+            detach = await terminals.attach(frame.projectId, root, {
+              send: (message) => {
+                socket.send(JSON.stringify(message));
               },
-            );
+            });
           } else if (frame.type === "input")
-            terminals.input(frame.projectId, frame.data);
+            terminals.input(frame.projectId, frame.terminalId, frame.data);
           else if (frame.type === "resize")
-            terminals.resize(frame.projectId, frame.columns, frame.rows);
-          else if (frame.type === "restart") terminals.restart(frame.projectId);
-          else terminals.terminate(frame.projectId);
+            terminals.resize(
+              frame.projectId,
+              frame.terminalId,
+              frame.columns,
+              frame.rows,
+            );
+          else if (frame.type === "restart")
+            await terminals.restart(frame.projectId, frame.terminalId);
+          else terminals.terminate(frame.projectId, frame.terminalId);
         } catch {
           socket.send(
             JSON.stringify({

@@ -60,6 +60,9 @@ const receiptRowSchema = z.object({
 export type ProjectRecord = z.infer<typeof projectRowSchema>;
 export type ThreadRecord = z.infer<typeof threadRowSchema>;
 export type RunRecord = z.infer<typeof runRowSchema>;
+export type ListReadResult<T> =
+  | { readonly record: T; readonly diagnostic: null }
+  | { readonly record: null; readonly diagnostic: string };
 
 export class CorruptRecordError extends Error {
   public constructor(
@@ -111,6 +114,22 @@ function parseRow<T>(
   if (!result.success)
     throw new CorruptRecordError(type, fallbackId, { cause: result.error });
   return result.data;
+}
+
+function parseListRows<T>(
+  parser: z.ZodType<T>,
+  rows: unknown[],
+  type: string,
+): ListReadResult<T>[] {
+  return rows.map((row) => {
+    const parsed = parser.safeParse(row);
+    return parsed.success
+      ? { record: parsed.data, diagnostic: null }
+      : {
+          record: null,
+          diagnostic: `A malformed stored ${type} record was omitted.`,
+        };
+  });
 }
 
 function requireRecord<T>(value: T | null, message: string): T {
@@ -224,8 +243,10 @@ export class MetadataStore {
           )
           .run(endedAt, value.id);
         this.sqlite
-          .prepare("UPDATE threads SET last_activity_at = ? WHERE id = ?")
-          .run(endedAt, value.thread_id);
+          .prepare(
+            "UPDATE threads SET last_activity_at = ?, last_completed_run_id = ? WHERE id = ?",
+          )
+          .run(endedAt, value.id, value.thread_id);
       }
     })();
   }
@@ -239,6 +260,17 @@ export class MetadataStore {
     return rows.map((row, index) =>
       parseRow(projectRowSchema, row, "project", String(index)),
     );
+  }
+
+  public listProjectResults(
+    includeRemoved = false,
+  ): ListReadResult<ProjectRecord>[] {
+    const rows = this.sqlite
+      .prepare(
+        `SELECT * FROM projects ${includeRemoved ? "" : "WHERE removed_at IS NULL"} ORDER BY created_at`,
+      )
+      .all();
+    return parseListRows(projectRowSchema, rows, "project");
   }
 
   public getProject(id: string, includeRemoved = false): ProjectRecord | null {
@@ -318,6 +350,24 @@ export class MetadataStore {
     return rows.map((row, index) =>
       parseRow(threadRowSchema, row, "thread", String(index)),
     );
+  }
+
+  public listThreadResults(
+    projectId?: ProjectId,
+  ): ListReadResult<ThreadRecord>[] {
+    const rows =
+      projectId === undefined
+        ? this.sqlite
+            .prepare(
+              "SELECT t.* FROM threads t JOIN projects p ON p.id = t.project_id WHERE p.removed_at IS NULL ORDER BY t.last_activity_at DESC",
+            )
+            .all()
+        : this.sqlite
+            .prepare(
+              "SELECT * FROM threads WHERE project_id = ? ORDER BY last_activity_at DESC",
+            )
+            .all(projectId);
+    return parseListRows(threadRowSchema, rows, "thread");
   }
 
   public getThread(projectId: string, threadId: string): ThreadRecord | null {

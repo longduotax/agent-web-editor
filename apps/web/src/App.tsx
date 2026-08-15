@@ -29,15 +29,18 @@ import {
   bootstrap,
   browseProject,
   createThread,
+  discoverSessions,
   getDiff,
   getFile,
   getFiles,
   getSnapshot,
   getStatus,
   getWorkspace,
+  importThread,
   markViewed,
   prompt,
   removeProject,
+  renameThread,
   setExpanded,
   steer,
   stop,
@@ -104,6 +107,59 @@ function Sidebar({
       void navigate(
         `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
       );
+    },
+  });
+  const [discoveringProjectId, setDiscoveringProjectId] = useState<
+    ProjectId | undefined
+  >(undefined);
+  const [renamingThread, setRenamingThread] = useState<{
+    projectId: ProjectId;
+    threadId: ThreadId;
+    title: string;
+  } | null>(null);
+  const sessions = useQuery({
+    queryKey: ["sessions", discoveringProjectId],
+    queryFn: async () => {
+      if (discoveringProjectId === undefined)
+        throw new Error(
+          "A project must be selected before importing a session.",
+        );
+      return await discoverSessions(discoveringProjectId);
+    },
+    enabled: discoveringProjectId !== undefined,
+  });
+  const importSession = useMutation({
+    mutationFn: async ({
+      projectId,
+      sessionId,
+    }: {
+      projectId: ProjectId;
+      sessionId: string;
+    }) => await importThread(projectId, sessionId),
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      ]);
+      setDiscoveringProjectId(undefined);
+      void navigate(
+        `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
+      );
+    },
+  });
+  const rename = useMutation({
+    mutationFn: async ({
+      projectId,
+      threadId,
+      title,
+    }: {
+      projectId: ProjectId;
+      threadId: ThreadId;
+      title: string;
+    }) => await renameThread(projectId, threadId, title),
+    onSuccess: async () => {
+      setRenamingThread(null);
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
 
@@ -184,6 +240,18 @@ function Sidebar({
                   ＋
                 </button>
                 <button
+                  className="icon-button"
+                  aria-expanded={discoveringProjectId === project.id}
+                  aria-label={`Import an existing session into ${project.displayName}`}
+                  onClick={() => {
+                    setDiscoveringProjectId((current) =>
+                      current === project.id ? undefined : project.id,
+                    );
+                  }}
+                >
+                  ⇥
+                </button>
+                <button
                   className="icon-button danger"
                   aria-label={`Remove ${project.displayName}`}
                   onClick={() => {
@@ -203,24 +271,139 @@ function Sidebar({
                 </button>
               </div>
               {project.sidebarExpanded && (
-                <ul className="thread-list">
-                  {threads.map((thread) => (
-                    <li
-                      key={thread.id}
-                      className={
-                        selectedThreadId === thread.id ? "selected-thread" : ""
-                      }
+                <>
+                  {discoveringProjectId === project.id && (
+                    <section
+                      className="session-import"
+                      aria-label="Import existing session"
                     >
-                      <Link to={`/projects/${project.id}/threads/${thread.id}`}>
-                        <span>{thread.title}</span>
-                        <Status
-                          state={thread.runState}
-                          unread={thread.unread}
-                        />
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                      <strong>Import existing session</strong>
+                      {sessions.isPending && (
+                        <p className="muted">Finding sessions…</p>
+                      )}
+                      {sessions.error !== null && (
+                        <ErrorNotice error={sessions.error} />
+                      )}
+                      {sessions.data?.diagnostics.map((diagnostic) => (
+                        <p className="diagnostic warning" key={diagnostic}>
+                          {diagnostic}
+                        </p>
+                      ))}
+                      <ul>
+                        {sessions.data?.sessions.map((session) => (
+                          <li key={session.id}>
+                            <span>{session.name ?? session.preview}</span>
+                            {session.imported ? (
+                              <small>Already imported</small>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={importSession.isPending}
+                                onClick={() => {
+                                  importSession.mutate({
+                                    projectId: project.id,
+                                    sessionId: session.id,
+                                  });
+                                }}
+                              >
+                                Import
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      {importSession.error !== null && (
+                        <ErrorNotice error={importSession.error} />
+                      )}
+                    </section>
+                  )}
+                  <ul className="thread-list">
+                    {threads.map((thread) => {
+                      const editing =
+                        renamingThread?.projectId === project.id &&
+                        renamingThread.threadId === thread.id;
+                      return (
+                        <li
+                          key={thread.id}
+                          className={
+                            selectedThreadId === thread.id
+                              ? "selected-thread"
+                              : ""
+                          }
+                        >
+                          {editing ? (
+                            <form
+                              className="thread-rename"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                const title = renamingThread.title.trim();
+                                if (title !== "")
+                                  rename.mutate({
+                                    projectId: project.id,
+                                    threadId: thread.id,
+                                    title,
+                                  });
+                              }}
+                            >
+                              <input
+                                aria-label={`Rename ${thread.title}`}
+                                autoFocus
+                                maxLength={200}
+                                value={renamingThread.title}
+                                onChange={(event) => {
+                                  setRenamingThread({
+                                    ...renamingThread,
+                                    title: event.target.value,
+                                  });
+                                }}
+                              />
+                              <button type="submit" disabled={rename.isPending}>
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                disabled={rename.isPending}
+                                onClick={() => {
+                                  setRenamingThread(null);
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              {rename.error !== null && (
+                                <ErrorNotice error={rename.error} />
+                              )}
+                            </form>
+                          ) : (
+                            <>
+                              <Link
+                                to={`/projects/${project.id}/threads/${thread.id}`}
+                              >
+                                <span>{thread.title}</span>
+                                <Status
+                                  state={thread.runState}
+                                  unread={thread.unread}
+                                />
+                              </Link>
+                              <button
+                                className="icon-button"
+                                aria-label={`Rename ${thread.title}`}
+                                onClick={() => {
+                                  setRenamingThread({
+                                    projectId: project.id,
+                                    threadId: thread.id,
+                                    title: thread.title,
+                                  });
+                                }}
+                              >
+                                ✎
+                              </button>
+                            </>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
               )}
             </section>
           );

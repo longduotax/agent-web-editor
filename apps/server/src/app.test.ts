@@ -5,7 +5,6 @@ import { join } from "node:path";
 import type { AgentRuntime, OpenRuntimeSession } from "@pi-web/agent-runtime";
 import {
   BrowseProjectResponseSchema,
-  ProjectMutationResponseSchema,
   ProjectsResponseSchema,
 } from "@pi-web/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +63,52 @@ async function sessionCookie(
 }
 
 describe("authenticated project API", () => {
+  it("accepts canonical default-port origins for bootstrap and mutations", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: ["--port", "80"],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const directoryPicker: DirectoryPicker = {
+      chooseDirectory: vi.fn().mockResolvedValue(null),
+    };
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      directoryPicker,
+      logger: false,
+    });
+    const canonicalHost = "127.0.0.1";
+    const canonicalOrigin = "http://127.0.0.1";
+    const bootstrap = await server.inject({
+      method: "POST",
+      url: "/api/auth/bootstrap",
+      headers: {
+        host: canonicalHost,
+        origin: canonicalOrigin,
+        "x-pi-web-request": "1",
+      },
+      payload: { token: server.workspaceContext.auth.launchToken },
+    });
+    expect(bootstrap.statusCode).toBe(200);
+    const setCookie = bootstrap.headers["set-cookie"];
+    if (typeof setCookie !== "string")
+      throw new Error("Missing session cookie");
+    const mutation = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: {
+        host: canonicalHost,
+        origin: canonicalOrigin,
+        cookie: setCookie.split(";", 1)[0] ?? "",
+        "x-pi-web-request": "1",
+      },
+      payload: { idempotencyKey: "00000000-0000-4000-8000-000000000001" },
+    });
+    expect(mutation.statusCode).toBe(200);
+    await server.close();
+  });
+
   it("requires process authentication, exact origin, and CSRF signal", async () => {
     const paths = await directories();
     const config = parseConfig({
@@ -131,6 +176,13 @@ describe("authenticated project API", () => {
     const result = BrowseProjectResponseSchema.parse(response.json());
     expect(result.outcome).toBe("selected");
     expect(response.body).not.toContain(paths.project);
+    const replay = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: { idempotencyKey: "00000000-0000-4000-8000-000000000001" },
+    });
+    expect(BrowseProjectResponseSchema.parse(replay.json())).toEqual(result);
     expect(chooseDirectory).toHaveBeenCalledOnce();
     await server.close();
   });
@@ -164,6 +216,16 @@ describe("authenticated project API", () => {
     expect((await server.workspaceContext.workspace.list()).projects).toEqual(
       [],
     );
+
+    const replay = await server.inject({
+      method: "POST",
+      url: "/api/projects/browse",
+      headers: { host, origin, cookie, "x-pi-web-request": "1" },
+      payload: { idempotencyKey: "00000000-0000-4000-8000-000000000001" },
+    });
+    expect(BrowseProjectResponseSchema.parse(replay.json())).toEqual({
+      outcome: "cancelled",
+    });
 
     const malformed = await server.inject({
       method: "POST",
@@ -217,19 +279,19 @@ describe("authenticated project API", () => {
     await server.close();
   });
 
-  it("persists project metadata without returning its canonical path", async () => {
+  it("rejects browser-supplied paths without registering a project", async () => {
     const paths = await directories();
     const config = parseConfig({
       argv: [],
       environment: { PI_WEB_STATE_DIR: paths.state },
     });
-    let server = await buildServer({
+    const server = await buildServer({
       config,
       runtime: new FakeRuntime(),
       logger: false,
     });
-    let cookie = await sessionCookie(server);
-    const added = await server.inject({
+    const cookie = await sessionCookie(server);
+    const rejected = await server.inject({
       method: "POST",
       url: "/api/projects",
       headers: { host, origin, cookie, "x-pi-web-request": "1" },
@@ -238,24 +300,14 @@ describe("authenticated project API", () => {
         idempotencyKey: "00000000-0000-4000-8000-000000000001",
       },
     });
-    expect(added.statusCode).toBe(200);
-    const project = ProjectMutationResponseSchema.parse(added.json()).project;
-    expect(JSON.stringify(project)).not.toContain(paths.project);
-    await server.close();
-
-    server = await buildServer({
-      config,
-      runtime: new FakeRuntime(),
-      logger: false,
-    });
-    cookie = await sessionCookie(server);
+    expect(rejected.statusCode).toBe(404);
     const listed = await server.inject({
       method: "GET",
       url: "/api/projects",
       headers: { host, cookie },
     });
     const workspace = ProjectsResponseSchema.parse(listed.json());
-    expect(workspace.projects.map((item) => item.id)).toEqual([project.id]);
+    expect(workspace.projects).toEqual([]);
     await server.close();
   });
 });

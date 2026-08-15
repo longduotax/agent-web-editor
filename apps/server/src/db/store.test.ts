@@ -92,9 +92,10 @@ describe("metadata persistence", () => {
 
   it("marks unfinished runs interrupted on restart", async () => {
     const state = await stateDirectory();
+    let now = "2026-08-15T12:00:00.000Z";
     let store = await MetadataStore.open({
       stateDirectory: state,
-      now: () => "2026-08-15T12:00:00.000Z",
+      now: () => now,
       id: ids(),
     });
     const project = store.registerProject("/tmp/project");
@@ -102,10 +103,18 @@ describe("metadata persistence", () => {
       project.id,
       "10000000-0000-4000-8000-000000000001",
     );
-    store.createRun(
+    const completed = store.createRun(
       project.id,
       thread.id,
       "20000000-0000-4000-8000-000000000001",
+    );
+    store.settleRun(completed.id, "completed");
+    store.markViewed(project.id, thread.id, completed.id);
+    now = "2026-08-15T12:00:01.000Z";
+    const running = store.createRun(
+      project.id,
+      thread.id,
+      "20000000-0000-4000-8000-000000000002",
     );
     store.close();
     store = await MetadataStore.open({
@@ -113,7 +122,18 @@ describe("metadata persistence", () => {
       now: () => "2026-08-15T12:01:00.000Z",
       id: ids(),
     });
-    expect(store.latestRun(thread.id)?.state).toBe("interrupted");
+    expect(store.latestRun(thread.id)).toMatchObject({
+      id: running.id,
+      state: "interrupted",
+    });
+    const recoveredThread = store.getThread(project.id, thread.id);
+    expect(recoveredThread).toMatchObject({
+      last_completed_run_id: running.id,
+      last_viewed_completed_run_id: completed.id,
+    });
+    if (recoveredThread === null) throw new Error("thread was not recovered");
+    expect(store.isUnread(recoveredThread)).toBe(true);
+    expect(store.unreadCount(project.id)).toBe(1);
     store.close();
   });
 });
