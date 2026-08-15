@@ -321,18 +321,123 @@ a:focus-visible {
 }
 .activity {
   max-width: 54rem;
-  margin: 0 auto 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-  background: #13171d;
+  margin: 0.08rem auto;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  color: #b7bdc9;
+  background: transparent;
   font-size: 0.78rem;
 }
 .activity summary {
-  padding: 0.55rem 0.7rem;
+  display: flex;
+  min-width: 0;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.36rem 0.52rem;
+  border-radius: 0.4rem;
   cursor: pointer;
+  list-style: none;
 }
-.activity pre {
-  margin: 0.35rem;
+.activity summary::-webkit-details-marker {
+  display: none;
+}
+.activity summary:hover {
+  color: #dfe3eb;
+  background: rgba(255, 255, 255, 0.035);
+}
+.activity[open] {
+  margin-block: 0.4rem 0.65rem;
+  border-color: var(--border);
+  background: #12161c;
+}
+.activity[open] summary {
+  border-bottom: 1px solid var(--border);
+  border-radius: 0.4rem 0.4rem 0 0;
+}
+.activity-state {
+  display: inline-grid;
+  flex: none;
+  width: 1rem;
+  place-items: center;
+  color: #70bc8b;
+  font-weight: 700;
+}
+.activity-running .activity-state {
+  color: #d4b971;
+}
+.activity-running .activity-state > span {
+  animation: spin 1.2s linear infinite;
+}
+.activity-failed .activity-state {
+  color: var(--red);
+}
+.activity-action {
+  flex: none;
+  color: #d9dee8;
+  font-weight: 650;
+}
+.activity-path-prefix {
+  min-width: 0;
+  overflow: hidden;
+  color: #7f8796;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-target {
+  min-width: 0;
+  overflow: hidden;
+  color: #a9c9fb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-meta {
+  flex: none;
+  margin-left: auto;
+  color: #737c8c;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.activity-chevron {
+  flex: none;
+  color: #697181;
+  font-size: 1rem;
+  transition: transform 0.12s ease;
+}
+.activity[open] .activity-chevron {
+  transform: rotate(90deg);
+}
+.activity-details {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.65rem;
+}
+.activity-details section {
+  min-width: 0;
+}
+.activity-details h3 {
+  margin: 0 0 0.3rem;
+  color: #7f8796;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.activity-details pre {
+  max-height: min(26rem, 55vh);
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border-color: #242b36;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.activity-details footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  color: #737c8c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
 }
 .diagnostic {
   max-width: 54rem;

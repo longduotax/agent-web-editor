@@ -400,6 +400,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - [ ] Milestone 2: metadata schema and project vertical slice (baseline delivered; migration backup/rollback matrix pending).
 - [ ] Milestone 3: threads, routes, Pi discovery/import, and history.
   - [x] Materialize newly created blank Pi sessions atomically so they can be listed and reopened before their first prompt and after a server restart.
+  - [x] Present native tool calls and results as compact Pi-style activity rows with readable operation summaries and expandable raw details, without changing the authoritative transcript DTO.
 - [ ] Milestone 4: runs, direct Pi execution, steering, and stop.
 - [ ] Milestone 5: snapshots, reconnection, and unread completion state.
 - [ ] Milestone 6: Files and Changes inspector views.
@@ -416,6 +417,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - Pi session history is versioned JSONL with branching and compaction. The adapter should use `SessionManager` for access but still narrow every returned/raw shape at its boundary and keep native paths server-private.
 - Pi SDK 0.84.2 does not write a newly created session until an assistant message exists. Recording that in-memory UUID as durable thread metadata made the first prompt fail because a fresh listing could not resolve it. The adapter now narrowly parses and exclusively materializes the new manager's initial JSONL before returning the UUID; temp-directory restart coverage verifies the session can be discovered and opened without a provider call.
 - “Wait until it finishes” is resolved as a local draft that can be submitted as a new run after settlement, not Pi follow-up queueing.
+- Native history represents a tool call and its result as separate transcript items. Rendering both as bordered raw-JSON cards duplicated every operation and overwhelmed the conversation; the Pi adapter now pairs each pending/result item by native tool-call ID before browser presentation, while preserving the parsed snapshot as authoritative state.
 - The existing working tree already contains uncommitted approved-specification and completed-plan files. They are user work and must remain intact.
 
 ## Decision log
@@ -428,6 +430,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - 2026-08-15: Match Pi's native trust and direct tool execution; defer manual and reviewer-agent command approval to a future specification.
 - 2026-08-15: Retain “wait” prompts locally until the active run settles rather than using Pi follow-up.
 - 2026-08-16: Materialize validated blank Pi session JSONL with exclusive creation because SDK 0.84.2 intentionally defers persistence, while the approved product requires unprompted threads to survive server restarts.
+- 2026-08-16: Follow Pi's tool-rendering hierarchy in the browser: one compact semantic row per operation by default, status without color dependence, and bounded raw input/output only on explicit expansion.
 
 ## Final outcomes
 
@@ -435,7 +438,7 @@ Implementation is active. The current baseline delivers migration version 1,
 credential-free loopback access, persistent projects/threads/runs, SDK-neutral
 Pi runtime ownership, prompt idempotency and project leases, snapshot/live event
 transport, bounded Files/Changes/Terminal boundaries, and the responsive browser
-workspace. Current verification passes `pnpm check`, including 94 Vitest tests
+workspace. Current verification passes `pnpm check`, including 97 Vitest tests
 and production builds, plus the previously recorded `pnpm test:e2e` run (one
 production-build browser scenario).
 

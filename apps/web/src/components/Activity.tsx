@@ -1,0 +1,226 @@
+import { useState } from "react";
+import type { TranscriptItem } from "@pi-web/contracts";
+
+type ToolActivity = Extract<TranscriptItem, { kind: "tool" }>;
+type ToolArguments = Record<string, unknown>;
+
+interface ActivityLabel {
+  action: string;
+  prefix?: string | undefined;
+  target?: string | undefined;
+  meta?: string | undefined;
+}
+
+function parseArguments(input: string): ToolArguments | null {
+  try {
+    const parsed: unknown = JSON.parse(input);
+    return typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+      ? (parsed as ToolArguments)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringArgument(
+  args: ToolArguments | null,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    const value = args?.[name];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return undefined;
+}
+
+function numberArgument(
+  args: ToolArguments | null,
+  name: string,
+): number | undefined {
+  const value = args?.[name];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function relativePath(path: string, projectPath: string): string {
+  const normalizedPath = path.replaceAll("\\", "/");
+  const normalizedProject = projectPath
+    .replaceAll("\\", "/")
+    .replace(/\/$/, "");
+  return normalizedPath.startsWith(`${normalizedProject}/`)
+    ? normalizedPath.slice(normalizedProject.length + 1)
+    : normalizedPath;
+}
+
+function pathParts(path: string): { prefix?: string; target: string } {
+  const slash = path.lastIndexOf("/");
+  return slash === -1
+    ? { target: path }
+    : { prefix: path.slice(0, slash + 1), target: path.slice(slash + 1) };
+}
+
+function humanizeToolName(name: string): string {
+  return name.replaceAll(/[_-]+/g, " ");
+}
+
+function formatToolLabel(
+  item: ToolActivity,
+  projectPath: string,
+): ActivityLabel {
+  const args = parseArguments(item.input);
+  const rawPath = stringArgument(args, "path", "file_path");
+  const path =
+    rawPath === undefined ? undefined : relativePath(rawPath, projectPath);
+  const parts = path === undefined ? undefined : pathParts(path);
+
+  switch (item.name.toLowerCase()) {
+    case "read": {
+      const offset = numberArgument(args, "offset") ?? 1;
+      const limit = numberArgument(args, "limit");
+      return {
+        action: "Read",
+        ...parts,
+        meta:
+          limit === undefined
+            ? offset > 1
+              ? `from line ${String(offset)}`
+              : undefined
+            : `lines ${String(offset)}–${String(offset + Math.max(0, limit - 1))}`,
+      };
+    }
+    case "write":
+      return { action: "Wrote", ...parts };
+    case "edit": {
+      const edits = args?.edits;
+      const count = Array.isArray(edits) ? edits.length : undefined;
+      return {
+        action: "Edited",
+        ...parts,
+        meta:
+          count === undefined
+            ? undefined
+            : `${String(count)} ${count === 1 ? "change" : "changes"}`,
+      };
+    }
+    case "bash":
+      return {
+        action: "$",
+        target: stringArgument(args, "command") ?? item.input,
+        meta:
+          item.exitCode === null ? undefined : `exit ${String(item.exitCode)}`,
+      };
+    case "grep":
+      return {
+        action: "Searched",
+        target: stringArgument(args, "pattern") ?? "project",
+        meta: path,
+      };
+    case "find":
+      return {
+        action: "Found",
+        target: stringArgument(args, "pattern") ?? path ?? item.input,
+      };
+    case "ls":
+      return { action: "Listed", ...(parts ?? { target: "." }) };
+    default:
+      return {
+        action: humanizeToolName(item.name),
+        target: args === null ? item.input : path,
+      };
+  }
+}
+
+function formattedInput(input: string): string {
+  try {
+    return JSON.stringify(JSON.parse(input) as unknown, null, 2);
+  } catch {
+    return input;
+  }
+}
+
+export function displayTranscript(
+  items: readonly TranscriptItem[],
+): TranscriptItem[] {
+  return items.filter(
+    (item) =>
+      item.kind !== "message" ||
+      item.role !== "assistant" ||
+      item.text.trim() !== "",
+  );
+}
+
+export function Activity({
+  item,
+  projectPath,
+}: {
+  item: ToolActivity;
+  projectPath: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const label = formatToolLabel(item, projectPath);
+  const stateLabel =
+    item.status === "running"
+      ? "Running"
+      : item.status === "failed"
+        ? "Failed"
+        : "Completed";
+
+  return (
+    <details
+      className={`activity activity-${item.status}`}
+      onToggle={(event) => {
+        setExpanded(event.currentTarget.open);
+      }}
+    >
+      <summary>
+        <span className="activity-state" aria-label={stateLabel}>
+          <span aria-hidden="true">
+            {item.status === "running"
+              ? "◌"
+              : item.status === "failed"
+                ? "!"
+                : "✓"}
+          </span>
+        </span>
+        <span className="activity-action">{label.action}</span>
+        {label.prefix !== undefined && (
+          <span className="activity-path-prefix">{label.prefix}</span>
+        )}
+        {label.target !== undefined && (
+          <span className="activity-target">{label.target}</span>
+        )}
+        {label.meta !== undefined && (
+          <span className="activity-meta">{label.meta}</span>
+        )}
+        <span className="activity-chevron" aria-hidden="true">
+          ›
+        </span>
+      </summary>
+      {expanded && (
+        <div className="activity-details">
+          <section>
+            <h3>Input</h3>
+            <pre>{formattedInput(item.input)}</pre>
+          </section>
+          {item.output !== "" && (
+            <section>
+              <h3>Output</h3>
+              <pre>{item.output}</pre>
+            </section>
+          )}
+          {(item.cwd !== null || item.exitCode !== null) && (
+            <footer>
+              {item.cwd !== null && <span>cwd {item.cwd}</span>}
+              {item.exitCode !== null && (
+                <span>exit {String(item.exitCode)}</span>
+              )}
+            </footer>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
