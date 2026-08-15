@@ -9,7 +9,7 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.js"
     }
   },
@@ -20,6 +20,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
     "@pi-web/agent-runtime": "workspace:*",
-    "@pi-web/contracts": "workspace:*"
+    "@pi-web/contracts": "workspace:*",
+    "zod": "4.4.3"
   }
 }

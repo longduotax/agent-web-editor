@@ -1,0 +1,98 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  BrowseProjectRequestSchema,
+  BrowseProjectResponseSchema,
+  ProjectIdSchema,
+  SessionIdSchema,
+  RelativePathSchema,
+  TerminalClientFrameSchema,
+} from "./index.js";
+
+const id = "00000000-0000-4000-8000-000000000001";
+
+describe("wire contracts", () => {
+  it("constructs opaque identifiers", () => {
+    expect(ProjectIdSchema.parse(id)).toBe(id);
+    expect(SessionIdSchema.parse(id)).toBe(id);
+  });
+
+  it("parses strict browse requests and selected or cancelled outcomes", () => {
+    expect(BrowseProjectRequestSchema.parse({ idempotencyKey: id })).toEqual({
+      idempotencyKey: id,
+    });
+    expect(
+      BrowseProjectRequestSchema.safeParse({
+        idempotencyKey: id,
+        path: "/tmp/project",
+      }).success,
+    ).toBe(false);
+    expect(BrowseProjectResponseSchema.parse({ outcome: "cancelled" })).toEqual(
+      { outcome: "cancelled" },
+    );
+    expect(
+      BrowseProjectResponseSchema.safeParse({
+        outcome: "cancelled",
+        path: "/tmp/project",
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    "../secret",
+    "a/../secret",
+    "/etc/passwd",
+    "C:/secret",
+    "a\\b",
+    "a/%2e%2e/b",
+    "a//b",
+    "a\0b",
+  ])("rejects unsafe relative path %s", (path) => {
+    expect(RelativePathSchema.safeParse(path).success).toBe(false);
+  });
+
+  it("accepts a normalized project-relative path", () => {
+    expect(RelativePathSchema.parse("src/features/App.tsx")).toBe(
+      "src/features/App.tsx",
+    );
+  });
+
+  it("does not coerce terminal dimensions", () => {
+    expect(
+      TerminalClientFrameSchema.safeParse({
+        version: 1,
+        type: "resize",
+        projectId: id,
+        columns: "80",
+        rows: 24,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a terminal ID for terminal controls", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      TerminalClientFrameSchema.parse({
+        version: 1,
+        type: "input",
+        projectId: id,
+        terminalId,
+        data: "echo ready",
+      }),
+    ).toMatchObject({ type: "input", terminalId });
+    for (const frame of [
+      { version: 1, type: "input", projectId: id, data: "echo missing" },
+      {
+        version: 1,
+        type: "resize",
+        projectId: id,
+        terminalId: "not-a-uuid",
+        columns: 80,
+        rows: 24,
+      },
+      { version: 1, type: "restart", projectId: id },
+      { version: 1, type: "terminate", projectId: id },
+    ])
+      expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
+  });
+});

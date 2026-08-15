@@ -56,9 +56,10 @@ pnpm docs:check
 ```
 
 Build and typecheck are intentionally separate. Vite transforms TypeScript, but
-`apps/web` runs `tsc --noEmit` before its build. Vitest currently passes with no
-test files because no product behavior exists; add focused tests with the first
-behavior.
+`apps/web` runs `tsc --noEmit` before its build. Vitest includes contract, configuration, authentication, temporary SQLite,
+HTTP, run-coordination, filesystem, and browser rendering tests. The root test
+command first builds shared package entry points so Node tests exercise the same
+public runtime exports as the applications.
 
 Generated `dist/`, coverage, and TypeScript build-info files are ignored.
 
@@ -77,9 +78,13 @@ pnpm --filter @pi-web/web dev
 pnpm --filter @pi-web/server dev
 ```
 
-The web process listens on `127.0.0.1:5173`; the server listens on
-`127.0.0.1:3001`. Do not start either process unless the current task requires
-runtime work or verification. Static setup and checks do not require services.
+The web process listens on `127.0.0.1` at `PI_WEB_DEV_PORT` or default `5173`;
+the server listens on `127.0.0.1` at `--port`, `PI_WEB_PORT`, or default `3001`.
+Vite proxies relative API and WebSocket traffic to the backend port. Copy
+`.env.example` to the ignored repository-root `.env.local` to store both values.
+Startup prints the one-use tokenized URL using the configured development port.
+Do not start either process unless the current task requires runtime work or
+verification.
 
 After building, the backend can also be started with:
 
@@ -105,13 +110,29 @@ pnpm vitest run path/to/example.test.ts
 
 ## Configuration and data stores
 
-The scaffold has no application configuration schema, database, migration
-system, queue, or external-service setup. Do not introduce an environment read
-without an explicit parser and startup failure policy. Do not run database or
-migration commands as a documentation or build verification step.
+`--port` overrides `PI_WEB_PORT`; values must be integers from 1 through 65535.
+`PI_WEB_STATE_DIR`, when set, must be absolute. Its default is
+`~/.pi/web-workspace/`, containing `metadata.sqlite` and bounded pre-migration
+backups. The process rejects a symlink state directory or permissions available
+to other users.
 
-When persistence is introduced, document its local setup, migration ownership,
-recovery, and safe test isolation here before relying on it.
+The server applies only committed migrations under `apps/server/migrations` and
+refuses newer schema versions. SQLite uses foreign keys, WAL, a busy timeout,
+and explicit shutdown checkpointing. There is no generation or down-migration
+at startup.
+
+All writable tests make their own mode-0700 temporary state directory and never
+read or write a database from `.env` or `.env.*`. Focused commands are:
+
+```sh
+pnpm test
+pnpm test:integration
+pnpm test:e2e
+```
+
+The end-to-end command requires installed Playwright browser binaries. Runtime
+unit/integration tests use deterministic fakes; do not run a real provider or
+write native user sessions without explicit approval.
 
 ## Completion workflow
 
