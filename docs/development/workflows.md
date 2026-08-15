@@ -91,10 +91,22 @@ loads the workspace without authentication.
 Do not start either process unless the current task requires runtime work or
 verification.
 
-After building, the backend can also be started with:
+Build and run the loopback production server, including the built web
+application, with:
 
 ```sh
-pnpm --filter @pi-web/server start
+pnpm start
+```
+
+The root command forces production mode and loads `PI_WEB_PORT` and
+`PI_WEB_STATE_DIR` from the same ignored `.env.local` file used for local
+development. Use `.env.local` for machine-specific settings in this local-first
+application; `.env.prod` is not loaded. The package-level backend command
+remains available after a build when the caller sets `NODE_ENV=production`
+explicitly:
+
+```sh
+NODE_ENV=production pnpm --filter @pi-web/server start
 ```
 
 ## Focused package checks

@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter './apps/*' dev",
+    "start": "pnpm build && node scripts/start.mjs",
     "build": "pnpm -r --if-present build",
     "typecheck": "tsc --noEmit && pnpm -r --if-present typecheck",
     "lint": "eslint .",
