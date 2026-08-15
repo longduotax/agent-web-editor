@@ -143,7 +143,7 @@ function safeError(error: unknown): {
       project_busy: {
         status: 409,
         code: "project_busy",
-        message: "Another agent run is active in this project.",
+        message: "Another agent run is active in this thread.",
       },
       run_not_active: {
         status: 409,
@@ -173,7 +173,7 @@ function safeError(error: unknown): {
     };
     const mapped = known[error.message];
     if (mapped !== undefined) return mapped;
-    if (error.message.includes("UNIQUE constraint failed: runs.project_id"))
+    if (error.message.includes("UNIQUE constraint failed: runs.thread_id"))
       return known.project_busy as {
         status: number;
         code: string;

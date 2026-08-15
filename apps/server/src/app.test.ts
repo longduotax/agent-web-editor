@@ -2,7 +2,11 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AgentRuntime, OpenRuntimeSession } from "@pi-web/agent-runtime";
+import type {
+  AgentRuntime,
+  OpenRuntimeSession,
+  PromptAcceptance,
+} from "@pi-web/agent-runtime";
 import {
   BrowseProjectResponseSchema,
   ProjectsResponseSchema,
@@ -34,6 +38,68 @@ class FakeRuntime implements AgentRuntime {
   }
 }
 
+class PromptingSession implements OpenRuntimeSession {
+  public readonly id = "10000000-0000-4000-8000-000000000001";
+
+  public snapshot(): Promise<{
+    sessionId: string;
+    transcript: [];
+    diagnostics: [];
+  }> {
+    return Promise.resolve({
+      sessionId: this.id,
+      transcript: [],
+      diagnostics: [],
+    });
+  }
+
+  public prompt(): Promise<PromptAcceptance> {
+    return Promise.resolve({
+      accepted: true,
+      settlement: new Promise<"completed" | "failed" | "interrupted">(
+        () => undefined,
+      ),
+      releaseEvents: () => undefined,
+      discardEvents: () => undefined,
+    });
+  }
+
+  public steer(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public stop(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public subscribe(): () => void {
+    return () => undefined;
+  }
+
+  public dispose(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+class PromptingRuntime implements AgentRuntime {
+  private readonly session = new PromptingSession();
+
+  public discover(): Promise<{
+    sessions: [];
+    diagnostics: [];
+  }> {
+    return Promise.resolve({ sessions: [], diagnostics: [] });
+  }
+
+  public create(): Promise<{ sessionId: string }> {
+    return Promise.resolve({ sessionId: this.session.id });
+  }
+
+  public open(): Promise<OpenRuntimeSession> {
+    return Promise.resolve(this.session);
+  }
+}
+
 async function directories(): Promise<{ state: string; project: string }> {
   const root = await mkdtemp(join(tmpdir(), "pi-web-http-"));
   roots.push(root);
@@ -48,6 +114,51 @@ const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
 describe("credential-free project API", () => {
+  it("maps a durable thread-run lease conflict to the busy response", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const thread = await server.workspaceContext.workspace.createThread(
+      project.id,
+    );
+    vi.spyOn(
+      server.workspaceContext.store,
+      "createRunIfProjectActive",
+    ).mockImplementationOnce(() => {
+      throw new Error("UNIQUE constraint failed: runs.thread_id");
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/${thread.id}/prompt`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Work",
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: {
+        code: "project_busy",
+        message: "Another agent run is active in this thread.",
+      },
+    });
+    await server.close();
+  });
+
   it("prints a plain launch URL and accepts canonical default-port origins for mutations", async () => {
     const paths = await directories();
     const config = parseConfig({

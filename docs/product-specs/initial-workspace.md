@@ -2,17 +2,17 @@
 
 **Current version:** None
 
-**Proposed version:** 1
+**Proposed version:** 2
 
 **Proposal status:** Approved
 
 **Implementation status:** In progress
 
-**Product approval:** Approved by the user on 2026-08-15 for specification version 1
+**Product approval:** Approved by the user on 2026-08-16 for specification version 2
 
 **Subsystem:** Projects, threads, agent runs, and workspace UI
 
-**Last verified:** 2026-08-15
+**Last verified:** 2026-08-16
 
 **Related ExecPlans:** [Initial agent workspace implementation](../exec-plans/active/2026-08-15-initial-agent-workspace.md)
 
@@ -183,10 +183,19 @@ Run states are:
 - `failed`
 - `interrupted`
 
-Only one agent run may execute in a project at a time in the initial release.
-Other threads remain readable while that run is active. A server restart marks
-an unfinished run as interrupted unless the runtime can prove that it is still
-executing and reconnectable.
+### IAW-RUN-01 — Concurrent runs across threads
+
+Each thread may have at most one running run. Distinct threads in the same
+project may run concurrently, with each run remaining independently steerable
+and stoppable through its owning thread. Concurrent runs share the project's
+working directory, so project-wide files, Git state, and inspector output may
+change because of any running thread; the application does not attribute those
+changes to one thread or prevent conflicting edits.
+
+A second prompt in a running thread is not a separate concurrent run. The user
+may steer that thread's current run or retain a draft until it settles. A server
+restart marks every unfinished run as interrupted unless the runtime can prove
+that it is still executing and reconnectable.
 
 The selected thread is represented by the browser route. Each project also
 remembers its last-opened thread as a convenience when the user opens the
@@ -313,22 +322,28 @@ must make that limitation explicit before executable agent tools are enabled.
    native-session path.
 4. A prompt starts a recorded run, streams visible activity, and reaches a
    completed, failed, or interrupted state.
-5. A completed run produces a durable blue unread indicator on its thread and
+5. Two distinct threads in one project can run simultaneously and can each be
+   steered or stopped without affecting the other's run; a second independent
+   run cannot start in a thread that is already running.
+6. Concurrent threads may modify the same project working tree, and Changes,
+   Files, Git, and terminal views continue to represent shared project-wide
+   state rather than attributing changes to a thread.
+7. A completed run produces a durable blue unread indicator on its thread and
    project, and viewing the completed result clears the appropriate indicator.
-6. The selected thread is route-addressable, and two browser tabs can view
+8. The selected thread is route-addressable, and two browser tabs can view
    different threads without a global selection conflict.
-7. The inspector can show current Git changes and diffs, browse and preview
+9. The inspector can show current Git changes and diffs, browse and preview
    permitted project files, and host one interactive terminal per project.
-8. Removing a project changes application navigation only; it does not delete
-   workspace files or native Pi history, and re-adding the path restores retained
-   metadata.
-9. Existing Pi sessions can be discovered and imported without rewriting their
-   native history.
-10. Browser refresh or stream reconnection reconstructs an authoritative thread
+10. Removing a project changes application navigation only; it does not delete
+    workspace files or native Pi history, and re-adding the path restores retained
+    metadata.
+11. Existing Pi sessions can be discovered and imported without rewriting their
+    native history.
+12. Browser refresh or stream reconnection reconstructs an authoritative thread
     view without duplicating accepted work.
-11. Invalid identifiers, malformed persisted data, unavailable paths, and
+13. Invalid identifiers, malformed persisted data, unavailable paths, and
     malformed adapter output fail at their boundaries with safe, visible errors.
-12. Starting the server prints a plain loopback URL; opening it, refreshing it,
+14. Starting the server prints a plain loopback URL; opening it, refreshing it,
     or opening it in another tab loads the workspace without a launch token,
     cookie, login, or re-authentication step.
 
@@ -337,7 +352,8 @@ must make that limitation explicit before executable agent tools are enabled.
 - Thread archival or permanent history deletion
 - Full browser code editing
 - Git commits, pushes, pull requests, or worktree orchestration
-- Multiple simultaneous agent runs in one project
+- Multiple simultaneous runs in one thread or runtime session
+- Automatic conflict prevention or per-thread attribution for shared working-tree changes
 - User-created or automatically orchestrated sub-agents
 - Parent/child agent views and sub-agent chat panels
 - Selecting and packaging context for a delegated sub-agent
@@ -355,9 +371,17 @@ review may add a specialized reviewer-agent relationship for proposed tool and
 command operations. The initial data model should remain migratable to those
 features, but it must not add speculative approval or sub-agent behavior now.
 
+## Proposed-version status
+
+Specification version 2 changes the approved version 1 run lease from
+project-scoped to thread-scoped through `IAW-RUN-01` and acceptance criteria
+5-6. All other version 1 behavior remains proposed without change. There are no
+open product questions. The user approved version 2 on 2026-08-16.
+
 ## Remaining design work before implementation
 
-The durable behavior above is approved. The approved implementation designs use
+The durable behavior above was approved as version 2. The implementation
+designs use
 a client-unauthenticated, loopback-only server with exact Host checks and browser
 Origin/CSRF protections, a user-selected loopback port, Drizzle with SQLite for
 application metadata, Pi's direct tool-execution and native project-trust

@@ -36,6 +36,12 @@ import {
 } from "../db/store.js";
 import { LiveBroker } from "../live/broker.js";
 
+interface PendingPreflight {
+  projectId: ProjectId;
+  runtime: OpenRuntimeSession | undefined;
+  stopRequested: boolean;
+}
+
 async function gitAvailable(path: string): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const child = spawn("git", ["rev-parse", "--is-inside-work-tree"], {
@@ -96,7 +102,9 @@ export class WorkspaceService {
     ThreadId,
     { runtime: OpenRuntimeSession; unsubscribe: () => void }
   >();
-  private readonly activeProjects = new Set<ProjectId>();
+  private readonly activeThreads = new Set<ThreadId>();
+  private readonly preflightPrompts = new Map<ThreadId, PendingPreflight>();
+  private readonly removingProjects = new Set<ProjectId>();
   private readonly inFlightCommands = new Map<
     string,
     { operation: string; requestHash: string; pending: Promise<unknown> }
@@ -356,49 +364,73 @@ export class WorkspaceService {
         );
         if (prior !== null) return { removed: true as const };
         const project = this.requireProject(projectId);
-        this.interruptRunForProjectRemoval(project.id);
-        for (const thread of this.store.listThreads(project.id))
-          await this.disposeThread(thread.id);
-        this.store.withReceipt(
-          projectId,
-          idempotencyKey,
-          operation,
-          hash,
-          removedReceiptSchema,
-          () => {
-            this.store.removeProject(projectId);
-            return { removed: true as const };
-          },
-        );
-        this.terminalCleanup.terminate(projectId);
-        return { removed: true as const };
+        this.removingProjects.add(project.id);
+        try {
+          for (const [threadId, preflight] of this.preflightPrompts) {
+            if (preflight.projectId !== project.id) continue;
+            this.requestPreflightStop(preflight);
+            if (this.preflightPrompts.get(threadId) === preflight)
+              this.preflightPrompts.delete(threadId);
+            this.activeThreads.delete(threadId);
+          }
+          this.interruptRunsForProjectRemoval(project.id);
+          for (const thread of this.store.listThreads(project.id))
+            await this.disposeThread(thread.id);
+          this.store.withReceipt(
+            projectId,
+            idempotencyKey,
+            operation,
+            hash,
+            removedReceiptSchema,
+            () => {
+              this.store.removeProject(projectId);
+              return { removed: true as const };
+            },
+          );
+          this.terminalCleanup.terminate(projectId);
+          return { removed: true as const };
+        } finally {
+          this.removingProjects.delete(project.id);
+        }
       },
     );
   }
 
-  private interruptRunForProjectRemoval(projectId: ProjectId): void {
-    const run = this.store.runningRunForProject(projectId);
-    if (run === null) return;
-    const owner = this.runtimes.get(run.thread_id);
-    if (owner !== undefined) {
-      try {
-        void owner.runtime.stop().catch(() => undefined);
-      } catch {
-        // Removing a project must release its persisted run lease even if the
-        // in-memory runtime can no longer be interrupted.
+  private interruptRunsForProjectRemoval(projectId: ProjectId): void {
+    for (const run of this.store.runningRunsForProject(projectId)) {
+      const owner = this.runtimes.get(run.thread_id);
+      if (owner !== undefined) {
+        try {
+          void owner.runtime.stop().catch(() => undefined);
+        } catch {
+          // Removing a project must release its persisted run lease even if the
+          // in-memory runtime can no longer be interrupted.
+        }
       }
+      if (this.store.runningRunForThread(run.thread_id)?.id !== run.id)
+        continue;
+      const settled = runDto(
+        this.store.settleRun(
+          run.id,
+          "interrupted",
+          "project_removed",
+          "Interrupted because the project was removed.",
+        ),
+      );
+      this.activeThreads.delete(run.thread_id);
+      this.broker.publish(run.thread_id, "completion", settled);
     }
-    if (this.store.runningRunForProject(projectId)?.id !== run.id) return;
-    const settled = runDto(
-      this.store.settleRun(
-        run.id,
-        "interrupted",
-        "project_removed",
-        "Interrupted because the project was removed.",
-      ),
-    );
-    this.activeProjects.delete(projectId);
-    this.broker.publish(run.thread_id, "completion", settled);
+  }
+
+  private requestPreflightStop(preflight: PendingPreflight): void {
+    if (preflight.stopRequested || preflight.runtime === undefined) return;
+    preflight.stopRequested = true;
+    try {
+      void preflight.runtime.stop().catch(() => undefined);
+    } catch {
+      // A removed project must release its preflight lease even if the native
+      // runtime cannot be interrupted.
+    }
   }
 
   public async createThread(
@@ -665,6 +697,8 @@ export class WorkspaceService {
       hash,
       RunSchema,
       async () => {
+        if (this.removingProjects.has(projectId))
+          throw new Error("project_not_found");
         const prior = this.store.readReceipt(
           projectId,
           idempotencyKey,
@@ -675,36 +709,58 @@ export class WorkspaceService {
         if (prior !== null) return prior;
         const thread = this.requireThread(projectId, threadId);
         if (
-          this.activeProjects.has(projectId) ||
-          this.store.runningRunForProject(projectId) !== null
+          this.activeThreads.has(threadId) ||
+          this.store.runningRunForThread(threadId) !== null
         )
           throw new Error("project_busy");
-        this.activeProjects.add(projectId);
+        this.activeThreads.add(threadId);
+        const preflight: PendingPreflight = {
+          projectId: thread.project_id,
+          runtime: undefined,
+          stopRequested: false,
+        };
+        this.preflightPrompts.set(threadId, preflight);
         let pendingAcceptance: PromptAcceptance | undefined;
         let acceptedRuntime: OpenRuntimeSession | undefined;
         try {
           const runtime = await this.openRuntime(thread);
           acceptedRuntime = runtime;
+          preflight.runtime = runtime;
+          if (this.preflightPrompts.get(threadId) !== preflight) {
+            this.requestPreflightStop(preflight);
+            throw new Error("project_not_found");
+          }
           const acceptance = await runtime.prompt(text);
           pendingAcceptance = acceptance;
           if (!acceptance.accepted) throw new Error("prompt_rejected");
+          if (this.preflightPrompts.get(threadId) !== preflight)
+            throw new Error("project_not_found");
           const receipt = this.store.withReceipt(
             projectId,
             idempotencyKey,
             operation,
             hash,
             RunSchema,
-            () =>
-              runDto(this.store.createRun(projectId, threadId, idempotencyKey)),
+            () => {
+              const created = this.store.createRunIfProjectActive(
+                projectId,
+                threadId,
+                idempotencyKey,
+              );
+              if (created === null) throw new Error("project_not_found");
+              return runDto(created);
+            },
           );
           const run = RunSchema.parse(receipt.response);
+          if (this.preflightPrompts.get(threadId) === preflight)
+            this.preflightPrompts.delete(threadId);
           this.broker.publish(threadId, "run", run);
           acceptance.releaseEvents();
           pendingAcceptance = undefined;
           acceptedRuntime = undefined;
           void acceptance.settlement
             .then((outcome) => {
-              if (this.store.runningRunForProject(projectId)?.id !== run.id)
+              if (this.store.runningRunForThread(threadId)?.id !== run.id)
                 return;
               const state =
                 outcome === "completed"
@@ -720,11 +776,11 @@ export class WorkspaceService {
                   state === "failed" ? "Agent execution failed." : null,
                 ),
               );
-              this.activeProjects.delete(projectId);
+              this.activeThreads.delete(threadId);
               this.broker.publish(threadId, "completion", settled);
             })
             .catch(() => {
-              if (this.store.runningRunForProject(projectId)?.id !== run.id)
+              if (this.store.runningRunForThread(threadId)?.id !== run.id)
                 return;
               const settled = runDto(
                 this.store.settleRun(
@@ -734,12 +790,19 @@ export class WorkspaceService {
                   "Agent execution failed.",
                 ),
               );
-              this.activeProjects.delete(projectId);
+              this.activeThreads.delete(threadId);
               this.broker.publish(threadId, "completion", settled);
             });
           return run;
         } catch (error) {
-          if (pendingAcceptance?.accepted && acceptedRuntime !== undefined) {
+          const ownsPreflightLease =
+            this.preflightPrompts.get(threadId) === preflight;
+          if (ownsPreflightLease) this.preflightPrompts.delete(threadId);
+          if (
+            pendingAcceptance?.accepted &&
+            acceptedRuntime !== undefined &&
+            !preflight.stopRequested
+          ) {
             try {
               await acceptedRuntime.stop();
             } catch {
@@ -747,7 +810,7 @@ export class WorkspaceService {
             }
           }
           pendingAcceptance?.discardEvents();
-          this.activeProjects.delete(projectId);
+          if (ownsPreflightLease) this.activeThreads.delete(threadId);
           throw error;
         }
       },
@@ -778,8 +841,8 @@ export class WorkspaceService {
         );
         if (prior !== null) return prior;
         const thread = this.requireThread(projectId, threadId);
-        const run = this.store.runningRunForProject(projectId);
-        if (run?.thread_id !== threadId) throw new Error("run_not_active");
+        const run = this.store.runningRunForThread(threadId);
+        if (run?.project_id !== projectId) throw new Error("run_not_active");
         await (await this.openRuntime(thread)).steer(text);
         return this.store.withReceipt(
           projectId,
@@ -816,9 +879,11 @@ export class WorkspaceService {
         );
         if (prior !== null) return prior;
         const thread = this.requireThread(projectId, threadId);
-        const run = this.store.runningRunForProject(projectId);
-        if (run?.thread_id !== threadId) throw new Error("run_not_active");
+        const run = this.store.runningRunForThread(threadId);
+        if (run?.project_id !== projectId) throw new Error("run_not_active");
         await (await this.openRuntime(thread)).stop();
+        const settlesCapturedRun =
+          this.store.runningRunForThread(threadId)?.id === run.id;
         const settled = this.store.withReceipt(
           projectId,
           idempotencyKey,
@@ -835,7 +900,7 @@ export class WorkspaceService {
               ),
             ),
         ).response;
-        this.activeProjects.delete(projectId);
+        if (settlesCapturedRun) this.activeThreads.delete(threadId);
         this.broker.publish(threadId, "completion", settled);
         return settled;
       },

@@ -72,8 +72,8 @@ export const runs = sqliteTable(
   },
   (table) => [
     index("runs_thread_started_idx").on(table.threadId, table.startedAt),
-    uniqueIndex("runs_one_running_per_project")
-      .on(table.projectId)
+    uniqueIndex("runs_one_running_per_thread")
+      .on(table.threadId)
       .where(sql`${table.state} = 'running'`),
   ],
 );
