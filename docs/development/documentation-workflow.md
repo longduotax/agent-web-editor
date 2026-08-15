@@ -7,10 +7,12 @@ retire repository documentation.
 
 1. Start at [`docs/README.md`](../README.md).
 2. Choose the affected subsystem rather than scanning the whole tree.
-3. Read the relevant current specification and architecture document.
-4. Read a design only when prior decisions or tradeoffs affect the change.
+3. Read the relevant current product specification and any bounded proposed
+   revision.
+4. Read architecture for implemented structure and a design only when prior
+   decisions or tradeoffs affect the change.
 5. Check the [active-plan index](../exec-plans/active/index.md) and open only an
-   overlapping plan.
+   overlapping Draft, Ready, Active, or Blocked plan.
 6. Consult [completed plans](../exec-plans/completed/index.md) only for a
    specific historical question.
 7. Verify documentation claims against nearby code and tests.
@@ -24,12 +26,22 @@ for a small familiar change.
 ### `architecture/`
 
 Describes the currently implemented components, dependencies, data flows,
-boundaries, and invariants. Do not put requirements, task lists, or history here.
+boundaries, and invariants. Do not put requirements, task lists, proposed
+implementation, or history here.
 
 ### `product-specs/`
 
-Defines durable user-visible behavior, business rules, acceptance criteria, and
-edge cases. Do not create a placeholder spec before behavior is decided.
+Defines durable user-visible behavior, business rules, permissions, acceptance
+criteria, and edge cases. Specifications are organized by stable product
+capability, not by task or implementation plan. Update the governing capability
+specification unless a new behavior area has an independent lifecycle and normal
+reader entry point.
+
+The main body preserves the Current implemented contract. Discuss changes in a
+bounded proposed revision with separate current/proposed version and approval
+metadata. New capabilities may have no current version while their first
+proposal is Draft, Approved, or in progress. Temporary implementation steps and
+technical mechanisms do not belong here.
 
 ### `design/`
 
@@ -38,12 +50,14 @@ copy the whole architecture or an implementation checklist into a design.
 
 ### `development/`
 
-Contains setup, testing, migration, verification, and contributor workflows.
+Contains setup, testing, migration, verification, contributor workflows, and
+planning templates.
 
 ### `exec-plans/active/`
 
-Contains living plans for current work that is not clearly Fast. Every plan must
-be linked from its index and maintained during implementation.
+Contains living change-oriented plans in Draft, Ready, Active, or Blocked
+status. Every plan must be linked from its index and maintained during discussion
+and implementation. Plan versions remain in one stable dated file.
 
 ### `exec-plans/completed/`
 
@@ -62,40 +76,83 @@ closest central subsystem or category index.
 
 Use the implementation lanes in
 [the agent workflow](agent-implementation-workflow.md). Fast applies only to
-small, isolated, familiar, low-risk changes. Every other change uses Plan and
-requires a written working specification, explicit user approval, and a living
-ExecPlan before implementation.
+small, isolated, familiar, low-risk changes and does not require planning
+artifacts. Every other change uses Plan.
 
-The working specification may stay in the conversation or task state. When it
-changes durable product behavior, update the existing canonical product
-specification that governs that behavior after approval and before planning.
-Create a new specification file only for a distinct durable contract.
+Before Plan-lane production-code edits:
+
+1. investigate current behavior and documentation;
+2. create a Draft ExecPlan;
+3. create a new Draft capability spec or a proposed revision when product
+   behavior changes, or explicitly record no product behavior change;
+4. evolve both documents during discussion; and
+5. receive explicit human approval of the identified product and plan versions.
+
+Do not force product-specification churn for architecture-only work. Link the
+current governing specs and preserve their behavioral invariant explicitly in
+the ExecPlan.
 
 Update architecture only when implementation changes. Create a design only when
 decision reasoning will remain useful. Do not create placeholders merely to fill
 a directory.
 
+## Specification lifecycle
+
+1. Select the canonical capability specification.
+2. Keep implemented behavior in its Current body and add a bounded proposed
+   revision, or create a new Draft specification for a distinct capability.
+3. Record stable requirement IDs, acceptance criteria, non-goals, and product
+   open questions in the specification.
+4. Link the Draft ExecPlan and discuss both documents together.
+5. After explicit product approval, record the approved proposed version and
+   approval context. It is approved intent, not yet Current behavior.
+6. During implementation, return material product changes to Draft and
+   invalidate affected plan approvals.
+7. After implementation and verification, fold the proposal into the main body,
+   mark that version Current, clear proposal metadata, and update the index.
+
+Git preserves revision history; do not create a new specification file merely to
+store each version. Supersede a specification only when capability ownership
+itself changes, and link its replacement.
+
 ## ExecPlan lifecycle
 
-1. Write the working specification, present it to the user, and receive explicit
-   approval. Update the governing canonical product specification, or create one
-   for a distinct durable contract, when durable product behavior is involved.
-2. Create a dated plan in `exec-plans/active/` and add routing metadata to the
-   active index.
-3. Maintain progress, discoveries, blockers, and decisions while working.
-4. Before completion, update durable specifications, designs, and architecture.
-5. Move the plan to `exec-plans/completed/`, record `Completed`, `Superseded`, or
+1. Create a dated Draft plan in `exec-plans/active/`, add routing metadata to the
+   active index, and link the governing specification requirements.
+2. Increment `Plan version` only for material technical replanning. Keep routine
+   progress in the same version.
+3. Record explicit technical approval for the exact plan version. Mark it Ready
+   only when product approval is also satisfied and no material question remains.
+4. Mark it Active when production implementation starts; use Blocked only when
+   approved work cannot currently proceed.
+5. Maintain progress, discoveries, blockers, decisions, and verification while
+   working.
+6. Before completion, verify the governing specification and plan and update
+   durable specifications, designs, and architecture.
+7. Move the plan to `exec-plans/completed/`, record `Completed`, `Superseded`, or
    `Abandoned`, and update both indexes.
 
 Unchecked boxes in a historical plan do not make it active.
 
-## Metadata and indexes
+## Metadata, traceability, and indexes
 
-New maintained documents should include status, subsystem, last verification
-date, relevant paths, and related documents where useful. Every active plan
-must identify status, subsystem, affected paths or contracts, related documents
-or issue, and last-updated date near the top.
+Use the [planning templates](planning-templates.md). New maintained documents
+include status, subsystem, last verification date, relevant paths, and related
+documents where useful.
 
+Every product specification identifies current version, proposed version,
+proposal status, implementation status, product approval, and related plans. A
+new spec uses `Current version: None`; a Current spec with no pending change uses
+`Proposed version: None` and `Proposal status: None`.
+
+Every open plan identifies status, plan version, version-specific technical
+approval, subsystem, affected paths or contracts, governing specification or
+explicit no-product-change working specification, related documents or issue,
+and last-updated date near the top.
+
+- Give durable product requirements stable IDs.
+- In the ExecPlan, link IDs to technical consequences and verification rather
+  than copying complete behavioral rules.
 - Link every canonical document from its closest index.
 - Prefer relative links and subsystem-oriented routing.
 - Keep active-index summaries specific enough to establish overlap without
@@ -104,12 +161,14 @@ or issue, and last-updated date near the top.
 
 ## Verification
 
-After changing indexes, links, or plan placement, run:
+After changing indexes, metadata, links, or plan placement, run:
 
 ```sh
 pnpm docs:check
 ```
 
 The validator checks canonical indexes, local relative links, direct index
-coverage, active metadata, duplicate plan names, and legacy plan locations. It
-does not treat completed plan bodies as current instructions.
+coverage, open-plan and product-specification metadata, duplicate plan names,
+and plan placement. It does not decide whether a change is material or whether a
+technical consequence faithfully satisfies a product requirement. Completed
+plan bodies remain historical and are not checked as current instructions.

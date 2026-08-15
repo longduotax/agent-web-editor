@@ -20,3 +20,7 @@ specifications, designs, code, or tests.
   — replaced typed project paths with an authenticated, server-owned macOS and
   Windows native directory chooser while keeping canonical paths out of the
   browser.
+- [Specification and ExecPlan approval workflow](2026-08-15-spec-and-exec-plan-approval-workflow.md)
+  — made capability specifications and versioned technical plans co-evolving
+  Draft artifacts with explicit product and implementation approvals,
+  traceability, invalidation rules, and validator coverage.

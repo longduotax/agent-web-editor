@@ -1,10 +1,20 @@
 # Initial agent workspace
 
-**Status:** Approved, implementation in progress
+**Current version:** None
+
+**Proposed version:** 1
+
+**Proposal status:** Approved
+
+**Implementation status:** In progress
+
+**Product approval:** Approved by the user on 2026-08-15 for specification version 1
 
 **Subsystem:** Projects, threads, agent runs, and workspace UI
 
 **Last verified:** 2026-08-15
+
+**Related ExecPlans:** [Initial agent workspace implementation](../exec-plans/active/2026-08-15-initial-agent-workspace.md)
 
 **Related documents:** [Product specification index](index.md),
 [architecture overview](../architecture/overview.md), and

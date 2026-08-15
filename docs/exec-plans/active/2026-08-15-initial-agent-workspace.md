@@ -2,13 +2,19 @@
 
 **Status:** Active
 
+**Plan version:** 1
+
+**Technical approval:** Approved by the user on 2026-08-15 for plan version 1
+
 **Phase:** No-authentication security revision approved; implementation active
 
 **Subsystem:** Projects, threads, agent runs, live events, workspace UI, inspector, and terminal
 
 **Affected paths or contracts:** `apps/web/src/**`, `apps/server/src/**`, `packages/contracts/src/**`, `packages/agent-runtime/src/**`, `packages/pi-adapter/src/**`, package manifests and test configuration, `docs/design/**`, `docs/architecture/**`, and `docs/development/workflows.md`
 
-**Related documents or issue:** [Initial agent workspace product specification](../../product-specs/initial-workspace.md), [architecture overview](../../architecture/overview.md), [Parse, Don't Validate](../../architecture/data-boundaries.md), and the user's 2026-08-15 request for a TDD implementation plan
+**Governing specification:** [Initial agent workspace proposed version 1](../../product-specs/initial-workspace.md)
+
+**Related documents or issue:** [Architecture overview](../../architecture/overview.md), [Parse, Don't Validate](../../architecture/data-boundaries.md), and the user's 2026-08-15 request for a TDD implementation plan
 
 **Last updated:** 2026-08-15
 

@@ -52,6 +52,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:docs
 pnpm docs:check
 ```
 
@@ -60,7 +61,9 @@ Build and typecheck are intentionally separate. Vite transforms TypeScript, but
 configuration, request-policy, temporary SQLite, HTTP, run-coordination,
 filesystem, and browser rendering tests. The root test
 command first builds shared package entry points so Node tests exercise the same
-public runtime exports as the applications.
+public runtime exports as the applications. `test:docs` exercises lifecycle
+metadata rules with standard-library Python tests, while `docs:check` validates
+the current documentation tree.
 
 Generated `dist/`, coverage, and TypeScript build-info files are ignored.
 

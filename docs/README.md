@@ -16,8 +16,8 @@ canonical document may be sufficient.
 - [Parse, Don't Validate](architecture/data-boundaries.md) — construction of
   trusted values at every external or persisted-data boundary.
 - [Agent implementation workflow](development/agent-implementation-workflow.md)
-  — choose Fast or Plan and apply the mandatory specification approval gate for
-  all Plan work.
+  — choose Fast or Plan; Draft and approve linked product intent and technical
+  approach before Plan implementation.
 - [Development workflows](development/workflows.md) — setup and static/runtime
   commands.
 
@@ -51,7 +51,8 @@ closest category index.
 
 ## Sources of truth
 
-- Product specifications define intended durable behavior.
+- Product specifications preserve Current durable behavior and clearly bounded
+  Draft or Approved proposals.
 - Architecture and designs describe current structure and important decisions.
 - Code and tests demonstrate implemented behavior and compatibility.
 - Active plans track work in progress.

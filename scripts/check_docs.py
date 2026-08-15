@@ -49,7 +49,9 @@ LEGACY_PLAN_DIRECTORIES = (
 )
 
 MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-ACTIVE_STATUS = re.compile(r"^\*\*Status:\*\*\s*Active\s*$", re.MULTILINE)
+OPEN_PLAN_STATUSES = {"Draft", "Ready", "Active", "Blocked"}
+IMPLEMENTATION_STATUSES = {"Not started", "In progress", "Current"}
+PROPOSAL_STATUSES = {"None", "Draft", "Approved"}
 COMPLETED_STATUS = re.compile(
     r"^\*\*Status:\*\*\s*(Completed|Superseded|Abandoned)\s*$", re.MULTILINE
 )
@@ -60,6 +62,128 @@ EXTERNAL_TARGET = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 def repository_path(path: Path) -> str:
     """Return a stable repository-relative display path."""
     return path.relative_to(REPOSITORY_ROOT).as_posix()
+
+
+def metadata_value(text: str, label: str) -> str | None:
+    """Return one bold Markdown metadata value."""
+    match = re.search(
+        rf"^\*\*{re.escape(label)}:\*\*\s*(.+?)\s*$", text, re.MULTILINE
+    )
+    return match.group(1) if match else None
+
+
+def positive_version(value: str | None) -> int | None:
+    """Parse a positive integer metadata version."""
+    if value is None or not value.isdigit():
+        return None
+    version = int(value)
+    return version if version > 0 else None
+
+
+def check_open_plan_metadata(text: str, display_path: str) -> list[str]:
+    """Validate lifecycle and version-specific approval for one open plan."""
+    errors: list[str] = []
+    status = metadata_value(text, "Status")
+    if status not in OPEN_PLAN_STATUSES:
+        errors.append(
+            f"{display_path} has unsupported open-plan status: {status or 'missing'}"
+        )
+
+    raw_version = metadata_value(text, "Plan version")
+    version = positive_version(raw_version)
+    if version is None:
+        errors.append(f"{display_path} has no positive integer Plan version")
+
+    approval = metadata_value(text, "Technical approval")
+    if approval is None:
+        errors.append(f"{display_path} is missing Technical approval metadata")
+    elif version is not None and f"plan version {version}" not in approval.lower():
+        errors.append(
+            f"{display_path} Technical approval does not identify plan version {version}"
+        )
+    elif status == "Draft" and not approval.lower().startswith("pending"):
+        errors.append(f"{display_path} Draft plan must have pending technical approval")
+    elif status in {"Ready", "Active", "Blocked"} and not approval.lower().startswith(
+        "approved"
+    ):
+        errors.append(f"{display_path} {status} plan must have approved technical approval")
+
+    for label in (
+        "Subsystem",
+        "Affected paths or contracts",
+        "Governing specification",
+        "Related documents or issue",
+        "Last updated",
+    ):
+        if metadata_value(text, label) is None:
+            errors.append(f"{display_path} is missing {label} metadata")
+
+    return errors
+
+
+def check_product_spec_metadata(text: str, display_path: str) -> list[str]:
+    """Validate current/proposed versions and approval for one product spec."""
+    errors: list[str] = []
+    current_raw = metadata_value(text, "Current version")
+    proposed_raw = metadata_value(text, "Proposed version")
+    proposal_status = metadata_value(text, "Proposal status")
+    implementation_status = metadata_value(text, "Implementation status")
+    approval = metadata_value(text, "Product approval")
+
+    current = None if current_raw == "None" else positive_version(current_raw)
+    proposed = None if proposed_raw == "None" else positive_version(proposed_raw)
+
+    if current_raw is None or (current_raw != "None" and current is None):
+        errors.append(f"{display_path} has invalid Current version metadata")
+    if proposed_raw is None or (proposed_raw != "None" and proposed is None):
+        errors.append(f"{display_path} has invalid Proposed version metadata")
+    if proposal_status not in PROPOSAL_STATUSES:
+        errors.append(
+            f"{display_path} has unsupported Proposal status: "
+            f"{proposal_status or 'missing'}"
+        )
+    if implementation_status not in IMPLEMENTATION_STATUSES:
+        errors.append(
+            f"{display_path} has unsupported Implementation status: "
+            f"{implementation_status or 'missing'}"
+        )
+    if approval is None:
+        errors.append(f"{display_path} is missing Product approval metadata")
+
+    if proposal_status == "None":
+        if proposed_raw != "None":
+            errors.append(f"{display_path} Proposal status None requires Proposed version None")
+        if approval is not None and not approval.lower().startswith("not applicable"):
+            errors.append(
+                f"{display_path} with no proposal must mark Product approval Not applicable"
+            )
+    elif proposal_status in {"Draft", "Approved"}:
+        if proposed is None:
+            errors.append(f"{display_path} {proposal_status} proposal needs a version")
+        elif approval is not None and (
+            f"specification version {proposed}" not in approval.lower()
+        ):
+            errors.append(
+                f"{display_path} Product approval does not identify specification "
+                f"version {proposed}"
+            )
+        if proposal_status == "Draft" and approval is not None and not approval.lower().startswith(
+            "pending"
+        ):
+            errors.append(f"{display_path} Draft proposal must have pending product approval")
+        if proposal_status == "Approved" and approval is not None and not approval.lower().startswith(
+            "approved"
+        ):
+            errors.append(f"{display_path} Approved proposal needs approved product approval")
+
+    if implementation_status == "Current" and current is None:
+        errors.append(f"{display_path} Current implementation needs a current version")
+
+    for label in ("Subsystem", "Last verified", "Related ExecPlans"):
+        if metadata_value(text, label) is None:
+            errors.append(f"{display_path} is missing {label} metadata")
+
+    return errors
 
 
 def canonical_files() -> list[Path]:
@@ -203,11 +327,7 @@ def check_plan_placement() -> list[str]:
         text = plan.read_text(encoding="utf-8")
         if not DATED_PLAN_NAME.match(name):
             errors.append(f"Active plan name is not dated: {repository_path(plan)}")
-        if not ACTIVE_STATUS.search(text):
-            errors.append(
-                f"Active plan is missing '**Status:** Active': "
-                f"{repository_path(plan)}"
-            )
+        errors.extend(check_open_plan_metadata(text, repository_path(plan)))
 
     for name, plan in sorted(completed.items()):
         text = plan.read_text(encoding="utf-8")
@@ -221,6 +341,18 @@ def check_plan_placement() -> list[str]:
     return errors
 
 
+def check_product_specs() -> list[str]:
+    """Report invalid lifecycle metadata in canonical product specs."""
+    errors: list[str] = []
+    product_specs = DOCS_ROOT / "product-specs"
+    for document in sorted(product_specs.glob("*.md")):
+        if document.name == "index.md":
+            continue
+        text = document.read_text(encoding="utf-8")
+        errors.extend(check_product_spec_metadata(text, repository_path(document)))
+    return errors
+
+
 def collect_errors() -> list[str]:
     """Run all documentation checks."""
     errors = check_required_files()
@@ -228,6 +360,7 @@ def collect_errors() -> list[str]:
     for directory in INDEXED_DIRECTORIES:
         errors.extend(check_index_coverage(directory))
     errors.extend(check_plan_placement())
+    errors.extend(check_product_specs())
     return errors
 
 

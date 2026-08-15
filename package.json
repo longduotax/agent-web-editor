@@ -17,10 +17,11 @@
     "test": "pnpm test:packages && vitest run",
     "test:integration": "pnpm test:packages && vitest run apps/server/src/app.test.ts apps/server/src/db/store.test.ts apps/server/src/inspector",
     "test:e2e": "pnpm build && playwright test",
+    "test:docs": "python3 -m unittest discover -s scripts -p 'test_*.py'",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "docs:check": "python3 scripts/check_docs.py",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm docs:check"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:docs && pnpm docs:check"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
