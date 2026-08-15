@@ -1,22 +1,31 @@
 # Web application
 
-React and Vite browser shell for the local coding-agent workspace.
+React workspace for persistent local projects and Pi-backed threads.
 
-## Boundary
+## Composition
 
-The browser may depend on `@pi-web/contracts`. It must not import server,
-agent-runtime, adapter, or Pi SDK implementation modules. Runtime interaction
-will cross an explicitly parsed HTTP or streaming contract once designed.
+React Router owns project/thread selection, TanStack Query owns parsed HTTP
+state, and live WebSocket events invalidate authoritative thread snapshots. The
+UI provides the nested project sidebar, transcript and run controls,
+Files/Changes/Terminal inspector, direct-execution disclosures, and responsive
+drawers.
+
+All transport values are parsed by `@pi-web/contracts`. The browser never
+imports server/runtime/adapter code and never receives canonical project roots
+or native session paths. Markdown raw HTML and images are disabled. xterm is
+used only for the explicit user-controlled local shell.
+
+Development runs on `127.0.0.1` at `PI_WEB_DEV_PORT` (default `5173`) and
+proxies relative `/api` HTTP and WebSocket traffic to `PI_WEB_PORT` (default
+`3001`). Both values may be stored in the repository-root `.env.local` file.
+Production
+assets are served by the backend from the same origin.
 
 ## Commands
-
-Run from the repository root:
 
 ```sh
 pnpm --filter @pi-web/web dev
 pnpm --filter @pi-web/web typecheck
 pnpm --filter @pi-web/web build
+pnpm vitest run apps/web
 ```
-
-The first command starts a service; use it only when runtime work is explicitly
-requested.

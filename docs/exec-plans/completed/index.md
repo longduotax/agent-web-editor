@@ -4,6 +4,9 @@ Completed, superseded, and abandoned plans are retained here as historical
 implementation context. They are not authoritative over current architecture,
 specifications, designs, code, or tests.
 
+- [Initial agent workspace specification](2026-08-15-initial-workspace-specification.md)
+  — recorded the approved project, thread, run, completion-notification,
+  workspace-layout, and persistence contract.
 - [Initial GitHub publication](2026-08-15-initial-github-publication.md)
   — initialized `main`, published the reviewed scaffold to GitHub, and verified
   local/remote commit parity.

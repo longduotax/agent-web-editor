@@ -1,9 +1,9 @@
 # Agent runtime
 
-Agent-agnostic interfaces for sessions, events, commands, capabilities, and
-lifecycle behavior.
+SDK-neutral interfaces for persistent session discovery/create/open, transcript
+snapshots, prompt preflight and settlement, steering, stopping, events, and
+lifecycle disposal.
 
-This package may depend on shared contracts but never on a concrete SDK or
-adapter. Interfaces will be added only when behavior and failure semantics are
-designed; the initial public entry point is intentionally empty rather than a
-speculative abstraction.
+Failures use application-owned categories. No Pi classes, paths, content blocks,
+or provider types cross this package boundary. Concrete Pi integration lives in
+`@pi-web/pi-adapter`; deterministic fakes live in application tests.
