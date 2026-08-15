@@ -501,7 +501,7 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
   );
 }
 
-function Composer({
+export function Composer({
   projectId,
   threadId,
   snapshot,
@@ -514,17 +514,15 @@ function Composer({
   const [text, setText] = useState(
     () => localStorage.getItem(`pi-draft:${threadId}`) ?? "",
   );
-  const [mode, setMode] = useState<"choose" | "steer" | "wait">("choose");
   const active = snapshot.currentRun?.state === "running";
   const mutation = useMutation({
     mutationFn: async () =>
-      active && mode === "steer"
+      active
         ? await steer(projectId, threadId, text)
         : await prompt(projectId, threadId, text),
     onSuccess: async () => {
       setText("");
       localStorage.removeItem(`pi-draft:${threadId}`);
-      setMode("choose");
       await queryClient.invalidateQueries({
         queryKey: ["snapshot", projectId, threadId],
       });
@@ -534,97 +532,61 @@ function Composer({
   useEffect(() => {
     localStorage.setItem(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
-  useEffect(() => {
-    if (!active && mode === "wait") setMode("choose");
-  }, [active, mode]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (text.trim() === "") return;
-    if (active && mode === "choose") return;
-    if (active && mode === "wait") return;
     mutation.mutate();
   };
   return (
     <form className="composer" onSubmit={submit}>
-      {active && mode === "choose" && (
-        <div
-          className="send-choice"
-          role="group"
-          aria-label="Send while agent is running"
-        >
-          <span>Agent is working. Send as:</span>
+      <div className="composer-input">
+        <textarea
+          aria-label="Message Pi"
+          placeholder="Ask Pi to work in this project…"
+          rows={3}
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (
+              event.key !== "Enter" ||
+              event.shiftKey ||
+              event.nativeEvent.isComposing
+            )
+              return;
+            event.preventDefault();
+            event.currentTarget.form?.requestSubmit();
+          }}
+        />
+        <div className="composer-actions">
+          <span>Enter to send · Shift + Enter for a new line</span>
+          {active && (
+            <button
+              type="button"
+              className="stop"
+              onClick={() =>
+                void stop(projectId, threadId).then(() =>
+                  queryClient.invalidateQueries({
+                    queryKey: ["snapshot", projectId, threadId],
+                  }),
+                )
+              }
+            >
+              ■ Stop
+            </button>
+          )}
           <button
-            type="button"
-            onClick={() => {
-              setMode("steer");
-            }}
+            type="submit"
+            className="send"
+            aria-label={active ? "Steer current run" : "Send message"}
+            title={active ? "Steer current run" : "Send message"}
+            disabled={mutation.isPending || text.trim() === ""}
           >
-            Steer current run
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode("wait");
-            }}
-          >
-            Wait until finished
+            <span aria-hidden="true">↑</span>
           </button>
         </div>
-      )}
-      {active && mode === "wait" && (
-        <p className="wait-note">
-          Draft is waiting locally. Submit it after this run finishes.{" "}
-          <button
-            type="button"
-            onClick={() => {
-              setMode("steer");
-            }}
-          >
-            Steer instead
-          </button>
-        </p>
-      )}
-      <textarea
-        aria-label="Message Pi"
-        placeholder="Ask Pi to work in this project…"
-        rows={3}
-        value={text}
-        onChange={(event) => {
-          setText(event.target.value);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey))
-            event.currentTarget.form?.requestSubmit();
-        }}
-      />
-      <div className="composer-actions">
-        <span>Ctrl/⌘ + Enter to send</span>
-        {active && (
-          <button
-            type="button"
-            className="stop"
-            onClick={() =>
-              void stop(projectId, threadId).then(() =>
-                queryClient.invalidateQueries({
-                  queryKey: ["snapshot", projectId, threadId],
-                }),
-              )
-            }
-          >
-            ■ Stop
-          </button>
-        )}
-        <button
-          type="submit"
-          disabled={
-            mutation.isPending ||
-            text.trim() === "" ||
-            (active && mode !== "steer")
-          }
-        >
-          {active ? "Steer" : "Send"} ↑
-        </button>
       </div>
       {mutation.error !== null && <ErrorNotice error={mutation.error} />}
     </form>

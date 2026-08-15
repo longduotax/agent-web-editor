@@ -62,7 +62,7 @@ Duplicate events are harmless: the browser reducer keys by epoch/sequence and st
 
 - Route selection determines which thread snapshot is displayed; each tab owns its route and subscription.
 - Query/cache state is transient. Durable selection fallback comes from the server's project metadata.
-- “Steer” submits immediately to the active run. “Wait until it finishes” keeps a versioned local draft and does not send/accept a server command until the run is stopped; the user then submits it as a new prompt. This avoids hidden durable queues and Pi follow-up ambiguity.
+- Submitting from an active thread steers its current run immediately. Text left unsent remains a versioned local draft; there is no wait mode, hidden durable queue, or Pi follow-up queue.
 - Opening a completed result sends an idempotent viewed command only after that result is rendered as the selected thread. A completion that arrives while already selected is acknowledged without durable unread.
 
 ## Alternatives considered
@@ -85,4 +85,4 @@ Malformed frames close the subscription with a stable protocol error. An expired
 - Subscribe/snapshot race, event during snapshot, monotonic sequence, duplicate/out-of-order/gap, matching/different epoch, ring overflow, and runtime replacement.
 - Slow consumer, heartbeat, malformed/oversized frame, unpermitted Origin or unknown-thread subscription, and listener cleanup.
 - Reducer idempotency when snapshot/replay is applied twice.
-- Two independent browser contexts, reconnect during streaming/completion, already-viewing completion, and local wait-draft behavior.
+- Two independent browser contexts, reconnect during streaming/completion, already-viewing completion, direct active-run steering, and local draft behavior.

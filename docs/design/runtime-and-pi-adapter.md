@@ -55,7 +55,7 @@ The UI displays command/tool input, cwd, bounded output, exit/error state, and a
   running child work and cancels already-started preflight work before disposal
   and soft removal complete.
 - `steer()` and stop resolve the running run through its owning thread and do not affect other active project threads.
-- “Wait until it finishes” retains the browser draft and submits it only after settlement as a new run; it does not use Pi follow-up queueing.
+- Submitting while a run is active calls `steer()` immediately; text left unsent remains a browser-local draft, and the application does not use Pi follow-up queueing.
 - Stop calls `abort()` and transitions to `interrupted` after authoritative settlement.
 - Completion/provider/tool errors transition exactly once to completed or failed.
 - Server restart marks unfinished runs interrupted because live in-process Pi runtimes are not reconnectable initially.
@@ -89,6 +89,6 @@ Missing/corrupt sessions affect only their thread. Provider/tool failures map to
 - Session discovery/open/import with v1-v3, branch, compaction, malformed, missing, duplicate UUID, cwd mismatch, and no-rewrite byte assertions.
 - Controlled Pi event fixtures, unknown events, partial streaming, SDK throws, and output bounds.
 - Prompt event-before-preflight, reject, accept then resolve/reject, duplicate callback defense, and buffered ordering.
-- Concurrent submissions in distinct project threads, same-thread exclusion, independent steering/stop/settlement, multi-run project removal, wait draft, and restart reconciliation.
+- Concurrent submissions in distinct project threads, same-thread exclusion, independent steering/stop/settlement, multi-run project removal, local drafts, and restart reconciliation.
 - Pi resource/trust fixture tests proving behavior matches SDK `0.84.2` without an application approval hook.
 - UI disclosure that enabled tools execute with user permissions and no sandbox/approval.

@@ -6,14 +6,21 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import type {
+  ProjectId,
+  RunId,
+  ThreadId,
+  ThreadSnapshot,
+} from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
   discoverSessions: vi.fn(),
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
   importThread: vi.fn(),
+  prompt: vi.fn(),
   renameThread: vi.fn(),
+  steer: vi.fn(),
 }));
 
 vi.mock("./api/client.js", async (importOriginal) => {
@@ -23,7 +30,7 @@ vi.mock("./api/client.js", async (importOriginal) => {
 
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
-import { App } from "./App.js";
+import { App, Composer } from "./App.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -52,6 +59,119 @@ describe("safe and accessible workspace rendering", () => {
     expect(
       screen.queryByText("Opening local workspace…"),
     ).not.toBeInTheDocument();
+  });
+
+  it("sends with Enter, uses Shift+Enter for a new line, and steers active runs", async () => {
+    const user = userEvent.setup();
+    const drafts = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => drafts.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        drafts.set(key, value);
+      },
+      removeItem: (key: string) => {
+        drafts.delete(key);
+      },
+    });
+    api.prompt.mockResolvedValue(undefined);
+    api.steer.mockResolvedValue(undefined);
+    const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+    const snapshot: ThreadSnapshot = {
+      version: 1,
+      project: {
+        id: projectId,
+        displayName: "Example project",
+        displayPath: "/example",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        available: true,
+        gitAvailable: true,
+        sidebarExpanded: true,
+        unreadCount: 0,
+        lastOpenedThreadId: threadId,
+      },
+      thread: {
+        id: threadId,
+        projectId,
+        title: "Example thread",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:00.000Z",
+        runState: null,
+        unread: false,
+        runtimeAvailable: true,
+      },
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <Composer
+          projectId={projectId}
+          threadId={threadId}
+          snapshot={snapshot}
+        />
+      </QueryClientProvider>,
+    );
+
+    const message = screen.getByRole("textbox", { name: "Message Pi" });
+    await user.type(message, "First line");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(message, "Second line");
+    expect(message).toHaveValue("First line\nSecond line");
+
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.prompt).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "First line\nSecond line",
+      );
+      expect(message).toHaveValue("");
+    });
+
+    const activeSnapshot: ThreadSnapshot = {
+      ...snapshot,
+      thread: { ...snapshot.thread, runState: "running" },
+      currentRun: {
+        id: "50000000-0000-4000-8000-000000000001" as RunId,
+        projectId,
+        threadId,
+        state: "running",
+        startedAt: "2026-01-01T00:01:00.000Z",
+        endedAt: null,
+        failureCode: null,
+        failureMessage: null,
+      },
+    };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <Composer
+          projectId={projectId}
+          threadId={threadId}
+          snapshot={activeSnapshot}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("Wait until finished")).not.toBeInTheDocument();
+    await user.type(message, "Focus on the tests");
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Focus on the tests",
+      );
+      expect(message).toHaveValue("");
+    });
   });
 
   it("gives run states a non-color cue and accessible label", () => {

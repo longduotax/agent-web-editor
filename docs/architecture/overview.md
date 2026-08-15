@@ -114,8 +114,8 @@ TanStack Query owns parsed server state. The project sidebar uses one Browse
 control backed by a request-policy-protected browse-and-register mutation; selected
 canonical paths never enter browser state or wire responses. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
-explicit steer/wait/stop
-controls, direct-execution disclosure, Files/Changes/Terminal inspector, and
+direct active-run steering and stop controls, direct-execution disclosure,
+Files/Changes/Terminal inspector, and
 responsive drawers. Local storage is limited to unsent per-thread drafts.
 
 Every HTTP response and WebSocket frame is parsed with contracts. Raw Markdown

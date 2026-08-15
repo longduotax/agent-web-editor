@@ -250,17 +250,17 @@ Tests use temporary directories and databases, ephemeral ports, deterministic fa
 
 ### Milestone 4 — run state machine, direct Pi execution, steering, and stop
 
-**Red:** Model run transitions as table-driven tests. Cover accepted/rejected prompt preflight, duplicated idempotency keys, simultaneous accepted prompts in two threads of one project, rejection of a second independent prompt in one running thread, runs in different projects, independent steering and stopping, multi-run project removal, wait-draft behavior, abort, provider/tool error, server shutdown, and illegal transitions. Start with migration/store tests, continue with service tests using the fake runtime, then adapter tests with exhaustive controlled Pi events and native resource/trust fixtures.
+**Red:** Model run transitions as table-driven tests. Cover accepted/rejected prompt preflight, duplicated idempotency keys, simultaneous accepted prompts in two threads of one project, rejection of a second independent prompt in one running thread, runs in different projects, independent steering and stopping, multi-run project removal, local draft behavior, abort, provider/tool error, server shutdown, and illegal transitions. Start with migration/store tests, continue with service tests using the fake runtime, then adapter tests with exhaustive controlled Pi events and native resource/trust fixtures.
 
 **Green:**
 
 - Implement the SDK-neutral runtime interface and a per-thread runtime owner in the server.
 - Acquire the thread execution lease around prompt preflight. Buffer adapter events until Pi preflight confirms acceptance, then atomically persist command receipt/run state before publishing; discard/reconcile rejected preflight without a phantom run.
 - Translate narrowed Pi messages, text deltas, tool calls/results, command cwd/output/exit state, retry/compaction, and terminal errors into application events without leaking SDK objects.
-- Implement explicit steer, wait-draft semantics, and stop commands with idempotency and ownership checks.
+- Implement direct active-run steering, local draft persistence, and stop commands with idempotency and ownership checks.
 - Use Pi's native resources/project trust and direct tool behavior without an application blocking hook; show the direct-execution/no-sandbox disclosure before tools are enabled.
 - Reconcile unfinished runs to `interrupted` on restart unless the adapter proves a reconnectable live runtime.
-- Render the composer, active-send choice, stop action, collapsible tool/command activity, trust warning, and accessible running/failure/interruption cues.
+- Render the composer, direct active-run steering, stop action, collapsible tool/command activity, trust warning, and accessible running/failure/interruption cues.
 
 **Refactor/gate:** Run transition tests under randomized event interleavings with fake timers. Ensure two threads in one project can run simultaneously, settle in either order, and remain independently readable and controllable. Any unrecognized SDK event fails at the adapter boundary or maps to an explicitly designed unsupported-event diagnostic; it is never cast through.
 
@@ -479,7 +479,7 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
 - Pi currently executes enabled tools without application permission popups. The web workspace intentionally matches that behavior and must disclose the lack of approval/sandboxing.
 - Pi session history is versioned JSONL with branching and compaction. The adapter should use `SessionManager` for access but still narrow every returned/raw shape at its boundary and keep native paths server-private.
 - Pi SDK 0.84.2 does not write a newly created session until an assistant message exists. Recording that in-memory UUID as durable thread metadata made the first prompt fail because a fresh listing could not resolve it. The adapter now narrowly parses and exclusively materializes the new manager's initial JSONL before returning the UUID; temp-directory restart coverage verifies the session can be discovered and opened without a provider call.
-- “Wait until it finishes” is resolved as a local draft that can be submitted as a new run after settlement, not Pi follow-up queueing.
+- Submitting the composer during an active run steers immediately; unsent text remains a local draft and is never Pi follow-up queueing.
 - Native history represents a tool call and its result as separate transcript items. Rendering both as bordered raw-JSON cards duplicated every operation and overwhelmed the conversation; the Pi adapter now pairs each pending/result item by native tool-call ID before browser presentation, while preserving the parsed snapshot as authoritative state.
 - The existing runtime map, broker, snapshot, thread summaries, and Pi adapter are already thread-scoped; the blocking assumptions are localized to the store index/query and workspace lease/lifecycle paths.
 - Shared-working-tree edit conflicts are native Pi behavior and are explicitly not solved by this revision. The inspector remains project-wide.

@@ -100,10 +100,9 @@ streaming agent output, tool and command activity, errors, and a composer fixed
 near the bottom. It supports Markdown and syntax-highlighted code blocks. Tool
 and command details are collapsible.
 
-The user can stop an active run. The initial steering interaction is explicit:
-when sending while work is active, the user chooses to steer the current run or
-wait until it finishes. Automatic sub-agent delegation is not part of this
-specification.
+The user can stop an active run. Submitting the composer while work is active
+steers the current run directly; text left unsent remains a local draft.
+Automatic sub-agent delegation is not part of this specification.
 
 ### Inspector
 
@@ -192,10 +191,10 @@ working directory, so project-wide files, Git state, and inspector output may
 change because of any running thread; the application does not attribute those
 changes to one thread or prevent conflicting edits.
 
-A second prompt in a running thread is not a separate concurrent run. The user
-may steer that thread's current run or retain a draft until it settles. A server
-restart marks every unfinished run as interrupted unless the runtime can prove
-that it is still executing and reconnectable.
+A second prompt submitted in a running thread steers that thread's current run
+instead of starting a separate concurrent run. Text left unsent remains a local
+draft. A server restart marks every unfinished run as interrupted unless the
+runtime can prove that it is still executing and reconnectable.
 
 The selected thread is represented by the browser route. Each project also
 remembers its last-opened thread as a convenience when the user opens the

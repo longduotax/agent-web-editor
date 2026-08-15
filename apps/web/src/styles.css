@@ -460,34 +460,50 @@ a:focus-visible {
   border-top: 1px solid var(--border);
   background: #101318;
 }
+.composer-input {
+  width: min(100%, 54rem);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #3a414d;
+  border-radius: 0.85rem;
+  background: #171b22;
+  box-shadow: 0 0.35rem 1.2rem rgba(0, 0, 0, 0.18);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.composer-input:focus-within {
+  border-color: #657080;
+  box-shadow:
+    0 0 0 1px rgba(91, 156, 255, 0.2),
+    0 0.35rem 1.2rem rgba(0, 0, 0, 0.24);
+}
 .composer textarea {
   display: block;
   width: 100%;
-  resize: vertical;
-  padding: 0.8rem;
-  border: 1px solid #343c4a;
-  border-radius: 0.6rem 0.6rem 0 0;
+  resize: none;
+  padding: 0.9rem 1rem 0.45rem;
+  border: 0;
   color: #ecedf1;
-  background: #171b22;
-  line-height: 1.4;
+  background: transparent;
+  line-height: 1.45;
+}
+.composer textarea:focus-visible {
+  outline: none;
 }
 .composer-actions {
   display: flex;
+  min-height: 2.65rem;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.38rem;
-  border: 1px solid #343c4a;
-  border-top: 0;
-  border-radius: 0 0 0.6rem 0.6rem;
-  background: #171b22;
+  padding: 0.35rem 0.5rem 0.5rem 0.9rem;
 }
 .composer-actions > span {
   flex: 1;
   color: var(--muted);
   font-size: 0.67rem;
 }
-.composer-actions button,
-.send-choice button {
+.composer-actions button {
   padding: 0.38rem 0.7rem;
   border: 1px solid #3d6499;
   border-radius: 0.35rem;
@@ -499,26 +515,25 @@ a:focus-visible {
   color: #ffb5b9;
   background: #351e22;
 }
-.send-choice,
-.wait-note {
-  margin: 0 0 0.5rem;
-  padding: 0.5rem;
-  border: 1px solid #554a31;
-  border-radius: 0.4rem;
-  color: #d8c89e;
-  background: #211e17;
-  font-size: 0.75rem;
+.composer-actions .send {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border-color: #eef0f3;
+  border-radius: 50%;
+  color: #14171c;
+  background: #eef0f3;
+  font-size: 1.05rem;
+  font-weight: 700;
 }
-.send-choice {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.wait-note button {
-  border: 0;
-  color: #a9c9ff;
-  background: none;
-  text-decoration: underline;
+.composer-actions .send:disabled {
+  border-color: #343a45;
+  color: #777f8c;
+  background: #292e37;
+  cursor: not-allowed;
 }
 .inspector {
   display: flex;
@@ -809,9 +824,5 @@ a:focus-visible {
   }
   .trust-warning {
     padding-inline: 0.7rem;
-  }
-  .send-choice {
-    align-items: stretch;
-    flex-direction: column;
   }
 }

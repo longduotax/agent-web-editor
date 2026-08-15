@@ -30,7 +30,7 @@ Versioned localStorage is limited to safe device UI preferences and drafts:
 
 - inspector open tab/width and sidebar width;
 - collapsed activity/display preferences; and
-- unsent composer draft per opaque thread ID, including the “wait” draft.
+- unsent composer draft per opaque thread ID.
 
 Malformed or unknown-version local values are discarded explicitly. Project/thread selection, unread state, runs, and transcripts are never sourced from localStorage.
 
@@ -42,7 +42,7 @@ Malformed or unknown-version local values are discarded explicitly. Project/thre
   remove/expand/unavailable states. The browser never receives or constructs the
   selected absolute project path.
 - `features/threads`: route loader, thread list/rename, transcript and activity rendering.
-- `features/runs`: composer, active-send choice, stop, status, trust disclosure, and streaming reducer.
+- `features/runs`: composer, direct active-run steering, stop, status, trust disclosure, and streaming reducer.
 - `features/inspector`: resizable shell and Changes/Files/Terminal tabs.
 - `components`: reusable buttons, dialogs, split panes, status icons, error/empty states, and Markdown/code renderer.
 
@@ -106,7 +106,7 @@ There is no bootstrap or re-authentication screen. A malformed server response/f
 - Response/frame parser execution, malformed values, stable errors, credential-free initial rendering, idempotent retry, and snapshot reset.
 - Project-only fallback, deep-link refresh, deleted/mismatched route IDs, and two independent tabs.
 - Add/remove/expand/rename/order/unread/status UI behavior.
-- Composer multiline, steer/wait/stop, draft restoration, direct-execution disclosure, and streaming de-duplication.
+- Composer multiline, direct active-run steering, stop, draft restoration, direct-execution disclosure, and streaming de-duplication.
 - Markdown XSS/dangerous URL/raw HTML, code fallback, huge bounded output, and disclosure controls.
 - Desktop resize bounds/persistence; narrow drawers/focus/Escape/restoration; reduced motion.
 - Automated accessibility checks and explicit role/name/live-region/resizer assertions.
