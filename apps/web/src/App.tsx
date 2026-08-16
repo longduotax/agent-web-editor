@@ -1083,7 +1083,7 @@ function NewChatRoute() {
               >
                 {workspace.data?.projects.map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
-                    📁 {candidate.displayName}
+                    {candidate.displayName}
                   </option>
                 ))}
               </select>
@@ -1105,9 +1105,9 @@ function NewChatRoute() {
                   value="worktree"
                   disabled={preflight.data?.worktreeAvailable === false}
                 >
-                  ↗ New worktree
+                  New worktree
                 </option>
-                <option value="shared">⌂ Local checkout</option>
+                <option value="shared">Local checkout</option>
               </select>
             </label>
             <label>
@@ -1126,11 +1126,11 @@ function NewChatRoute() {
                 }}
               >
                 {mode === "shared" && (
-                  <option value="current">● Current local files</option>
+                  <option value="current">Current local files</option>
                 )}
                 {mode === "worktree" && (
                   <>
-                    <option value="none">◫ Clean start</option>
+                    <option value="none">Clean start</option>
                     <option
                       value="tracked_and_untracked"
                       disabled={
@@ -1141,7 +1141,7 @@ function NewChatRoute() {
                         (preflight.data?.changes?.files.length ?? 0) === 0
                       }
                     >
-                      ● Include local changes
+                      Include local changes
                     </option>
                   </>
                 )}
@@ -1161,7 +1161,7 @@ function NewChatRoute() {
               >
                 {(preflight.data?.branches ?? []).map((branch) => (
                   <option key={branch} value={branch}>
-                    ⑂ {branch}
+                    {branch}
                   </option>
                 ))}
               </select>

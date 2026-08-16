@@ -16,7 +16,9 @@
   --surface-1: #12151b;
   --surface-2: #181c24;
   --surface-3: #202631;
+  --surface-hover: #232832;
   --border: #2a303c;
+  --text: #e5e8ef;
   --muted: #9199aa;
   --blue: #5b9cff;
   --red: #f06b73;
@@ -216,8 +218,7 @@ a:focus-visible {
   min-width: 0;
   flex: 1;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.5rem 0.55rem;
+  padding: 0.5rem 2.2rem 0.5rem 0.55rem;
   text-decoration: none;
   font-size: 0.84rem;
 }
@@ -228,13 +229,23 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.thread-link > .status {
+  position: absolute;
+  top: 50%;
+  right: 0.72rem;
+  transform: translateY(-50%);
+}
+.thread-row:hover .thread-link > .status,
+.thread-row:focus-within .thread-link > .status {
+  opacity: 0;
+}
 .thread-archive-button {
   visibility: hidden;
+  position: absolute;
+  right: 0.22rem;
   display: grid;
   width: 1.75rem;
   height: 1.75rem;
-  margin-right: 0.22rem;
-  flex: none;
   place-items: center;
   border: 0;
   border-radius: 0.3rem;
@@ -578,7 +589,7 @@ a:focus-visible {
     0 0 0 1px rgba(91, 156, 255, 0.2),
     0 0.35rem 1.2rem rgba(0, 0, 0, 0.24);
 }
-.composer textarea {
+.composer-input textarea {
   display: block;
   width: 100%;
   resize: none;
@@ -588,7 +599,7 @@ a:focus-visible {
   background: transparent;
   line-height: 1.45;
 }
-.composer textarea:focus-visible {
+.composer-input textarea:focus-visible {
   outline: none;
 }
 .composer-actions {
@@ -934,47 +945,57 @@ a:focus-visible {
   padding: 2rem;
 }
 .new-chat-card {
-  width: min(760px, 100%);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: #17191d;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+  width: min(700px, 100%);
   overflow: hidden;
+  border: 1px solid #303641;
+  border-radius: 14px;
+  background: #171a20;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
 }
 .new-chat-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0.65rem 0.75rem 0;
+  gap: 0.15rem;
+  padding: 0.55rem 0.65rem 0.35rem;
 }
 .new-chat-toolbar select {
-  max-width: 220px;
+  max-width: 200px;
+  padding: 0.4rem 0.5rem;
   border: 0;
-  border-radius: 8px;
-  padding: 0.45rem 0.55rem;
+  border-radius: 7px;
   color: var(--text);
   background: transparent;
-  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
 }
 .new-chat-toolbar select:hover:not(:disabled),
 .new-chat-toolbar select:focus-visible {
   background: var(--surface-hover);
+  outline: none;
 }
 .new-chat-toolbar select:disabled {
   color: var(--muted);
+  cursor: default;
 }
 .new-chat-input {
   border: 0;
+  border-top: 1px solid #252b34;
   border-radius: 0;
   background: transparent;
+  box-shadow: none;
+}
+.new-chat-input:focus-within {
+  border-color: #343c48;
+  box-shadow: inset 0 1px rgba(91, 156, 255, 0.12);
 }
 .new-chat-input textarea {
-  min-height: 150px;
+  min-height: 132px;
+  padding: 1rem 1rem 0.4rem;
 }
 .new-chat-note {
-  margin: 0.5rem 1rem 0;
+  margin: 0.15rem 1rem 0.55rem;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
 }
 .new-chat-note.warning {
   color: #d8b26d;
