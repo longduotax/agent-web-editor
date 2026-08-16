@@ -24,3 +24,7 @@ specifications, designs, code, or tests.
   — made capability specifications and versioned technical plans co-evolving
   Draft artifacts with explicit product and implementation approvals,
   traceability, invalidation rules, and validator coverage.
+- [Codex-style thread actions and archival](2026-08-16-thread-actions.md) —
+  added right-click and keyboard Rename/Archive actions, a direct hover/focus
+  Archive icon, durable inactive-thread archival, and compact inline run
+  signals.

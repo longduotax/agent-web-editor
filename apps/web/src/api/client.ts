@@ -1,5 +1,6 @@
 import {
   ApiErrorSchema,
+  ArchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
@@ -102,6 +103,13 @@ export async function createThread(projectId: ProjectId) {
   return await request(
     `/api/projects/${projectId}/threads`,
     ThreadMutationResponseSchema,
+    { method: "POST", body: body({ idempotencyKey: commandId() }) },
+  );
+}
+export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/archive`,
+    ArchiveThreadResponseSchema,
     { method: "POST", body: body({ idempotencyKey: commandId() }) },
   );
 }

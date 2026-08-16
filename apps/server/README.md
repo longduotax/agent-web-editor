@@ -27,7 +27,8 @@ and approved designs under `docs/design/`.
 - Production binds only `127.0.0.1`, serves the built SPA, and prints a plain
   launch URL. No token, cookie, or login is required; any same-machine process
   can access the server while it runs.
-- Metadata migrations v1-v2 are committed under `migrations/`; v2 permits one running run per thread, including concurrent threads in one project.
+- Metadata migrations v1-v3 are committed under `migrations/`; v2 permits one
+  running run per thread, and v3 adds non-destructive thread archival.
 
 Tests use newly created temporary state/project directories and injected
 runtimes/PTYS. They do not use configured databases or native user sessions.

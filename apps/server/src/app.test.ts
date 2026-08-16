@@ -8,6 +8,7 @@ import type {
   PromptAcceptance,
 } from "@pi-web/agent-runtime";
 import {
+  ArchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   ProjectsResponseSchema,
 } from "@pi-web/contracts";
@@ -114,6 +115,62 @@ const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
 describe("credential-free project API", () => {
+  it("archives a thread through a strict idempotent endpoint", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const thread = await server.workspaceContext.workspace.createThread(
+      project.id,
+    );
+    const url = `/api/projects/${project.id}/threads/${thread.id}/archive`;
+    const headers = { host, origin, "x-pi-web-request": "1" };
+
+    const malformed = await server.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+        deleteHistory: true,
+      },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const response = await server.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(ArchiveThreadResponseSchema.parse(response.json())).toEqual({
+      archived: true,
+    });
+    expect((await server.workspaceContext.workspace.list()).threads).toEqual(
+      [],
+    );
+    const snapshot = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}`,
+      headers: { host },
+    });
+    expect(snapshot.statusCode).toBe(404);
+    await server.close();
+  });
+
   it("maps a durable thread-run lease conflict to the busy response", async () => {
     const paths = await directories();
     const config = parseConfig({
