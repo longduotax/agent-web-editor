@@ -16,3 +16,7 @@ superseded, or abandoned.
   projection, append-stable opaque cursors, a bounded browser page window,
   polite live following, latest-edge entry, anchor-preserving older-history
   navigation, and a restrained transcript scrollbar.
+- [Isolated worktree review environment](2026-08-16-worktree-review-environment.md) —
+  Active plan version 1 adds a manually invoked project-local Pi skill and
+  checked-in start/close commands for random-port, disposable-SQLite UI review
+  environments that hard-refuse the main worktree.

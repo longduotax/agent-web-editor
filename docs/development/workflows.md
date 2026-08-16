@@ -92,6 +92,32 @@ loads the workspace without authentication.
 Do not start either process unless the current task requires runtime work or
 verification.
 
+### Isolated linked-worktree UI review
+
+A linked worktree can run one disposable review environment without sharing the
+main development server's ports or state:
+
+```sh
+pnpm dev:review
+```
+
+The command installs frozen-lockfile dependencies when `node_modules/` is
+missing, refuses the main worktree, chooses random loopback ports, creates a
+private temporary `PI_WEB_STATE_DIR`, starts the normal development processes,
+waits for direct and proxied readiness, and prints the browser URL. Running it
+again returns the healthy existing environment for that worktree.
+
+Stop it and remove its SQLite database, logs, and process metadata with:
+
+```sh
+pnpm dev:review:close
+```
+
+Cleanup proves ownership before terminating the recorded process group and is
+safe to repeat. The project-local, manual-only Pi command `/skill:start-env`
+wraps these two commands; use `/skill:start-env cleanup` to close the instance.
+Neither path updates or restarts the hosted application.
+
 Build and run the loopback production server, including the built web
 application, with:
 
