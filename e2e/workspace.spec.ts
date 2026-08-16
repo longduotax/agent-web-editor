@@ -164,4 +164,42 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await expect(
     page.getByText(/Pi tools run with your user permissions/),
   ).toBeVisible();
+
+  const inspector = page.getByRole("complementary", {
+    name: "Project inspector",
+  });
+  await expect(inspector).toHaveCount(0);
+  await page.getByRole("button", { name: "Open inspector panel" }).click();
+  await expect(inspector).toBeVisible();
+  await page.getByRole("tab", { name: "Files" }).click();
+  await page.getByRole("button", { name: "Close inspector panel" }).click();
+  await expect(inspector).toHaveCount(0);
+  await page.reload();
+  await expect(inspector).toHaveCount(0);
+  await page.getByRole("button", { name: "Open inspector panel" }).click();
+  await expect(
+    page.getByRole("tab", { name: "Files", selected: true }),
+  ).toBeVisible();
+
+  const separator = page.getByRole("separator", {
+    name: "Resize inspector panel",
+  });
+  await page.waitForTimeout(250);
+  const beforeResize = await inspector.boundingBox();
+  const separatorBox = await separator.boundingBox();
+  if (beforeResize === null || separatorBox === null)
+    throw new Error("Inspector resize controls were not laid out");
+  await page.mouse.move(
+    separatorBox.x + separatorBox.width / 2,
+    separatorBox.y + 20,
+  );
+  await page.mouse.down();
+  await page.mouse.move(separatorBox.x - 160, separatorBox.y + 20);
+  await page.mouse.up();
+  const afterResize = await inspector.boundingBox();
+  expect(afterResize?.width).toBeGreaterThan(beforeResize.width + 100);
+  await page.reload();
+  await expect(inspector).toBeVisible();
+  const restored = await inspector.boundingBox();
+  expect(restored?.width).toBeCloseTo(afterResize?.width ?? 0, 0);
 });

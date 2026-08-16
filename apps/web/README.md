@@ -11,9 +11,11 @@ registration, a Codex-style inline new-chat composer with clean-worktree,
 local-change-transfer, or local-checkout choices, Codex-style thread context
 and hover archival actions, compact inline run indicators, transcript and run
 controls, a thread-scoped Files/Changes/Terminal inspector, direct-execution
-disclosures, and responsive drawers. Selection and
-registration are combined on the server, so the native selected path never
-enters browser state.
+disclosures, and responsive drawers. The inspector uses a reduced-motion-aware slide to close
+and reopen and can be resized with a pointer or keyboard; its open state,
+selected tab, and width are restored from a versioned, parsed device-local
+preference. Selection and registration are
+combined on the server, so the native selected path never enters browser state.
 
 All transport values are parsed by `@pi-web/contracts`. The browser never
 imports server/runtime/adapter code and never receives canonical project roots

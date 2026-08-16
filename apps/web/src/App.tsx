@@ -2,6 +2,8 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SyntheticEvent,
 } from "react";
@@ -52,6 +54,15 @@ import { Activity, displayTranscript } from "./components/Activity.js";
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
+import {
+  INSPECTOR_MAX_WIDTH,
+  INSPECTOR_MIN_WIDTH,
+  INSPECTOR_TABS,
+  readInspectorPreferences,
+  writeInspectorPreferences,
+  type InspectorPreferences,
+  type InspectorTab,
+} from "./inspectorPreferences.js";
 
 interface DraftStorage {
   getItem(key: string): unknown;
@@ -813,21 +824,101 @@ export function Composer({
   );
 }
 
+const DESKTOP_SIDEBAR_WIDTH = 272;
+const MIN_THREAD_WIDTH = 360;
+const INSPECTOR_RESIZE_STEP = 24;
+
+function PanelRightIcon() {
+  return (
+    <svg className="panel-right-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2" />
+      <path d="M9.25 2.75v10.5" />
+    </svg>
+  );
+}
+
+function inspectorMaxWidth(viewportWidth: number): number {
+  return Math.min(
+    INSPECTOR_MAX_WIDTH,
+    Math.max(
+      INSPECTOR_MIN_WIDTH,
+      viewportWidth - DESKTOP_SIDEBAR_WIDTH - MIN_THREAD_WIDTH,
+    ),
+  );
+}
+
 function Inspector({
   project,
   threadId,
+  tab,
+  width,
+  onTabChange,
+  onWidthChange,
+  onClose,
+  open,
 }: {
   project: Project;
   threadId: ThreadId;
+  tab: InspectorTab;
+  width: number;
+  onTabChange: (tab: InspectorTab) => void;
+  onWidthChange: (width: number) => void;
+  onClose: () => void;
+  open: boolean;
 }) {
-  const [tab, setTab] = useState<"changes" | "files" | "terminal">("changes");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [resizing, setResizing] = useState(false);
+  const resizingPointer = useRef<number | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const maxWidth = inspectorMaxWidth(viewportWidth);
+  const effectiveWidth = Math.min(
+    maxWidth,
+    Math.max(INSPECTOR_MIN_WIDTH, width),
+  );
   useEffect(() => {
     setSelectedPath(null);
     setSearch("");
-    setTab("changes");
   }, [threadId]);
+  useEffect(() => {
+    const resized = () => {
+      setViewportWidth(window.innerWidth);
+    };
+    window.addEventListener("resize", resized);
+    return () => {
+      window.removeEventListener("resize", resized);
+    };
+  }, []);
+  const resizeFromClientX = (clientX: number) => {
+    onWidthChange(
+      Math.min(
+        maxWidth,
+        Math.max(INSPECTOR_MIN_WIDTH, Math.round(window.innerWidth - clientX)),
+      ),
+    );
+  };
+  const finishResize = (element: HTMLDivElement, pointerId: number) => {
+    resizingPointer.current = null;
+    if (
+      typeof element.hasPointerCapture === "function" &&
+      typeof element.releasePointerCapture === "function" &&
+      element.hasPointerCapture(pointerId)
+    )
+      element.releasePointerCapture(pointerId);
+    setResizing(false);
+  };
+  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    let nextWidth: number | undefined;
+    if (event.key === "ArrowLeft")
+      nextWidth = effectiveWidth + INSPECTOR_RESIZE_STEP;
+    if (event.key === "ArrowRight")
+      nextWidth = effectiveWidth - INSPECTOR_RESIZE_STEP;
+    if (event.key === "Home") nextWidth = INSPECTOR_MIN_WIDTH;
+    if (event.key === "End") nextWidth = maxWidth;
+    if (nextWidth === undefined) return;
+    event.preventDefault();
+    onWidthChange(Math.min(maxWidth, Math.max(INSPECTOR_MIN_WIDTH, nextWidth)));
+  };
   const status = useQuery({
     queryKey: ["git", project.id, threadId],
     queryFn: () => getStatus(project.id, threadId),
@@ -849,24 +940,75 @@ function Inspector({
     enabled: tab === "changes" && selectedPath !== null,
   });
   return (
-    <aside className="inspector" aria-label="Project inspector">
-      <div className="inspector-tabs" role="tablist">
-        {(["changes", "files", "terminal"] as const).map((name) => (
-          <button
-            role="tab"
-            aria-selected={tab === name}
-            key={name}
-            onClick={() => {
-              setTab(name);
-              setSelectedPath(null);
-            }}
-          >
-            {name[0]?.toUpperCase()}
-            {name.slice(1)}
-          </button>
-        ))}
+    <aside
+      className="inspector"
+      aria-label="Project inspector"
+      aria-hidden={!open}
+      inert={!open}
+    >
+      <div
+        className={`inspector-resizer ${resizing ? "resizing" : ""}`}
+        role="separator"
+        aria-label="Resize inspector panel"
+        aria-orientation="vertical"
+        aria-valuemin={INSPECTOR_MIN_WIDTH}
+        aria-valuemax={maxWidth}
+        aria-valuenow={effectiveWidth}
+        tabIndex={0}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          resizingPointer.current = event.pointerId;
+          if (typeof event.currentTarget.setPointerCapture === "function")
+            event.currentTarget.setPointerCapture(event.pointerId);
+          setResizing(true);
+        }}
+        onPointerMove={(event) => {
+          if (resizingPointer.current === event.pointerId)
+            resizeFromClientX(event.clientX);
+        }}
+        onPointerUp={(event) => {
+          finishResize(event.currentTarget, event.pointerId);
+        }}
+        onPointerCancel={(event) => {
+          finishResize(event.currentTarget, event.pointerId);
+        }}
+        onKeyDown={resizeWithKeyboard}
+      />
+      <div className="inspector-tabs">
+        <div className="inspector-tab-options" role="tablist">
+          {INSPECTOR_TABS.map((name) => (
+            <button
+              id={`inspector-tab-${name}`}
+              role="tab"
+              aria-controls="inspector-content"
+              aria-selected={tab === name}
+              key={name}
+              onClick={() => {
+                onTabChange(name);
+                setSelectedPath(null);
+              }}
+            >
+              {name[0]?.toUpperCase()}
+              {name.slice(1)}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="inspector-close"
+          aria-label="Close inspector panel"
+          title="Close inspector"
+          onClick={onClose}
+        >
+          <PanelRightIcon />
+        </button>
       </div>
-      <div className="inspector-content">
+      <div
+        id="inspector-content"
+        className="inspector-content"
+        role="tabpanel"
+        aria-labelledby={`inspector-tab-${tab}`}
+      >
         {tab === "changes" && (
           <>
             <p className="scope-note">Current thread workspace</p>
@@ -1250,9 +1392,19 @@ function ThreadRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
+  const [inspectorPreferences, setInspectorPreferences] =
+    useState<InspectorPreferences>(readInspectorPreferences);
+  useEffect(() => {
+    writeInspectorPreferences(inspectorPreferences);
+  }, [inspectorPreferences]);
   if (!projectResult.success || !threadResult.success) return <NotFound />;
   const projectId = projectResult.data;
   const threadId = threadResult.data;
+  const updateInspectorPreferences = (
+    update: Partial<Omit<InspectorPreferences, "version">>,
+  ) => {
+    setInspectorPreferences((current) => ({ ...current, ...update }));
+  };
   const snapshot = useQuery({
     queryKey: ["snapshot", projectId, threadId],
     queryFn: () => getSnapshot(projectId, threadId),
@@ -1275,7 +1427,39 @@ function ThreadRoute() {
     available: true,
   };
   return (
-    <WorkspaceLayout selectedProjectId={projectId} selectedThreadId={threadId}>
+    <WorkspaceLayout
+      selectedProjectId={projectId}
+      selectedThreadId={threadId}
+      inspectorAvailable={snapshot.data !== undefined}
+      inspectorOpen={inspectorPreferences.open}
+      inspectorWidth={inspectorPreferences.width}
+      onOpenInspector={() => {
+        updateInspectorPreferences({ open: true });
+      }}
+      onCloseInspector={() => {
+        updateInspectorPreferences({ open: false });
+      }}
+      inspector={
+        snapshot.data !== undefined ? (
+          <Inspector
+            project={snapshot.data.project}
+            threadId={threadId}
+            tab={inspectorPreferences.activeTab}
+            width={inspectorPreferences.width}
+            onTabChange={(activeTab) => {
+              updateInspectorPreferences({ activeTab });
+            }}
+            onWidthChange={(width) => {
+              updateInspectorPreferences({ width });
+            }}
+            onClose={() => {
+              updateInspectorPreferences({ open: false });
+            }}
+            open={inspectorPreferences.open}
+          />
+        ) : undefined
+      }
+    >
       {snapshot.isPending ? (
         <Loading />
       ) : snapshot.error !== null ? (
@@ -1318,7 +1502,6 @@ function ThreadRoute() {
               snapshot={snapshot.data}
             />
           </main>
-          <Inspector project={snapshot.data.project} threadId={threadId} />
         </>
       )}
     </WorkspaceLayout>
@@ -1370,24 +1553,61 @@ function WorkspaceLayout({
   selectedProjectId,
   selectedThreadId,
   children,
+  inspector,
+  inspectorAvailable = false,
+  inspectorOpen = false,
+  inspectorWidth = 400,
+  onOpenInspector,
+  onCloseInspector,
 }: {
   selectedProjectId?: ProjectId | undefined;
   selectedThreadId?: ThreadId | undefined;
   children?: ReactNode;
+  inspector?: ReactNode;
+  inspectorAvailable?: boolean;
+  inspectorOpen?: boolean;
+  inspectorWidth?: number;
+  onOpenInspector?: () => void;
+  onCloseInspector?: () => void;
 }) {
   const [drawer, setDrawer] = useState<"sidebar" | "inspector" | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const effectiveInspectorWidth = Math.min(
+    inspectorMaxWidth(viewportWidth),
+    Math.max(INSPECTOR_MIN_WIDTH, inspectorWidth),
+  );
+  useEffect(() => {
+    const resized = () => {
+      setViewportWidth(window.innerWidth);
+    };
+    window.addEventListener("resize", resized);
+    return () => {
+      window.removeEventListener("resize", resized);
+    };
+  }, []);
+  useEffect(() => {
+    if (!inspectorOpen && drawer === "inspector") setDrawer(null);
+  }, [drawer, inspectorOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDrawer(null);
+      if (event.key !== "Escape" || drawer === null) return;
+      if (drawer === "inspector") onCloseInspector?.();
+      setDrawer(null);
     };
     window.addEventListener("keydown", close);
     return () => {
       window.removeEventListener("keydown", close);
     };
-  }, []);
+  }, [drawer, onCloseInspector]);
+  const inspectorVisible = inspectorOpen && inspector !== undefined;
   return (
     <div
-      className={`workspace ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
+      className={`workspace ${inspector !== undefined ? "inspector-available" : ""} ${inspectorVisible ? "inspector-visible" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
+      style={
+        {
+          "--inspector-width": `${String(effectiveInspectorWidth)}px`,
+        } as CSSProperties
+      }
     >
       <div className="mobile-toolbar">
         <button
@@ -1398,25 +1618,41 @@ function WorkspaceLayout({
         >
           ☰ Projects
         </button>
-        <button
-          onClick={() => {
-            setDrawer("inspector");
-          }}
-          aria-label="Open inspector drawer"
-        >
-          Inspector ⓘ
-        </button>
+        {inspectorAvailable && (
+          <button
+            onClick={() => {
+              onOpenInspector?.();
+              setDrawer("inspector");
+            }}
+            aria-label="Open inspector drawer"
+          >
+            Inspector <PanelRightIcon />
+          </button>
+        )}
       </div>
       <Sidebar
         selectedProjectId={selectedProjectId}
         selectedThreadId={selectedThreadId}
       />
       {children}
+      {inspector}
+      {inspectorAvailable && !inspectorVisible && (
+        <button
+          type="button"
+          className="inspector-reopen"
+          aria-label="Open inspector panel"
+          title="Open inspector"
+          onClick={onOpenInspector}
+        >
+          <PanelRightIcon />
+        </button>
+      )}
       {drawer !== null && (
         <button
           className="drawer-backdrop"
           aria-label="Close drawer"
           onClick={() => {
+            if (drawer === "inspector") onCloseInspector?.();
             setDrawer(null);
           }}
         />

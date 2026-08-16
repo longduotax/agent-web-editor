@@ -467,6 +467,9 @@ Do not read or write a database configured by `.env`/`.env.*`, and do not use th
   - [x] REVIEW: Loop Review fixed the SQLite busy fallback, parsed migration metadata boundaries, and project-removal/preflight races; the final normal and Parse Boundary reviews approved the resulting fingerprint.
 - [ ] Milestone 5: snapshots, reconnection, and unread completion state.
 - [ ] Milestone 6: Files and Changes inspector views.
+  - [x] Add close/reopen controls, pointer and keyboard resizing, and parsed
+        versioned local persistence for inspector visibility, selected tab, and
+        width, with focused component, boundary, and browser coverage.
 - [ ] Milestone 7: project terminal.
 - [ ] Milestone 8: acceptance hardening, recovery, accessibility, and durable documentation.
 - [ ] Complete final review, archive the plan, and update active/completed indexes.
