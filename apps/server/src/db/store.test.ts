@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,6 +100,80 @@ describe("metadata persistence", () => {
     store.close();
   });
 
+  it("archives inactive threads without deleting history and updates active navigation", async () => {
+    const state = await stateDirectory();
+    let now = "2026-08-15T12:00:00.000Z";
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => now,
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const remaining = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+      "Remaining",
+    );
+    now = "2026-08-15T12:01:00.000Z";
+    const archived = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000002",
+      "Archive me",
+    );
+    const completed = store.createRun(
+      project.id,
+      archived.id,
+      "20000000-0000-4000-8000-000000000001",
+    );
+    store.settleRun(completed.id, "completed");
+    expect(store.unreadCount(project.id)).toBe(1);
+
+    now = "2026-08-15T12:02:00.000Z";
+    expect(store.archiveThread(project.id, archived.id)).toBe(true);
+    expect(store.getThread(project.id, archived.id)).toBeNull();
+    expect(
+      store.getThread(project.id, archived.id, { includeArchived: true }),
+    ).toMatchObject({ id: archived.id, archived_at: now });
+    expect(store.listThreads(project.id).map((thread) => thread.id)).toEqual([
+      remaining.id,
+    ]);
+    expect(
+      store
+        .listThreads(project.id, { includeArchived: true })
+        .map((thread) => thread.id),
+    ).toContain(archived.id);
+    expect(store.unreadCount(project.id)).toBe(0);
+    expect(store.getProject(project.id)?.last_opened_thread_id).toBe(
+      remaining.id,
+    );
+    expect(store.latestRun(archived.id)?.id).toBe(completed.id);
+    expect(store.archiveThread(project.id, archived.id)).toBe(true);
+    store.close();
+  });
+
+  it("does not archive a thread with a persisted running run", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-15T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const thread = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    store.createRun(
+      project.id,
+      thread.id,
+      "20000000-0000-4000-8000-000000000001",
+    );
+
+    expect(store.archiveThread(project.id, thread.id)).toBe(false);
+    expect(store.getThread(project.id, thread.id)).not.toBeNull();
+    store.close();
+  });
+
   it("does not create a run after its project is soft-removed", async () => {
     const state = await stateDirectory();
     const store = await MetadataStore.open({
@@ -148,7 +222,7 @@ describe("metadata persistence", () => {
 
     const before = new Database(join(state, "metadata.sqlite"));
     before.exec(
-      "DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
+      "DROP INDEX threads_project_archive_activity_idx; ALTER TABLE threads DROP COLUMN archived_at; DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
     );
     expect(before.pragma("user_version", { simple: true })).toBe(1);
     before.close();
@@ -162,7 +236,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(join(state, "metadata.sqlite"));
-    expect(migrated.pragma("user_version", { simple: true })).toBe(2);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(3);
     expect(
       migrated
         .prepare(
@@ -182,6 +256,94 @@ describe("metadata persistence", () => {
     expect(await readdir(state)).toContainEqual(
       expect.stringMatching(/^metadata-before-v2-\d+\.sqlite$/),
     );
+  });
+
+  it("migrates populated v2 metadata to nullable thread archives with a backup", async () => {
+    const state = await stateDirectory();
+    const databasePath = join(state, "metadata.sqlite");
+    const database = new Database(databasePath);
+    const initial = await readFile(
+      new URL("../../migrations/0001_initial.sql", import.meta.url),
+      "utf8",
+    );
+    const threadLease = await readFile(
+      new URL("../../migrations/0002_thread_run_lease.sql", import.meta.url),
+      "utf8",
+    );
+    database.exec(`${initial}\n${threadLease}`);
+    database
+      .prepare(
+        "INSERT INTO projects (id, canonical_path, display_name, created_at, removed_at, sidebar_expanded, last_opened_thread_id) VALUES (?, ?, ?, ?, NULL, 1, ?)",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000001",
+        "/tmp/project",
+        "Project",
+        "2026-08-15T12:00:00.000Z",
+        "00000000-0000-4000-8000-000000000002",
+      );
+    database
+      .prepare(
+        "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)",
+      )
+      .run(
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000001",
+        "Legacy thread",
+        "10000000-0000-4000-8000-000000000001",
+        "2026-08-15T12:00:00.000Z",
+        "2026-08-15T12:00:00.000Z",
+      );
+    database.pragma("user_version = 2");
+    database.close();
+
+    const store = await MetadataStore.open({ stateDirectory: state });
+    expect(store.listThreads()[0]).toMatchObject({
+      title: "Legacy thread",
+      archived_at: null,
+    });
+    store.close();
+
+    const migrated = new Database(databasePath);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(3);
+    migrated.close();
+    expect(await readdir(state)).toContainEqual(
+      expect.stringMatching(/^metadata-before-v3-\d+\.sqlite$/),
+    );
+  });
+
+  it("scopes malformed persisted archive timestamps to their thread record", async () => {
+    const state = await stateDirectory();
+    let store = await MetadataStore.open({
+      stateDirectory: state,
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const thread = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    store.close();
+
+    const database = new Database(join(state, "metadata.sqlite"));
+    database
+      .prepare(
+        "UPDATE threads SET archived_at = 'not-a-timestamp' WHERE id = ?",
+      )
+      .run(thread.id);
+    database.close();
+
+    store = await MetadataStore.open({ stateDirectory: state });
+    expect(store.listThreadResults(project.id)).toEqual([
+      {
+        record: null,
+        diagnostic: "A malformed stored thread record was omitted.",
+      },
+    ]);
+    expect(() => store.getThread(project.id, thread.id)).toThrow(
+      "Stored thread record is malformed.",
+    );
+    store.close();
   });
 
   it("rejects malformed SQLite metadata aggregate rows before migration", async () => {
@@ -251,7 +413,7 @@ describe("metadata persistence", () => {
     const state = await stateDirectory();
     const databasePath = join(state, "metadata.sqlite");
     const newer = new Database(databasePath);
-    newer.pragma("user_version = 3");
+    newer.pragma("user_version = 4");
     newer.close();
 
     await expect(MetadataStore.open({ stateDirectory: state })).rejects.toThrow(
@@ -259,7 +421,7 @@ describe("metadata persistence", () => {
     );
 
     const unchanged = new Database(databasePath);
-    expect(unchanged.pragma("user_version", { simple: true })).toBe(3);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(4);
     unchanged.close();
   });
 

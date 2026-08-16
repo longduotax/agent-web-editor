@@ -200,32 +200,132 @@ a:focus-visible {
   list-style: none;
 }
 .thread-list li {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
   border-radius: 0.35rem;
 }
 .thread-list li:hover,
+.thread-list li:focus-within,
 .thread-list .selected-thread {
   background: var(--surface-3);
 }
-.thread-list a {
-  display: grid;
-  gap: 0.2rem;
+.thread-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 0.45rem;
   padding: 0.5rem 0.55rem;
   text-decoration: none;
   font-size: 0.84rem;
 }
-.status {
+.thread-title {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-archive-button {
+  visibility: hidden;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-right: 0.22rem;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 0.3rem;
   color: var(--muted);
-  font-size: 0.68rem;
+  background: transparent;
+  cursor: pointer;
 }
-.status-running {
-  color: #d4b971;
+.thread-row:hover .thread-archive-button,
+.thread-row:focus-within .thread-archive-button {
+  visibility: visible;
 }
-.status-running span {
-  display: inline-block;
-  animation: spin 1.2s linear infinite;
+.thread-archive-button:hover:not(:disabled),
+.thread-archive-button:focus-visible {
+  color: white;
+  background: #343b47;
+}
+.thread-archive-button:disabled {
+  color: #626975;
+  cursor: not-allowed;
+}
+.thread-archive-button svg {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+.thread-rename {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.25rem;
+  padding: 0.3rem;
+}
+.thread-rename .error-notice {
+  grid-column: 1 / -1;
+}
+.thread-context-menu {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  min-width: 9rem;
+  overflow: hidden;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: #232832;
+  box-shadow: 0 0.65rem 1.8rem #0008;
+}
+.thread-context-menu button {
+  border: 0;
+  border-radius: 0.3rem;
+  padding: 0.45rem 0.55rem;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-context-menu button:hover:not(:disabled),
+.thread-context-menu button:focus-visible {
+  background: #343b47;
+  outline: none;
+}
+.thread-context-menu button:last-child:not(:disabled) {
+  color: #efb1a9;
+}
+.thread-context-menu button:disabled {
+  color: #717784;
+  cursor: not-allowed;
+}
+.status {
+  display: inline-grid;
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: none;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.55rem;
+}
+.status-spinner {
+  width: 0.65rem;
+  height: 0.65rem;
+  border: 1.5px solid #6e7785;
+  border-top-color: #d4b971;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
 }
 .status-failed {
   color: var(--red);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 .status-unread {
   color: var(--blue);

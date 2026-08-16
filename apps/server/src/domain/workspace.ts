@@ -9,6 +9,7 @@ import type {
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
 import {
+  ArchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   ProjectIdSchema,
   ProjectSchema,
@@ -567,7 +568,7 @@ export class WorkspaceService {
     );
     const imported = new Set(
       this.store
-        .listThreads(projectId)
+        .listThreads(projectId, { includeArchived: true })
         .map((thread) => thread.runtime_session_id),
     );
     return {
@@ -577,6 +578,67 @@ export class WorkspaceService {
       })),
       diagnostics: result.diagnostics,
     };
+  }
+
+  public async archiveThread(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    idempotencyKey: string,
+  ): Promise<z.infer<typeof ArchiveThreadResponseSchema>> {
+    const operation = "archive-thread";
+    const hash = canonicalRequestHash(operation, { projectId, threadId });
+    return await this.serialized(
+      projectId,
+      idempotencyKey,
+      operation,
+      hash,
+      ArchiveThreadResponseSchema,
+      () =>
+        Promise.resolve().then(() => {
+          const prior = this.store.readReceipt(
+            projectId,
+            idempotencyKey,
+            operation,
+            hash,
+            ArchiveThreadResponseSchema,
+          );
+          if (prior !== null) return prior;
+          const thread = this.store.getThread(projectId, threadId, {
+            includeArchived: true,
+          });
+          if (thread === null) throw new Error("thread_not_found");
+          const alreadyArchived = thread.archived_at !== null;
+          if (
+            !alreadyArchived &&
+            (this.activeThreads.has(threadId) ||
+              this.preflightPrompts.has(threadId) ||
+              this.store.runningRunForThread(threadId) !== null)
+          )
+            throw new Error("thread_busy");
+          const receipt = this.store.withReceipt(
+            projectId,
+            idempotencyKey,
+            operation,
+            hash,
+            ArchiveThreadResponseSchema,
+            () => {
+              if (
+                !alreadyArchived &&
+                !this.store.archiveThread(projectId, threadId)
+              )
+                throw new Error("thread_busy");
+              return { archived: true as const };
+            },
+          );
+          if (!alreadyArchived && !receipt.replayed) {
+            void this.disposeThread(threadId).catch(() => {
+              // Durable archival succeeded and runtime ownership was released;
+              // cleanup failure must not turn the accepted command into an error.
+            });
+          }
+          return receipt.response;
+        }),
+    );
   }
 
   public renameThread(

@@ -40,6 +40,7 @@ const threadRowSchema = z.object({
   last_activity_at: TimestampSchema,
   last_completed_run_id: RunIdSchema.nullable(),
   last_viewed_completed_run_id: RunIdSchema.nullable(),
+  archived_at: TimestampSchema.nullable(),
 });
 const runRowSchema = z.object({
   id: RunIdSchema,
@@ -175,7 +176,7 @@ export class MetadataStore {
       const schemaVersion = sqliteSchemaVersionSchema.parse(
         sqlite.pragma("user_version", { simple: true }),
       );
-      if (schemaVersion > 2)
+      if (schemaVersion > 3)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
@@ -219,6 +220,19 @@ export class MetadataStore {
         sqlite.transaction(() => {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 2");
+        })();
+        migratedSchemaVersion = 2;
+      }
+      if (migratedSchemaVersion < 3) {
+        if (schemaVersion >= 2) await backupBefore(3);
+        const migrationPath = new URL(
+          "../../migrations/0003_thread_archives.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 3");
         })();
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
@@ -349,7 +363,10 @@ export class MetadataStore {
       .run(expanded ? 1 : 0, id);
   }
 
-  public listThreads(projectId?: ProjectId): ThreadRecord[] {
+  public listThreads(
+    projectId?: ProjectId,
+    options: { includeArchived?: boolean } = {},
+  ): ThreadRecord[] {
     const rows =
       projectId === undefined
         ? this.sqlite
@@ -359,16 +376,20 @@ export class MetadataStore {
             .all()
         : this.sqlite
             .prepare(
-              "SELECT * FROM threads WHERE project_id = ? ORDER BY last_activity_at DESC",
+              "SELECT t.* FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.project_id = ? AND p.removed_at IS NULL ORDER BY t.last_activity_at DESC",
             )
             .all(projectId);
-    return rows.map((row, index) =>
+    const parsed = rows.map((row, index) =>
       parseRow(threadRowSchema, row, "thread", String(index)),
     );
+    return options.includeArchived === true
+      ? parsed
+      : parsed.filter((thread) => thread.archived_at === null);
   }
 
   public listThreadResults(
     projectId?: ProjectId,
+    options: { includeArchived?: boolean } = {},
   ): ListReadResult<ThreadRecord>[] {
     const rows =
       projectId === undefined
@@ -379,32 +400,49 @@ export class MetadataStore {
             .all()
         : this.sqlite
             .prepare(
-              "SELECT * FROM threads WHERE project_id = ? ORDER BY last_activity_at DESC",
+              "SELECT t.* FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.project_id = ? AND p.removed_at IS NULL ORDER BY t.last_activity_at DESC",
             )
             .all(projectId);
-    return parseListRows(threadRowSchema, rows, "thread");
+    const parsed = parseListRows(threadRowSchema, rows, "thread");
+    return options.includeArchived === true
+      ? parsed
+      : parsed.filter((result) => {
+          if (result.record === null) return true;
+          return result.record.archived_at === null;
+        });
   }
 
-  public getThread(projectId: string, threadId: string): ThreadRecord | null {
+  public getThread(
+    projectId: string,
+    threadId: string,
+    options: { includeArchived?: boolean } = {},
+  ): ThreadRecord | null {
     const row = this.sqlite
       .prepare(
         "SELECT t.* FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL",
       )
       .get(threadId, projectId);
-    return row === undefined
-      ? null
-      : parseRow(threadRowSchema, row, "thread", threadId);
+    if (row === undefined) return null;
+    const parsed = parseRow(threadRowSchema, row, "thread", threadId);
+    return options.includeArchived === true || parsed.archived_at === null
+      ? parsed
+      : null;
   }
 
-  public getThreadById(threadId: string): ThreadRecord | null {
+  public getThreadById(
+    threadId: string,
+    options: { includeArchived?: boolean } = {},
+  ): ThreadRecord | null {
     const row = this.sqlite
       .prepare(
         "SELECT t.* FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND p.removed_at IS NULL",
       )
       .get(threadId);
-    return row === undefined
-      ? null
-      : parseRow(threadRowSchema, row, "thread", threadId);
+    if (row === undefined) return null;
+    const parsed = parseRow(threadRowSchema, row, "thread", threadId);
+    return options.includeArchived === true || parsed.archived_at === null
+      ? parsed
+      : null;
   }
 
   public createThread(
@@ -434,7 +472,7 @@ export class MetadataStore {
   ): ThreadRecord {
     this.sqlite
       .prepare(
-        "UPDATE threads SET title = ?, last_activity_at = ? WHERE id = ? AND project_id = ?",
+        "UPDATE threads SET title = ?, last_activity_at = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL",
       )
       .run(title, this.now(), threadId, projectId);
     const thread = this.getThread(projectId, threadId);
@@ -442,10 +480,32 @@ export class MetadataStore {
     return thread;
   }
 
+  public archiveThread(projectId: ProjectId, threadId: ThreadId): boolean {
+    return this.sqlite.transaction(() => {
+      const existing = this.getThread(projectId, threadId, {
+        includeArchived: true,
+      });
+      if (existing === null) return false;
+      if (existing.archived_at !== null) return true;
+      const archived = this.sqlite
+        .prepare(
+          "UPDATE threads SET archived_at = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM runs WHERE thread_id = ? AND state = 'running')",
+        )
+        .run(this.now(), threadId, projectId, threadId);
+      if (archived.changes === 0) return false;
+      this.sqlite
+        .prepare(
+          "UPDATE projects SET last_opened_thread_id = (SELECT id FROM threads WHERE project_id = ? AND archived_at IS NULL ORDER BY last_activity_at DESC, id DESC LIMIT 1) WHERE id = ? AND last_opened_thread_id = ?",
+        )
+        .run(projectId, projectId, threadId);
+      return true;
+    })();
+  }
+
   public setLastOpenedThread(projectId: ProjectId, threadId: ThreadId): void {
     this.sqlite
       .prepare(
-        "UPDATE projects SET last_opened_thread_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM threads WHERE id = ? AND project_id = ?)",
+        "UPDATE projects SET last_opened_thread_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM threads WHERE id = ? AND project_id = ? AND archived_at IS NULL)",
       )
       .run(threadId, projectId, threadId, projectId);
   }
@@ -515,7 +575,7 @@ export class MetadataStore {
     return this.sqlite.transaction((): RunRecord | null => {
       const inserted = this.sqlite
         .prepare(
-          "INSERT INTO runs (id, thread_id, project_id, state, started_at, ended_at, accepted_command_id, failure_code, failure_message) SELECT ?, t.id, p.id, 'running', ?, NULL, ?, NULL, NULL FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL",
+          "INSERT INTO runs (id, thread_id, project_id, state, started_at, ended_at, accepted_command_id, failure_code, failure_message) SELECT ?, t.id, p.id, 'running', ?, NULL, ?, NULL, NULL FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL AND t.archived_at IS NULL",
         )
         .run(id, now, acceptedCommandId, threadId, projectId);
       if (inserted.changes === 0) return null;
@@ -583,7 +643,7 @@ export class MetadataStore {
   public unreadCount(projectId: ProjectId): number {
     const row = this.sqlite
       .prepare(
-        "SELECT count(*) AS count FROM threads WHERE project_id = ? AND last_completed_run_id IS NOT NULL AND (last_viewed_completed_run_id IS NULL OR last_viewed_completed_run_id <> last_completed_run_id)",
+        "SELECT count(*) AS count FROM threads WHERE project_id = ? AND archived_at IS NULL AND last_completed_run_id IS NOT NULL AND (last_viewed_completed_run_id IS NULL OR last_viewed_completed_run_id <> last_completed_run_id)",
       )
       .get(projectId);
     return sqliteAggregateCountSchema.parse(row).count;
