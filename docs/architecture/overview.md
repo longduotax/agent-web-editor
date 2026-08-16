@@ -141,10 +141,13 @@ local-change transfer and direct checkout use are explicit. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
 direct active-run steering and stop controls, direct-execution disclosure,
 Files/Changes/Terminal inspector, and
-responsive drawers. Thread rows expose a hover/focus Archive icon and an
+responsive drawers. The desktop inspector uses a reduced-motion-aware slide to
+close and reopen and can be resized with a pointer or keyboard; a versioned local
+preference restores its visibility, selected tab, and width. Thread rows expose a hover/focus Archive icon and an
 accessible right-click/keyboard Rename and Archive menu. Run and unread signals
 sit beside the thread title with icon-only visible presentation and accessible
-labels. Local storage is limited to unsent per-thread drafts.
+labels. Local storage is limited to unsent per-thread drafts and parsed,
+device-local inspector layout preferences.
 
 Every HTTP response and WebSocket frame is parsed with contracts. Raw Markdown
 HTML and images are disabled; terminal escape handling is confined to xterm.

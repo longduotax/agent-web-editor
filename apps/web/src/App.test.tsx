@@ -22,10 +22,13 @@ import type {
 const api = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   discoverSessions: vi.fn(),
+  getFiles: vi.fn(),
   getSnapshot: vi.fn(),
+  getStatus: vi.fn(),
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
   importThread: vi.fn(),
+  markViewed: vi.fn(),
   prompt: vi.fn(),
   renameThread: vi.fn(),
   startThread: vi.fn(),
@@ -406,6 +409,170 @@ describe("safe and accessible workspace rendering", () => {
       "href",
       expect.stringContaining("javascript:"),
     );
+  });
+
+  it("persists inspector visibility, selected tab, and resized width", async () => {
+    const user = userEvent.setup();
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        public addEventListener() {
+          return undefined;
+        }
+        public send() {
+          return undefined;
+        }
+        public close() {
+          return undefined;
+        }
+      },
+    );
+    const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+    const project = {
+      id: projectId,
+      displayName: "Example project",
+      displayPath: "/example",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      available: true,
+      gitAvailable: true,
+      sidebarExpanded: true,
+      unreadCount: 0,
+      lastOpenedThreadId: threadId,
+    };
+    api.getWorkspace.mockResolvedValue({
+      projects: [project],
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Resizable thread",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActivityAt: "2026-01-01T00:00:00.000Z",
+          runState: null,
+          unread: false,
+          runtimeAvailable: true,
+          workspace: { mode: "shared", branchName: null, available: true },
+        },
+      ],
+      diagnostics: [],
+    });
+    api.getSnapshot.mockResolvedValue({
+      version: 1,
+      project,
+      thread: {
+        id: threadId,
+        projectId,
+        title: "Resizable thread",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:00.000Z",
+        runState: null,
+        unread: false,
+        runtimeAvailable: true,
+        workspace: { mode: "shared", branchName: null, available: true },
+      },
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot);
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "Resizable thread" });
+    expect(
+      screen.queryByRole("complementary", { name: "Project inspector" }),
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Open inspector panel" }),
+    );
+    expect(
+      await screen.findByRole("complementary", {
+        name: "Project inspector",
+      }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Files" }));
+    await waitFor(() => {
+      expect(
+        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
+      ).toMatchObject({ activeTab: "files", open: true });
+    });
+
+    const closeInspector = screen.getByRole("button", {
+      name: "Close inspector panel",
+    });
+    expect(closeInspector.querySelector(".panel-right-icon")).not.toBeNull();
+    await user.click(closeInspector);
+    expect(
+      screen.queryByRole("complementary", { name: "Project inspector" }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".inspector")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(document.querySelector(".inspector")).toHaveAttribute("inert");
+    await waitFor(() => {
+      expect(
+        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
+      ).toMatchObject({ activeTab: "files", open: false });
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Open inspector panel" }),
+    );
+    expect(
+      await screen.findByRole("tab", { name: "Files", selected: true }),
+    ).toBeInTheDocument();
+
+    const separator = screen.getByRole("separator", {
+      name: "Resize inspector panel",
+    });
+    fireEvent.pointerDown(separator, { pointerId: 1 });
+    fireEvent.pointerMove(separator, { clientX: 720, pointerId: 1 });
+    fireEvent.pointerUp(separator, { pointerId: 1 });
+    await waitFor(() => {
+      expect(
+        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
+      ).toMatchObject({ width: 720 });
+    });
+    expect(separator).toHaveAttribute("aria-valuenow", "720");
+    separator.focus();
+    await user.keyboard("{ArrowLeft}");
+    await waitFor(() => {
+      expect(
+        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
+      ).toMatchObject({ width: 744 });
+    });
   });
 
   it("imports a discovered session and renames a thread", async () => {
