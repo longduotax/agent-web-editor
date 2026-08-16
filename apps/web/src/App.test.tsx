@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -14,6 +14,7 @@ import type {
 } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  archiveThread: vi.fn(),
   discoverSessions: vi.fn(),
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
@@ -174,9 +175,17 @@ describe("safe and accessible workspace rendering", () => {
     });
   });
 
-  it("gives run states a non-color cue and accessible label", () => {
-    render(<Status state="running" unread={false} />);
-    expect(screen.getByLabelText("Running")).toHaveTextContent("Running");
+  it("renders compact inline run signals without visible status words", () => {
+    const { rerender } = render(<Status state="running" unread={false} />);
+    const running = screen.getByLabelText("Running");
+    expect(running).toBeInTheDocument();
+    expect(running.textContent).toBe("");
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+
+    rerender(<Status state="completed" unread />);
+    const unread = screen.getByLabelText("Unread completion");
+    expect(unread).toHaveTextContent("●");
+    expect(screen.queryByText("Unread")).not.toBeInTheDocument();
   });
 
   it("does not enable raw Markdown HTML", () => {
@@ -224,7 +233,7 @@ describe("safe and accessible workspace rendering", () => {
           projectId,
           title: "Original thread",
           runtimeSessionId: "40000000-0000-4000-8000-000000000001",
-          runState: null,
+          runState: null as "running" | null,
           unread: false,
         },
       ],
@@ -274,6 +283,17 @@ describe("safe and accessible workspace rendering", () => {
       capabilities: { prompt: true, steer: true, stop: true },
       diagnostics: [],
     });
+    api.archiveThread.mockImplementation(
+      (_projectId: ProjectId, archivedThreadId: ThreadId) => {
+        workspace = {
+          ...workspace,
+          threads: workspace.threads.filter(
+            (thread) => thread.id !== archivedThreadId,
+          ),
+        };
+        return Promise.resolve({ archived: true as const });
+      },
+    );
     api.renameThread.mockImplementation(
       (_projectId: ProjectId, renamedThreadId: ThreadId, title: string) => {
         workspace = {
@@ -329,9 +349,18 @@ describe("safe and accessible workspace rendering", () => {
       await screen.findByRole("heading", { name: "Existing session" }),
     ).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "Rename Original thread" }),
-    );
+    const originalThread = screen.getByRole("link", {
+      name: "Original thread",
+    });
+    fireEvent.contextMenu(originalThread);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Archive" }),
+    ).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.contextMenu(originalThread);
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
     const title = screen.getByRole("textbox", {
       name: "Rename Original thread",
     });
@@ -346,5 +375,51 @@ describe("safe and accessible workspace rendering", () => {
       );
     });
     expect(await screen.findByText("Renamed thread")).toBeInTheDocument();
+
+    const renamedLink = screen.getByRole("link", { name: "Renamed thread" });
+    renamedLink.focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    expect(
+      screen.getByRole("menuitem", { name: "Rename" }),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    workspace = {
+      ...workspace,
+      threads: workspace.threads.map((thread) =>
+        thread.id === threadId ? { ...thread, runState: "running" } : thread,
+      ),
+    };
+    await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    expect(
+      await screen.findByRole("button", {
+        name: "Archive Renamed thread (unavailable while running)",
+      }),
+    ).toBeDisabled();
+    fireEvent.contextMenu(
+      screen.getByRole("link", { name: /Renamed thread.*Running/ }),
+    );
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive (unavailable while running)",
+      }),
+    ).toBeDisabled();
+    await user.keyboard("{Escape}");
+
+    workspace = {
+      ...workspace,
+      threads: workspace.threads.map((thread) =>
+        thread.id === threadId ? { ...thread, runState: null } : thread,
+      ),
+    };
+    await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    await user.click(
+      await screen.findByRole("button", { name: "Archive Renamed thread" }),
+    );
+    await waitFor(() => {
+      expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+    });
+    expect(screen.queryByText("Renamed thread")).not.toBeInTheDocument();
   });
 });

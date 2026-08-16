@@ -158,6 +158,12 @@ export const RenameThreadRequestSchema = z
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
+export const ArchiveThreadRequestSchema = z
+  .object({ idempotencyKey: IdempotencyKeySchema })
+  .strict();
+export const ArchiveThreadResponseSchema = z
+  .object({ archived: z.literal(true) })
+  .strict();
 export const ImportThreadRequestSchema = z
   .object({
     runtimeSessionId: SessionIdSchema,

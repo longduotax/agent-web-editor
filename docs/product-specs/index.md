@@ -9,6 +9,7 @@ belong here.
 | ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | ------------------------------------------------------------------------------------------------- |
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)             |
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
+| [Thread management](thread-management.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -22,6 +23,10 @@ a bounded browser rendering window. The user approved product specification
 version 1 on 2026-08-16. Technical approvals for plan versions 1 and 2 are
 invalidated; plan version 3 is Draft with technical approval pending, and
 implementation remains paused until that approval is granted.
+
+Thread management version 2 is Current. It provides a Codex-style action menu,
+non-destructive inactive-thread archival, a direct hover/focus Archive action,
+and compact inline run-state signals.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only

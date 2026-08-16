@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ArchiveThreadRequestSchema,
+  ArchiveThreadResponseSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
   ProjectIdSchema,
@@ -35,6 +37,24 @@ describe("wire contracts", () => {
         outcome: "cancelled",
         path: "/tmp/project",
       }).success,
+    ).toBe(false);
+  });
+
+  it("parses strict archive commands and acknowledgements", () => {
+    expect(ArchiveThreadRequestSchema.parse({ idempotencyKey: id })).toEqual({
+      idempotencyKey: id,
+    });
+    expect(
+      ArchiveThreadRequestSchema.safeParse({
+        idempotencyKey: id,
+        archived: true,
+      }).success,
+    ).toBe(false);
+    expect(ArchiveThreadResponseSchema.parse({ archived: true })).toEqual({
+      archived: true,
+    });
+    expect(
+      ArchiveThreadResponseSchema.safeParse({ archived: false }).success,
     ).toBe(false);
   });
 
