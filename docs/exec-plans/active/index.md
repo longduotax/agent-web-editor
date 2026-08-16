@@ -9,3 +9,8 @@ superseded, or abandoned.
   version 2 revises run orchestration to permit concurrent Pi-backed threads in
   one project through a thread-scoped persisted lease, while retaining the
   broader TDD workspace, reconnection, inspector, and terminal plan.
+- [Scalable conversation history](2026-08-16-scalable-conversation-history.md) —
+  Ready plan version 1 adds bounded latest/history pages, append-stable opaque
+  cursors, a bounded browser page window, polite live following, latest-edge
+  entry, anchor-preserving older-history navigation, and a restrained transcript
+  scrollbar.
