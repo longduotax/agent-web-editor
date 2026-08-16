@@ -19,8 +19,9 @@ while the broader initial-workspace plan remains in progress.
 Scalable conversation history is a separate Approved capability for bounded
 latest pages, progressive older-history navigation, polite live following, and
 a bounded browser rendering window. The user approved product specification
-version 1 and technical plan version 1 on 2026-08-16; implementation has not
-started.
+version 1 on 2026-08-16. Technical approvals for plan versions 1 and 2 are
+invalidated; plan version 3 is Draft with technical approval pending, and
+implementation remains paused until that approval is granted.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only
