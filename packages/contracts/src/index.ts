@@ -4,6 +4,7 @@ const uuid = z.uuid();
 export const ProjectIdSchema = uuid.brand<"ProjectId">();
 export const ThreadIdSchema = uuid.brand<"ThreadId">();
 export const RunIdSchema = uuid.brand<"RunId">();
+export const WorktreeIdSchema = uuid.brand<"WorktreeId">();
 export const EventIdSchema = uuid.brand<"EventId">();
 export const TerminalIdSchema = uuid.brand<"TerminalId">();
 export const SessionIdSchema = uuid.brand<"SessionId">();
@@ -19,10 +20,32 @@ export const RunStateSchema = z.enum([
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 export type ThreadId = z.infer<typeof ThreadIdSchema>;
 export type RunId = z.infer<typeof RunIdSchema>;
+export type WorktreeId = z.infer<typeof WorktreeIdSchema>;
 export type TerminalId = z.infer<typeof TerminalIdSchema>;
 export type SessionId = z.infer<typeof SessionIdSchema>;
 export type IdempotencyKey = z.infer<typeof IdempotencyKeySchema>;
 export type RunState = z.infer<typeof RunStateSchema>;
+
+/** A Git local branch name safe to use only after repository authorization. */
+export const GitBranchSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(
+    (value) =>
+      !value.startsWith("-") &&
+      !value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.endsWith(".") &&
+      !value.includes("..") &&
+      !value.includes("//") &&
+      !value.includes("@{") &&
+      value !== "@" &&
+      !/[\s~^:?*\\[\0]/.test(value),
+    "Invalid Git branch name.",
+  )
+  .brand<"GitBranch">();
+export type GitBranch = z.infer<typeof GitBranchSchema>;
 
 export const ApiErrorSchema = z.object({
   error: z.object({
@@ -46,6 +69,26 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+export const ThreadWorkspaceSummarySchema = z
+  .discriminatedUnion("mode", [
+    z.object({
+      mode: z.literal("shared"),
+      branchName: z.string().min(1).max(255).nullable(),
+      available: z.boolean(),
+    }),
+    z.object({
+      mode: z.literal("worktree"),
+      branchName: GitBranchSchema,
+      baseBranch: GitBranchSchema,
+      baseCommit: z.string().regex(/^[0-9a-f]{7,64}$/),
+      available: z.boolean(),
+    }),
+  ])
+  .default({ mode: "shared", branchName: null, available: true });
+export type ThreadWorkspaceSummary = z.infer<
+  typeof ThreadWorkspaceSummarySchema
+>;
+
 export const ThreadSummarySchema = z.object({
   id: ThreadIdSchema,
   projectId: ProjectIdSchema,
@@ -55,6 +98,7 @@ export const ThreadSummarySchema = z.object({
   runState: RunStateSchema.nullable(),
   unread: z.boolean(),
   runtimeAvailable: z.boolean(),
+  workspace: ThreadWorkspaceSummarySchema,
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 
@@ -132,6 +176,53 @@ export const BrowseProjectResponseSchema = z.discriminatedUnion("outcome", [
 export type BrowseProjectResponse = z.infer<typeof BrowseProjectResponseSchema>;
 export const ThreadMutationResponseSchema = z.object({
   thread: ThreadSummarySchema,
+});
+
+export const LocalChangeSummarySchema = z.object({
+  staged: z.number().int().nonnegative(),
+  modified: z.number().int().nonnegative(),
+  deleted: z.number().int().nonnegative(),
+  renamed: z.number().int().nonnegative(),
+  untracked: z.number().int().nonnegative(),
+  files: z.array(z.string().min(1).max(4096)).max(20_000),
+  token: z.string().min(16).max(128),
+});
+export const WorkspacePreflightResponseSchema = z.object({
+  worktreeAvailable: z.boolean(),
+  unavailableReason: z.string().min(1).max(500).nullable(),
+  currentBranch: z.string().min(1).max(255).nullable(),
+  branches: z.array(z.string().min(1).max(255)).max(10_000),
+  headCommit: z
+    .string()
+    .regex(/^[0-9a-f]{7,64}$/)
+    .nullable(),
+  changes: LocalChangeSummarySchema.nullable(),
+});
+export type WorkspacePreflightResponse = z.infer<
+  typeof WorkspacePreflightResponseSchema
+>;
+
+export const ThreadWorkspaceRequestSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("shared") }).strict(),
+  z
+    .object({
+      mode: z.literal("worktree"),
+      baseBranch: GitBranchSchema,
+      sourceChanges: z.enum(["none", "tracked_and_untracked"]),
+      sourceStateToken: z.string().min(16).max(128).optional(),
+    })
+    .strict(),
+]);
+export const StartThreadRequestSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(200_000),
+    workspace: ThreadWorkspaceRequestSchema,
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const StartThreadResponseSchema = z.object({
+  thread: ThreadSummarySchema,
+  run: RunSchema,
 });
 
 export const BrowseProjectRequestSchema = z
@@ -314,11 +405,13 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("attach"),
     projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("input"),
     projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
     data: z.string().max(65_536),
   }),
@@ -326,6 +419,7 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("resize"),
     projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
     columns: z.number().int().min(2).max(500),
     rows: z.number().int().min(2).max(200),
@@ -334,12 +428,14 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("restart"),
     projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("terminate"),
     projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
   }),
 ]);

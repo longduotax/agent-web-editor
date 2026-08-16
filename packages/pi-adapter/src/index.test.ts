@@ -16,6 +16,8 @@ const sdk = vi.hoisted(() => ({
   list: vi.fn(),
   open: vi.fn(),
   createAgentSession: vi.fn(),
+  modelCreate: vi.fn(),
+  settingsCreate: vi.fn(),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
@@ -25,9 +27,11 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
     open: sdk.open,
   },
   createAgentSession: sdk.createAgentSession,
+  ModelRuntime: { create: sdk.modelCreate },
+  SettingsManager: { create: sdk.settingsCreate },
 }));
 
-import { PiAgentRuntime } from "./index.js";
+import { parseGeneratedTitle, PiAgentRuntime } from "./index.js";
 
 const roots: string[] = [];
 const sessionId = "10000000-0000-4000-8000-000000000001";
@@ -122,6 +126,40 @@ async function fixture(): Promise<{
   };
 }
 
+function namingHandle(
+  provider: string,
+  id: string,
+): {
+  provider: string;
+  id: string;
+  name: string;
+  api: string;
+  baseUrl: string;
+  reasoning: boolean;
+  input: ["text"];
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+  contextWindow: number;
+  maxTokens: number;
+} {
+  return {
+    provider,
+    id,
+    name: id,
+    api: "openai-completions",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 16_000,
+    maxTokens: 1_000,
+  };
+}
+
 describe("PiAgentRuntime session creation boundary", () => {
   async function creationFixture(): Promise<{
     agentDirectory: string;
@@ -149,15 +187,18 @@ describe("PiAgentRuntime session creation boundary", () => {
     );
 
     await expect(
-      new PiAgentRuntime(context.agentDirectory).create(context.project),
+      new PiAgentRuntime(context.agentDirectory).create(
+        context.project,
+        "Implement thread workspaces",
+      ),
     ).resolves.toEqual({ sessionId });
     expect(sdk.create).toHaveBeenCalledWith(
       context.project,
       context.sessionDirectory,
     );
-    await expect(readFile(context.sessionPath, "utf8")).resolves.toContain(
-      `"id":"${sessionId}"`,
-    );
+    const persisted = await readFile(context.sessionPath, "utf8");
+    expect(persisted).toContain(`"id":"${sessionId}"`);
+    expect(persisted).toContain(`"name":"Implement thread workspaces"`);
   });
 
   it("does not overwrite an existing native session file", async () => {
@@ -203,6 +244,196 @@ describe("PiAgentRuntime session creation boundary", () => {
   });
 });
 
+describe("PiAgentRuntime naming-model boundary", () => {
+  it("constructs only non-empty normalized title results", () => {
+    expect(parseGeneratedTitle("  ** Implement worktrees!  ")).toEqual({
+      outcome: "available",
+      title: "Implement worktrees",
+    });
+    expect(parseGeneratedTitle("... ***")).toEqual({ outcome: "unavailable" });
+    expect(parseGeneratedTitle("x".repeat(61))).toEqual({
+      outcome: "unavailable",
+    });
+  });
+
+  it("selects a parsed explicit model and reports malformed SDK responses unavailable", async () => {
+    const context = await fixture();
+    const getAvailable = vi.fn().mockResolvedValue([
+      {
+        provider: "test",
+        id: "cheap",
+        cost: { input: 0, output: 0 },
+      },
+      { provider: "test", id: "invalid", cost: { input: -1, output: 0 } },
+    ]);
+    const completeSimple = vi.fn().mockResolvedValue({
+      stopReason: "stop",
+      content: [{ type: "text", text: "Implement worktrees" }],
+    });
+    const getModel = vi.fn((provider: string, id: string) =>
+      provider === "test" && id === "cheap"
+        ? namingHandle(provider, id)
+        : undefined,
+    );
+    sdk.modelCreate.mockResolvedValue({
+      getAvailable,
+      getModel,
+      completeSimple,
+    });
+    const runtime = new PiAgentRuntime(context.root, {
+      provider: "test",
+      id: "cheap",
+    });
+
+    await expect(
+      runtime.suggestTitle(context.project, "Do the work"),
+    ).resolves.toEqual({ outcome: "unavailable" });
+
+    getAvailable.mockResolvedValue([
+      { provider: "test", id: "cheap", cost: { input: 0, output: 0 } },
+    ]);
+    await expect(
+      runtime.suggestTitle(context.project, "Do the work"),
+    ).resolves.toEqual({ outcome: "available", title: "Implement worktrees" });
+    expect(completeSimple).toHaveBeenCalledOnce();
+    expect(completeSimple).toHaveBeenCalledWith(
+      namingHandle("test", "cheap"),
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    completeSimple.mockResolvedValue({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "One" },
+        { type: "text", text: "Two" },
+      ],
+    });
+    await expect(
+      runtime.suggestTitle(context.project, "Do the work"),
+    ).resolves.toEqual({ outcome: "unavailable" });
+  });
+
+  it("parses automatic settings before model lookup and selects the lower-cost default-provider model", async () => {
+    const context = await fixture();
+    const getModel = vi.fn((provider: string, id: string) =>
+      provider === "test" && id === "default"
+        ? {
+            ...namingHandle(provider, id),
+            cost: { input: 2, output: 2, cacheRead: 0, cacheWrite: 0 },
+          }
+        : provider === "test" && id === "cheap"
+          ? namingHandle(provider, id)
+          : undefined,
+    );
+    const completeSimple = vi.fn().mockResolvedValue({
+      stopReason: "stop",
+      content: [{ type: "text", text: "Implement worktrees" }],
+    });
+    sdk.settingsCreate.mockReturnValue({
+      getDefaultProvider: () => "test",
+      getDefaultModel: () => "default",
+    });
+    sdk.modelCreate.mockResolvedValue({
+      getAvailable: vi.fn().mockResolvedValue([
+        { provider: "other", id: "cheapest", cost: { input: 0, output: 0 } },
+        { provider: "test", id: "default", cost: { input: 2, output: 2 } },
+        { provider: "test", id: "cheap", cost: { input: 0, output: 0 } },
+      ]),
+      getModel,
+      completeSimple,
+    });
+
+    await expect(
+      new PiAgentRuntime(context.root).suggestTitle(
+        context.project,
+        "Do the work",
+      ),
+    ).resolves.toEqual({ outcome: "available", title: "Implement worktrees" });
+    expect(getModel).toHaveBeenCalledWith("test", "default");
+    expect(completeSimple).toHaveBeenCalledWith(
+      namingHandle("test", "cheap"),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    ["provider", undefined, "default"],
+    ["provider", "", "default"],
+    ["provider", 1, "default"],
+    ["model", "test", undefined],
+    ["model", "test", ""],
+    ["model", "test", 1],
+  ])(
+    "does not look up or complete when the automatic default %s is malformed",
+    async (_field, provider: unknown, id: unknown) => {
+      const context = await fixture();
+      const getModel = vi.fn();
+      const completeSimple = vi.fn();
+      sdk.settingsCreate.mockReturnValue({
+        getDefaultProvider: () => provider,
+        getDefaultModel: () => id,
+      });
+      sdk.modelCreate.mockResolvedValue({
+        getAvailable: vi.fn().mockResolvedValue([]),
+        getModel,
+        completeSimple,
+      });
+
+      await expect(
+        new PiAgentRuntime(context.root).suggestTitle(
+          context.project,
+          "Do the work",
+        ),
+      ).resolves.toEqual({ outcome: "unavailable" });
+      expect(getModel).not.toHaveBeenCalled();
+      expect(completeSimple).not.toHaveBeenCalled();
+    },
+  );
+
+  it("constructs a completion handle and rejects malformed SDK handles", async () => {
+    const context = await fixture();
+    const completeSimple = vi.fn().mockResolvedValue({
+      stopReason: "stop",
+      content: [{ type: "text", text: "Implement worktrees" }],
+    });
+    const rawHandle = { ...namingHandle("test", "cheap"), untrusted: true };
+    const getModel = vi.fn().mockReturnValue(rawHandle);
+    sdk.modelCreate.mockResolvedValue({
+      getAvailable: vi
+        .fn()
+        .mockResolvedValue([
+          { provider: "test", id: "cheap", cost: { input: 0, output: 0 } },
+        ]),
+      getModel,
+      completeSimple,
+    });
+    const runtime = new PiAgentRuntime(context.root, {
+      provider: "test",
+      id: "cheap",
+    });
+
+    await expect(
+      runtime.suggestTitle(context.project, "Do the work"),
+    ).resolves.toEqual({
+      outcome: "available",
+      title: "Implement worktrees",
+    });
+    const completedHandle: unknown = completeSimple.mock.calls[0]?.[0];
+    expect(completedHandle).toEqual(namingHandle("test", "cheap"));
+    expect(completedHandle).not.toBe(rawHandle);
+
+    getModel.mockReturnValue({ provider: "test", id: "cheap" });
+    await expect(
+      runtime.suggestTitle(context.project, "Do the work"),
+    ).resolves.toEqual({
+      outcome: "unavailable",
+    });
+    expect(completeSimple).toHaveBeenCalledOnce();
+  });
+});
+
 describe("PiAgentRuntime session open boundary", () => {
   it("parses the agent-directory setting before native operations", () => {
     expect(() => new PiAgentRuntime(undefined)).not.toThrow();
@@ -211,6 +442,50 @@ describe("PiAgentRuntime session open boundary", () => {
     );
     expect(sdk.list).not.toHaveBeenCalled();
     expect(sdk.open).not.toHaveBeenCalled();
+  });
+
+  it("exposes a creation ID only for a valid UUID marker", async () => {
+    const context = await fixture();
+    const valid = "20000000-0000-4000-8000-000000000001";
+    const malformed = "a".repeat(36);
+    sdk.list.mockResolvedValue([
+      {
+        id: sessionId,
+        cwd: context.project,
+        path: context.sessionPath,
+        name: `Work [pi-create:${valid}]`,
+        created: new Date("2026-01-01T00:00:00.000Z"),
+        modified: new Date("2026-01-01T00:00:00.000Z"),
+        messageCount: 1,
+        firstMessage: "Hello",
+      },
+    ]);
+
+    await expect(
+      new PiAgentRuntime().discover(context.project),
+    ).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ name: "Work", creationId: valid })],
+    });
+
+    sdk.list.mockResolvedValue([
+      {
+        id: sessionId,
+        cwd: context.project,
+        path: context.sessionPath,
+        name: `Work [pi-create:${malformed}]`,
+        created: new Date("2026-01-01T00:00:00.000Z"),
+        modified: new Date("2026-01-01T00:00:00.000Z"),
+        messageCount: 1,
+        firstMessage: "Hello",
+      },
+    ]);
+    await expect(
+      new PiAgentRuntime().discover(context.project),
+    ).resolves.toMatchObject({
+      sessions: [
+        expect.objectContaining({ name: `Work [pi-create:${malformed}]` }),
+      ],
+    });
   });
 
   it("discovers and opens an authorized native session file", async () => {

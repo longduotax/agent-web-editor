@@ -28,6 +28,7 @@ export interface RuntimeSessionDescriptor {
   modifiedAt: string;
   messageCount: number;
   preview: string;
+  creationId?: string;
 }
 
 export interface RuntimeSnapshot {
@@ -35,6 +36,9 @@ export interface RuntimeSnapshot {
   transcript: TranscriptItem[];
   diagnostics: string[];
 }
+
+export type TitleSuggestion =
+  { outcome: "available"; title: string } | { outcome: "unavailable" };
 
 export type RuntimeEvent =
   | { type: "transcript"; item: TranscriptItem }
@@ -54,10 +58,25 @@ export interface PromptAcceptance {
   discardEvents(): void;
 }
 
+/** A durable caller-owned identity for a prompt that may need recovery. */
+export interface RuntimePromptDispatch {
+  id: string;
+}
+
+export type PromptRecovery =
+  { outcome: "accepted" } | { outcome: "not_accepted" };
+
 export interface OpenRuntimeSession {
   readonly id: string;
   snapshot(): Promise<RuntimeSnapshot>;
-  prompt(text: string): Promise<PromptAcceptance>;
+  prompt(
+    text: string,
+    dispatch?: RuntimePromptDispatch,
+  ): Promise<PromptAcceptance>;
+  recoverPrompt(
+    text: string,
+    dispatch: RuntimePromptDispatch,
+  ): Promise<PromptRecovery>;
   steer(text: string): Promise<void>;
   stop(): Promise<void>;
   subscribe(listener: (event: RuntimeEvent) => void): () => void;
@@ -65,9 +84,14 @@ export interface OpenRuntimeSession {
 }
 
 export interface AgentRuntime {
+  suggestTitle?(projectPath: string, prompt: string): Promise<TitleSuggestion>;
   discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }>;
-  create(projectPath: string): Promise<{ sessionId: string }>;
+  create(
+    projectPath: string,
+    title?: string,
+    creationId?: string,
+  ): Promise<{ sessionId: string }>;
   open(projectPath: string, sessionId: string): Promise<OpenRuntimeSession>;
 }

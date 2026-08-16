@@ -6,11 +6,18 @@ import {
   TerminalServerFrameSchema,
   type ProjectId,
   type TerminalId,
+  type ThreadId,
 } from "@pi-web/contracts";
 
 import { webSocketUrl } from "../api/client.js";
 
-export function TerminalView({ projectId }: { projectId: ProjectId }) {
+export function TerminalView({
+  projectId,
+  threadId,
+}: {
+  projectId: ProjectId;
+  threadId: ThreadId;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);
   const terminalId = useRef<TerminalId | null>(null);
@@ -33,7 +40,9 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
     socket.current = ws;
     terminalId.current = null;
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({ version: 1, type: "attach", projectId }));
+      ws.send(
+        JSON.stringify({ version: 1, type: "attach", projectId, threadId }),
+      );
     });
     ws.addEventListener("message", (event) => {
       let value: unknown;
@@ -79,6 +88,7 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
             version: 1,
             type: "input",
             projectId,
+            threadId,
             terminalId: currentTerminalId,
             data,
           }),
@@ -93,6 +103,7 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
             version: 1,
             type: "resize",
             projectId,
+            threadId,
             terminalId: currentTerminalId,
             columns: terminal.cols,
             rows: terminal.rows,
@@ -108,12 +119,12 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
       terminalId.current = null;
       socket.current = null;
     };
-  }, [projectId]);
+  }, [projectId, threadId]);
 
   const attach = () => {
     if (socket.current?.readyState === WebSocket.OPEN)
       socket.current.send(
-        JSON.stringify({ version: 1, type: "attach", projectId }),
+        JSON.stringify({ version: 1, type: "attach", projectId, threadId }),
       );
   };
 
@@ -128,6 +139,7 @@ export function TerminalView({ projectId }: { projectId: ProjectId }) {
           version: 1,
           type,
           projectId,
+          threadId,
           terminalId: currentTerminalId,
         }),
       );

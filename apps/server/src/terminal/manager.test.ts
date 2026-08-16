@@ -226,6 +226,34 @@ describe("ProjectTerminalManager", () => {
     }).not.toThrow();
   });
 
+  it("keeps isolated execution scopes separate within one project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-terminal-"));
+    roots.push(root);
+    const firstRoot = join(root, "first");
+    const secondRoot = join(root, "second");
+    await mkdir(firstRoot);
+    await mkdir(secondRoot);
+    const firstScope = "20000000-0000-4000-8000-000000000001";
+    const secondScope = "30000000-0000-4000-8000-000000000001";
+    const factory = new FakeFactory();
+    const manager = new ProjectTerminalManager(factory);
+    await manager.attach(
+      projectId,
+      firstRoot,
+      { send: () => undefined },
+      firstScope,
+    );
+    await manager.attach(
+      projectId,
+      secondRoot,
+      { send: () => undefined },
+      secondScope,
+    );
+    expect(factory.processes).toHaveLength(2);
+    manager.terminate(projectId);
+    expect(factory.processes.every((process) => process.killed)).toBe(true);
+  });
+
   it("rejects stale terminal controls after a restart", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-terminal-"));
     roots.push(root);

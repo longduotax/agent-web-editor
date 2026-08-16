@@ -19,7 +19,8 @@ The browser parses every HTTP response and WebSocket frame with schemas from `@p
 Canonical routes are:
 
 - `/` — project list/empty state;
-- `/projects/:projectId` — server-resolved fallback to that project's last-opened thread; and
+- `/projects/:projectId` — server-resolved fallback to that project's last-opened thread;
+- `/projects/:projectId/new` — route-owned inline new-chat configuration and first prompt; and
 - `/projects/:projectId/threads/:threadId` — selected thread.
 
 Route params are parsed before requests. The route is the only selected-thread authority, so separate tabs remain independent. Server metadata stores project expansion and last-opened thread. TanStack Query owns fetch lifecycle for projects, thread snapshots, files, and Git data; mutations use explicit idempotency keys and invalidate/update only related keys.
@@ -41,7 +42,10 @@ Malformed or unknown-version local values are discarded explicitly. Project/thre
 - `features/projects`: project tree, server-owned native Browse registration,
   remove/expand/unavailable states. The browser never receives or constructs the
   selected absolute project path.
-- `features/threads`: route loader, thread list/rename, transcript and activity rendering.
+- `features/threads`: route loader, thread list/rename, transcript and activity
+  rendering, plus the Codex-style project/location/start-state/branch new-chat
+  toolbar. Clean worktree is the default; include-local and direct-checkout use
+  are explicit and the environment slot is omitted.
 - `features/runs`: composer, direct active-run steering, stop, status, trust disclosure, and streaming reducer.
 - `features/inspector`: resizable shell and Changes/Files/Terminal tabs.
 - `components`: reusable buttons, dialogs, split panes, status icons, error/empty states, and Markdown/code renderer.

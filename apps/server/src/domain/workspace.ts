@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import type {
   AgentRuntime,
   OpenRuntimeSession,
+  TitleSuggestion,
   PromptAcceptance,
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
@@ -15,8 +16,10 @@ import {
   ProjectSchema,
   RunIdSchema,
   RunSchema,
+  StartThreadResponseSchema,
   ThreadIdSchema,
   ThreadSnapshotSchema,
+  ThreadWorkspaceRequestSchema,
   ThreadSummarySchema,
   type Project,
   type ProjectId,
@@ -25,6 +28,7 @@ import {
   type ThreadSnapshot,
   type ThreadSummary,
   type TranscriptItem,
+  type WorktreeId,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -36,6 +40,11 @@ import {
   type ThreadRecord,
 } from "../db/store.js";
 import { LiveBroker } from "../live/broker.js";
+import { GitWorktreeManager, worktreeSlug } from "../worktrees/manager.js";
+import {
+  ThreadExecutionContextResolver,
+  type ThreadExecutionContext,
+} from "./execution-context.js";
 
 interface PendingPreflight {
   projectId: ProjectId;
@@ -98,6 +107,19 @@ const browseReceiptSchema = z.discriminatedUnion("outcome", [
 const removedReceiptSchema = z.object({ removed: z.literal(true) });
 const viewedReceiptSchema = z.object({ viewed: z.literal(true) });
 
+function fallbackTitle(prompt: string): string {
+  const words = prompt
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 7);
+  const value = words.join(" ").slice(0, 60).trim();
+  if (value === "") return "New coding task";
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+}
+
 export class WorkspaceService {
   private readonly runtimes = new Map<
     ThreadId,
@@ -111,6 +133,8 @@ export class WorkspaceService {
     { operation: string; requestHash: string; pending: Promise<unknown> }
   >();
 
+  private readonly executionContexts: ThreadExecutionContextResolver;
+
   public constructor(
     public readonly store: MetadataStore,
     private readonly runtime: AgentRuntime,
@@ -118,7 +142,10 @@ export class WorkspaceService {
     private readonly terminalCleanup: { terminate(projectId: string): void } = {
       terminate: () => undefined,
     },
-  ) {}
+    private readonly worktreeManager = new GitWorktreeManager(),
+  ) {
+    this.executionContexts = new ThreadExecutionContextResolver(store);
+  }
 
   public async projectDto(record: ProjectRecord): Promise<Project> {
     const root = await parseProjectRoot(record.canonical_path);
@@ -138,6 +165,10 @@ export class WorkspaceService {
 
   public threadDto(record: ThreadRecord): ThreadSummary {
     const latest = this.store.latestRun(record.id);
+    const worktree =
+      record.worktree_id === null
+        ? null
+        : this.store.getWorktree(record.worktree_id);
     return ThreadSummarySchema.parse({
       id: record.id,
       projectId: record.project_id,
@@ -146,7 +177,18 @@ export class WorkspaceService {
       lastActivityAt: record.last_activity_at,
       runState: latest?.state ?? null,
       unread: this.store.isUnread(record),
-      runtimeAvailable: true,
+      runtimeAvailable:
+        record.worktree_id === null || worktree?.state === "ready",
+      workspace:
+        worktree === null
+          ? { mode: "shared", branchName: null, available: true }
+          : {
+              mode: "worktree",
+              branchName: worktree.branch_name,
+              baseBranch: worktree.base_branch,
+              baseCommit: worktree.base_commit,
+              available: worktree.state === "ready",
+            },
     });
   }
 
@@ -168,12 +210,272 @@ export class WorkspaceService {
         projectRecords.map((project) => this.projectDto(project)),
       ),
       threads: threadRecords.map((thread) => this.threadDto(thread)),
-      diagnostics: [...projectResults, ...threadResults]
-        .flatMap((result) =>
+      diagnostics: [
+        ...[...projectResults, ...threadResults].flatMap((result) =>
           result.diagnostic === null ? [] : [result.diagnostic],
-        )
-        .slice(0, 100),
+        ),
+        ...this.store.listWorktreeDiagnostics(),
+      ].slice(0, 100),
     };
+  }
+
+  public async workspacePreflight(projectId: ProjectId) {
+    return await this.worktreeManager.preflight(
+      await this.requireProjectRoot(projectId),
+    );
+  }
+
+  public async startThread(
+    projectId: ProjectId,
+    prompt: string,
+    workspace: z.infer<typeof ThreadWorkspaceRequestSchema>,
+    idempotencyKey: string,
+  ) {
+    const operation = "start-thread";
+    const hash = canonicalRequestHash(operation, {
+      projectId,
+      prompt,
+      workspace,
+    });
+    return await this.serialized(
+      projectId,
+      idempotencyKey,
+      operation,
+      hash,
+      StartThreadResponseSchema,
+      async () => {
+        const projectRoot = await this.requireProjectRoot(projectId);
+        const existingCreation = this.store.getThreadCreation(
+          projectId,
+          idempotencyKey,
+        );
+        if (existingCreation === null && workspace.mode === "worktree")
+          await this.worktreeManager.authorizeBaseBranch(
+            projectRoot,
+            workspace.baseBranch,
+          );
+        let creation = this.store.beginThreadCreation({
+          projectId,
+          idempotencyKey,
+          requestHash: hash,
+          workspaceMode: workspace.mode,
+          baseBranch:
+            workspace.mode === "worktree" ? workspace.baseBranch : null,
+          sourceChanges:
+            workspace.mode === "worktree" ? workspace.sourceChanges : null,
+        });
+        const recoverFailedWorktree =
+          creation.state === "failed" &&
+          creation.workspace_mode === "worktree" &&
+          creation.worktree_id !== null &&
+          creation.runtime_session_id === null &&
+          creation.thread_id === null &&
+          creation.run_id === null;
+        if (creation.state === "failed" && !recoverFailedWorktree)
+          throw new Error(creation.failure_code ?? "thread_creation_failed");
+        if (creation.title === null || creation.slug === null) {
+          let suggested: TitleSuggestion = { outcome: "unavailable" };
+          try {
+            suggested =
+              (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
+              suggested;
+          } catch {
+            // Naming is optional; use the deterministic product fallback.
+          }
+          const title =
+            suggested.outcome === "available"
+              ? suggested.title
+              : fallbackTitle(prompt);
+          creation = this.store.nameThreadCreation(
+            projectId,
+            idempotencyKey,
+            title,
+            worktreeSlug(title),
+          );
+        }
+        let executionRoot = projectRoot;
+        let worktreeId: WorktreeId | null = creation.worktree_id;
+        if (workspace.mode === "worktree") {
+          let worktree =
+            worktreeId === null ? null : this.store.getWorktree(worktreeId);
+          if (worktree?.state !== "ready") {
+            const plan =
+              worktree === null
+                ? await this.worktreeManager.plan({
+                    projectRoot,
+                    stateDirectory: this.store.stateDirectory,
+                    projectId,
+                    worktreeId: creation.id,
+                    title: creation.title ?? fallbackTitle(prompt),
+                    baseBranch: workspace.baseBranch,
+                    ...(workspace.sourceStateToken === undefined
+                      ? {}
+                      : { expectedToken: workspace.sourceStateToken }),
+                    includeChanges:
+                      workspace.sourceChanges === "tracked_and_untracked",
+                  })
+                : await this.worktreeManager.recoveryPlan({
+                    projectRoot,
+                    stateDirectory: this.store.stateDirectory,
+                    projectId,
+                    worktreeId: creation.id,
+                    title: creation.title ?? fallbackTitle(prompt),
+                    record: worktree,
+                    ...(workspace.sourceStateToken === undefined
+                      ? {}
+                      : { expectedToken: workspace.sourceStateToken }),
+                    includeChanges:
+                      creation.source_changes === "tracked_and_untracked",
+                  });
+            if (worktree === null) {
+              const reserved = this.store.reserveCreationWorktree({
+                projectId,
+                idempotencyKey,
+                executionRoot: plan.executionRoot,
+                worktreeRoot: plan.worktreeRoot,
+                gitCommonDir: plan.gitCommonDir,
+                projectSubpath: plan.projectSubpath,
+                baseBranch: plan.baseBranch,
+                baseCommit: plan.baseCommit,
+                branchName: plan.branchName,
+                transferToken:
+                  workspace.sourceChanges === "tracked_and_untracked"
+                    ? plan.sourceToken
+                    : null,
+              });
+              worktree = reserved.worktree;
+              worktreeId = worktree.id;
+              creation = reserved.creation;
+            } else if (
+              worktree.execution_root !== plan.executionRoot ||
+              worktree.worktree_root !== plan.worktreeRoot ||
+              worktree.git_common_dir !== plan.gitCommonDir ||
+              worktree.base_commit !== plan.baseCommit ||
+              worktree.branch_name !== plan.branchName
+            ) {
+              throw new Error("worktree_identity_failed");
+            }
+            if (recoverFailedWorktree) {
+              const resumed = this.store.resumeFailedCreationWorktree(
+                projectId,
+                idempotencyKey,
+              );
+              creation = resumed.creation;
+              worktree = resumed.worktree;
+            }
+            if (worktree.state === "provisioning") {
+              try {
+                await this.worktreeManager.provision(
+                  plan,
+                  workspace.sourceChanges === "tracked_and_untracked",
+                );
+                worktree = this.store.setWorktreeState(worktree.id, "ready");
+              } catch (error) {
+                this.store.setWorktreeState(
+                  worktree.id,
+                  "failed",
+                  error instanceof Error ? error.message : "worktree_failed",
+                  "The worktree could not be prepared.",
+                );
+                this.store.failThreadCreation(
+                  projectId,
+                  idempotencyKey,
+                  error instanceof Error ? error.message : "worktree_failed",
+                  "The worktree could not be prepared.",
+                );
+                throw error;
+              }
+            }
+          }
+          if (worktree.state !== "ready")
+            throw new Error("worktree_unavailable");
+          executionRoot = worktree.execution_root;
+        }
+        if (creation.runtime_session_id === null) {
+          creation = this.store.reserveCreationSession(
+            projectId,
+            idempotencyKey,
+          );
+          const session = await this.runtime.create(
+            executionRoot,
+            creation.title ?? fallbackTitle(prompt),
+            creation.session_creation_id ?? undefined,
+          );
+          creation = this.store.attachCreationSession(
+            projectId,
+            idempotencyKey,
+            session.sessionId,
+          );
+        }
+        let thread =
+          creation.thread_id === null
+            ? null
+            : this.store.getThread(projectId, creation.thread_id);
+        thread ??= this.store.createThreadForCreation(
+          projectId,
+          idempotencyKey,
+          creation.runtime_session_id ?? "",
+          creation.title ?? fallbackTitle(prompt),
+          worktreeId,
+        );
+        creation = this.store.reserveCreationPromptDispatch(
+          projectId,
+          idempotencyKey,
+        );
+        let run =
+          creation.run_id === null ? null : this.store.getRun(creation.run_id);
+        if (run?.id !== creation.run_id) {
+          const dispatch = {
+            id:
+              creation.initial_prompt_dispatch_id ?? creation.prompt_command_id,
+          };
+          const runtime = await this.openRuntime(thread);
+          const recovered = await runtime.recoverPrompt(prompt, dispatch);
+          if (recovered.outcome === "accepted") {
+            const receipt = this.store.readReceipt(
+              projectId,
+              creation.prompt_command_id,
+              "prompt",
+              canonicalRequestHash("prompt", {
+                projectId,
+                threadId: thread.id,
+                text: prompt,
+              }),
+              RunSchema,
+            );
+            if (receipt !== null) {
+              this.store.attachCreationRun(
+                projectId,
+                idempotencyKey,
+                receipt.id,
+              );
+              run = this.store.getRun(receipt.id);
+            } else {
+              run = this.store.acceptRecoveredCreationPrompt(
+                projectId,
+                idempotencyKey,
+                thread.id,
+              );
+            }
+          } else {
+            const started = await this.prompt(
+              projectId,
+              thread.id,
+              prompt,
+              creation.prompt_command_id,
+              dispatch,
+            );
+            this.store.attachCreationRun(projectId, idempotencyKey, started.id);
+            run = this.store.getRun(started.id);
+          }
+        }
+        if (run === null) throw new Error("run_not_found");
+        return StartThreadResponseSchema.parse({
+          thread: this.threadDto(this.requireThread(projectId, thread.id)),
+          run: runDto(run),
+        });
+      },
+    );
   }
 
   private async serialized<T>(
@@ -683,8 +985,9 @@ export class WorkspaceService {
   private async openRuntime(thread: ThreadRecord): Promise<OpenRuntimeSession> {
     const current = this.runtimes.get(thread.id);
     if (current !== undefined) return current.runtime;
+    const context = await this.executionContexts.resolve(thread);
     const runtime = await this.runtime.open(
-      await this.requireProjectRoot(thread.project_id),
+      context.executionRoot,
       thread.runtime_session_id,
     );
     const unsubscribe = runtime.subscribe((event) => {
@@ -745,6 +1048,7 @@ export class WorkspaceService {
     threadId: ThreadId,
     text: string,
     idempotencyKey: string,
+    dispatch?: { id: string },
   ): Promise<Run> {
     const operation = "prompt";
     const hash = canonicalRequestHash(operation, {
@@ -792,7 +1096,7 @@ export class WorkspaceService {
             this.requestPreflightStop(preflight);
             throw new Error("project_not_found");
           }
-          const acceptance = await runtime.prompt(text);
+          const acceptance = await runtime.prompt(text, dispatch);
           pendingAcceptance = acceptance;
           if (!acceptance.accepted) throw new Error("prompt_rejected");
           if (this.preflightPrompts.get(threadId) !== preflight)
@@ -1015,6 +1319,23 @@ export class WorkspaceService {
     const root = await parseProjectRoot(this.requireProject(id).canonical_path);
     if (root === null) throw new Error("project_unavailable");
     return root;
+  }
+
+  public async threadExecutionContext(
+    projectId: string,
+    threadId: string,
+  ): Promise<ThreadExecutionContext> {
+    return await this.executionContexts.resolve(
+      this.requireThread(projectId, threadId),
+    );
+  }
+
+  public async requireThreadRoot(
+    projectId: string,
+    threadId: string,
+  ): Promise<string> {
+    return (await this.threadExecutionContext(projectId, threadId))
+      .executionRoot;
   }
 
   public requireThread(projectId: string, threadId: string): ThreadRecord {

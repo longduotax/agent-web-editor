@@ -10,8 +10,10 @@ import {
   ProjectsResponseSchema,
   RunMutationResponseSchema,
   SessionsResponseSchema,
+  StartThreadResponseSchema,
   ThreadMutationResponseSchema,
   ThreadSnapshotSchema,
+  WorkspacePreflightResponseSchema,
   type ProjectId,
   type RunId,
   type ThreadId,
@@ -99,11 +101,32 @@ export async function setExpanded(
     },
   );
 }
-export async function createThread(projectId: ProjectId) {
+export async function getWorkspacePreflight(projectId: ProjectId) {
   return await request(
-    `/api/projects/${projectId}/threads`,
-    ThreadMutationResponseSchema,
-    { method: "POST", body: body({ idempotencyKey: commandId() }) },
+    `/api/projects/${projectId}/workspace-preflight`,
+    WorkspacePreflightResponseSchema,
+  );
+}
+export async function startThread(
+  projectId: ProjectId,
+  prompt: string,
+  workspace:
+    | { mode: "shared" }
+    | {
+        mode: "worktree";
+        baseBranch: string;
+        sourceChanges: "none" | "tracked_and_untracked";
+        sourceStateToken?: string;
+      },
+  idempotencyKey: string,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/start`,
+    StartThreadResponseSchema,
+    {
+      method: "POST",
+      body: body({ prompt, workspace, idempotencyKey }),
+    },
   );
 }
 export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
@@ -195,27 +218,39 @@ export async function markViewed(
     { method: "POST", body: body({ idempotencyKey: commandId() }) },
   );
 }
-export async function getFiles(projectId: ProjectId, search = "") {
+export async function getFiles(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  search = "",
+) {
   return await request(
-    `/api/projects/${projectId}/files?search=${encodeURIComponent(search)}`,
+    `/api/projects/${projectId}/threads/${threadId}/files?search=${encodeURIComponent(search)}`,
     FileTreeResponseSchema,
   );
 }
-export async function getFile(projectId: ProjectId, path: string) {
+export async function getFile(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  path: string,
+) {
   return await request(
-    `/api/projects/${projectId}/file?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/threads/${threadId}/file?path=${encodeURIComponent(path)}`,
     FilePreviewResponseSchema,
   );
 }
-export async function getStatus(projectId: ProjectId) {
+export async function getStatus(projectId: ProjectId, threadId: ThreadId) {
   return await request(
-    `/api/projects/${projectId}/git/status`,
+    `/api/projects/${projectId}/threads/${threadId}/git/status`,
     GitStatusResponseSchema,
   );
 }
-export async function getDiff(projectId: ProjectId, path: string) {
+export async function getDiff(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  path: string,
+) {
   return await request(
-    `/api/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}`,
+    `/api/projects/${projectId}/threads/${threadId}/git/diff?path=${encodeURIComponent(path)}`,
     GitDiffResponseSchema,
   );
 }

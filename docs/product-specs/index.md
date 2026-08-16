@@ -10,12 +10,15 @@ belong here.
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)             |
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
 | [Thread management](thread-management.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
+| [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
 distinct threads of one project. The user approved product and technical
 version 2 on 2026-08-16; the concurrency slice is implemented and verified
-while the broader initial-workspace plan remains in progress.
+while the broader initial-workspace plan remains in progress. Thread workspaces
+version 2 is Current and provides per-chat source-checkout or isolated-worktree
+execution while preserving the merged per-thread concurrency behavior.
 
 Scalable conversation history is a separate Approved capability for bounded
 latest pages, progressive older-history navigation, polite live following, and

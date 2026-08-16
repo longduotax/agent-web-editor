@@ -8,10 +8,13 @@ import {
   ProjectIdSchema,
   SessionIdSchema,
   RelativePathSchema,
+  StartThreadRequestSchema,
+  GitBranchSchema,
   TerminalClientFrameSchema,
 } from "./index.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
+const threadId = "00000000-0000-4000-8000-000000000003";
 
 describe("wire contracts", () => {
   it("constructs opaque identifiers", () => {
@@ -39,6 +42,39 @@ describe("wire contracts", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("parses explicit clean and local-change worktree starts", () => {
+    expect(
+      StartThreadRequestSchema.parse({
+        prompt: "Build worktrees",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "none",
+        },
+        idempotencyKey: id,
+      }).workspace,
+    ).toMatchObject({ mode: "worktree", sourceChanges: "none" });
+    expect(
+      StartThreadRequestSchema.safeParse({
+        prompt: "Build worktrees",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "tracked_and_untracked",
+          path: "/tmp/unsafe",
+        },
+        idempotencyKey: id,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(["../main", "main..next", "main/", "-main", "main branch"])(
+    "rejects malformed Git branch %s",
+    (branch) => {
+      expect(GitBranchSchema.safeParse(branch).success).toBe(false);
+    },
+  );
 
   it("parses strict archive commands and acknowledgements", () => {
     expect(ArchiveThreadRequestSchema.parse({ idempotencyKey: id })).toEqual({
@@ -96,6 +132,7 @@ describe("wire contracts", () => {
         version: 1,
         type: "input",
         projectId: id,
+        threadId,
         terminalId,
         data: "echo ready",
       }),
@@ -112,6 +149,31 @@ describe("wire contracts", () => {
       },
       { version: 1, type: "restart", projectId: id },
       { version: 1, type: "terminate", projectId: id },
+    ])
+      expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it("requires a thread ID for every terminal frame", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    for (const frame of [
+      { version: 1, type: "attach", projectId: id },
+      {
+        version: 1,
+        type: "input",
+        projectId: id,
+        terminalId,
+        data: "echo missing",
+      },
+      {
+        version: 1,
+        type: "resize",
+        projectId: id,
+        terminalId,
+        columns: 80,
+        rows: 24,
+      },
+      { version: 1, type: "restart", projectId: id, terminalId },
+      { version: 1, type: "terminate", projectId: id, terminalId },
     ])
       expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
   });

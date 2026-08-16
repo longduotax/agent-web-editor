@@ -173,6 +173,8 @@ function exitPayload(
 
 interface TerminalOwner {
   id: TerminalId;
+  projectId: ProjectId;
+  scopeId: string;
   process: PtyProcess;
   listeners: { dispose(): void }[];
   attachments: Set<TerminalAttachment>;
@@ -184,11 +186,12 @@ interface TerminalOwner {
 interface PendingTerminalOwner {
   promise?: Promise<TerminalOwner>;
   cancelled: boolean;
+  projectId: ProjectId;
 }
 
 export class ProjectTerminalManager {
-  private readonly owners = new Map<ProjectId, TerminalOwner>();
-  private readonly pendingOwners = new Map<ProjectId, PendingTerminalOwner>();
+  private readonly owners = new Map<string, TerminalOwner>();
+  private readonly pendingOwners = new Map<string, PendingTerminalOwner>();
   public constructor(
     private readonly factory: PtyFactory = new NodePtyFactory(),
   ) {}
@@ -197,10 +200,12 @@ export class ProjectTerminalManager {
     rawProjectId: string,
     root: string,
     attachment: TerminalAttachment,
+    rawScopeId: string = rawProjectId,
   ): Promise<() => void> {
     const projectId = ProjectIdSchema.parse(rawProjectId);
+    const scopeId = TerminalIdSchema.parse(rawScopeId);
     await access(root);
-    const owner = await this.ownerFor(projectId, root, 100, 30);
+    const owner = await this.ownerFor(scopeId, projectId, root, 100, 30);
     owner.attachments.add(attachment);
     attachment.send(
       terminalFrame({
@@ -229,27 +234,29 @@ export class ProjectTerminalManager {
         }),
       );
     return () => {
-      const currentOwner = this.owners.get(projectId);
+      const currentOwner = this.owners.get(scopeId);
       if (currentOwner?.attachments.has(attachment))
         currentOwner.attachments.delete(attachment);
     };
   }
 
   private async ownerFor(
+    scopeId: string,
     projectId: ProjectId,
     root: string,
     columns: number,
     rows: number,
   ): Promise<TerminalOwner> {
-    const existing = this.owners.get(projectId);
+    const existing = this.owners.get(scopeId);
     if (existing !== undefined) return existing;
-    const pending = this.pendingOwners.get(projectId);
+    const pending = this.pendingOwners.get(scopeId);
     if (pending !== undefined) {
       if (pending.promise === undefined) throw new Error("terminal_gone");
       return pending.promise;
     }
-    const creation: PendingTerminalOwner = { cancelled: false };
+    const creation: PendingTerminalOwner = { cancelled: false, projectId };
     const creationPromise = this.create(
+      scopeId,
       projectId,
       root,
       columns,
@@ -257,16 +264,17 @@ export class ProjectTerminalManager {
       creation,
     );
     creation.promise = creationPromise;
-    this.pendingOwners.set(projectId, creation);
+    this.pendingOwners.set(scopeId, creation);
     try {
       return await creationPromise;
     } finally {
-      if (this.pendingOwners.get(projectId) === creation)
-        this.pendingOwners.delete(projectId);
+      if (this.pendingOwners.get(scopeId) === creation)
+        this.pendingOwners.delete(scopeId);
     }
   }
 
   private async create(
+    scopeId: string,
     projectId: ProjectId,
     root: string,
     columns: number,
@@ -274,12 +282,14 @@ export class ProjectTerminalManager {
     creation: PendingTerminalOwner,
   ): Promise<TerminalOwner> {
     const process = await this.factory.spawn(root, columns, rows);
-    if (creation.cancelled || this.pendingOwners.get(projectId) !== creation) {
+    if (creation.cancelled || this.pendingOwners.get(scopeId) !== creation) {
       process.kill();
       throw new Error("terminal_gone");
     }
     const owner: TerminalOwner = {
       id: TerminalIdSchema.parse(randomUUID()),
+      projectId,
+      scopeId,
       process,
       listeners: [],
       attachments: new Set(),
@@ -330,7 +340,7 @@ export class ProjectTerminalManager {
                 message: "Terminal exited with malformed status.",
               }),
             );
-          this.dispose(projectId, owner, false);
+          this.dispose(scopeId, owner, false);
           return;
         }
         for (const attachment of owner.attachments)
@@ -343,10 +353,10 @@ export class ProjectTerminalManager {
               signal: parsed.signal,
             }),
           );
-        this.dispose(projectId, owner, false);
+        this.dispose(scopeId, owner, false);
       }),
     );
-    this.owners.set(projectId, owner);
+    this.owners.set(scopeId, owner);
     return owner;
   }
 
@@ -354,8 +364,9 @@ export class ProjectTerminalManager {
     rawProjectId: string,
     rawTerminalId: string,
     data: string,
+    rawScopeId: string = rawProjectId,
   ): void {
-    const owner = this.activeOwner(rawProjectId, rawTerminalId);
+    const owner = this.activeOwner(rawScopeId, rawProjectId, rawTerminalId);
     if (Buffer.byteLength(data) > 65_536)
       throw new Error("terminal_input_too_large");
     owner.process.write(data);
@@ -366,6 +377,7 @@ export class ProjectTerminalManager {
     rawTerminalId: string,
     columns: number,
     rows: number,
+    rawScopeId: string = rawProjectId,
   ): void {
     if (
       !Number.isInteger(columns) ||
@@ -376,20 +388,22 @@ export class ProjectTerminalManager {
       rows > 200
     )
       throw new Error("terminal_dimensions_invalid");
-    const owner = this.activeOwner(rawProjectId, rawTerminalId);
+    const owner = this.activeOwner(rawScopeId, rawProjectId, rawTerminalId);
     owner.process.resize(columns, rows);
   }
 
   public async restart(
     rawProjectId: string,
     rawTerminalId: string,
+    rawScopeId: string = rawProjectId,
   ): Promise<void> {
     const projectId = ProjectIdSchema.parse(rawProjectId);
-    const owner = this.activeOwner(projectId, rawTerminalId);
+    const scopeId = TerminalIdSchema.parse(rawScopeId);
+    const owner = this.activeOwner(scopeId, projectId, rawTerminalId);
     const attachments = [...owner.attachments];
     const root = owner.root;
-    this.dispose(projectId, owner, true);
-    const replacement = await this.ownerFor(projectId, root, 100, 30);
+    this.dispose(scopeId, owner, true);
+    const replacement = await this.ownerFor(scopeId, projectId, root, 100, 30);
     for (const attachment of attachments)
       replacement.attachments.add(attachment);
     for (const attachment of attachments)
@@ -403,20 +417,25 @@ export class ProjectTerminalManager {
       );
   }
 
-  public terminate(rawProjectId: string, rawTerminalId?: string): void {
+  public terminate(
+    rawProjectId: string,
+    rawTerminalId?: string,
+    rawScopeId: string = rawProjectId,
+  ): void {
     const projectId = ProjectIdSchema.parse(rawProjectId);
     if (rawTerminalId !== undefined) {
-      const owner = this.activeOwner(projectId, rawTerminalId);
+      const scopeId = TerminalIdSchema.parse(rawScopeId);
+      const owner = this.activeOwner(scopeId, projectId, rawTerminalId);
       this.notifyTermination(projectId, owner);
-      this.dispose(projectId, owner, true);
+      this.dispose(scopeId, owner, true);
       return;
     }
-    const pending = this.pendingOwners.get(projectId);
-    if (pending !== undefined) pending.cancelled = true;
-    const owner = this.owners.get(projectId);
-    if (owner !== undefined) {
+    for (const pending of this.pendingOwners.values())
+      if (pending.projectId === projectId) pending.cancelled = true;
+    for (const [scopeId, owner] of this.owners) {
+      if (owner.projectId !== projectId) continue;
       this.notifyTermination(projectId, owner);
-      this.dispose(projectId, owner, true);
+      this.dispose(scopeId, owner, true);
     }
   }
 
@@ -434,23 +453,22 @@ export class ProjectTerminalManager {
   }
 
   private activeOwner(
+    rawScopeId: string,
     rawProjectId: string,
     rawTerminalId: string,
   ): TerminalOwner {
+    const scopeId = TerminalIdSchema.parse(rawScopeId);
     const projectId = ProjectIdSchema.parse(rawProjectId);
     const terminalId = TerminalIdSchema.parse(rawTerminalId);
-    const owner = this.owners.get(projectId);
-    if (owner?.id !== terminalId) throw new Error("terminal_gone");
+    const owner = this.owners.get(scopeId);
+    if (owner?.id !== terminalId || owner.projectId !== projectId)
+      throw new Error("terminal_gone");
     return owner;
   }
 
-  private dispose(
-    projectId: ProjectId,
-    owner: TerminalOwner,
-    kill: boolean,
-  ): void {
-    if (this.owners.get(projectId) !== owner) return;
-    this.owners.delete(projectId);
+  private dispose(scopeId: string, owner: TerminalOwner, kill: boolean): void {
+    if (this.owners.get(scopeId) !== owner) return;
+    this.owners.delete(scopeId);
     for (const listener of owner.listeners) listener.dispose();
     owner.listeners.length = 0;
     if (kill) owner.process.kill();
@@ -459,7 +477,7 @@ export class ProjectTerminalManager {
 
   public close(): void {
     for (const pending of this.pendingOwners.values()) pending.cancelled = true;
-    for (const [projectId, owner] of this.owners)
-      this.dispose(projectId, owner, true);
+    for (const [scopeId, owner] of this.owners)
+      this.dispose(scopeId, owner, true);
   }
 }
