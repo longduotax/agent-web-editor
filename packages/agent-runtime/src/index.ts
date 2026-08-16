@@ -65,9 +65,10 @@ export interface OpenRuntimeSession {
 }
 
 export interface AgentRuntime {
+  suggestTitle?(projectPath: string, prompt: string): Promise<string>;
   discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }>;
-  create(projectPath: string): Promise<{ sessionId: string }>;
+  create(projectPath: string, title?: string): Promise<{ sessionId: string }>;
   open(projectPath: string, sessionId: string): Promise<OpenRuntimeSession>;
 }

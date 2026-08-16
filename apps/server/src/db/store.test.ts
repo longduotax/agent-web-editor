@@ -125,7 +125,7 @@ describe("metadata persistence", () => {
     store.close();
   });
 
-  it("migrates a populated v1 database to the thread run lease with a backup", async () => {
+  it("migrates a populated v1 database through worktree metadata with backups", async () => {
     const state = await stateDirectory();
     let store = await MetadataStore.open({
       stateDirectory: state,
@@ -148,7 +148,7 @@ describe("metadata persistence", () => {
 
     const before = new Database(join(state, "metadata.sqlite"));
     before.exec(
-      "DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
+      "DROP TABLE thread_creation_operations; DROP INDEX threads_worktree_unique; ALTER TABLE threads DROP COLUMN worktree_id; DROP TABLE worktrees; DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
     );
     expect(before.pragma("user_version", { simple: true })).toBe(1);
     before.close();
@@ -162,7 +162,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(join(state, "metadata.sqlite"));
-    expect(migrated.pragma("user_version", { simple: true })).toBe(2);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(3);
     expect(
       migrated
         .prepare(
@@ -251,7 +251,7 @@ describe("metadata persistence", () => {
     const state = await stateDirectory();
     const databasePath = join(state, "metadata.sqlite");
     const newer = new Database(databasePath);
-    newer.pragma("user_version = 3");
+    newer.pragma("user_version = 4");
     newer.close();
 
     await expect(MetadataStore.open({ stateDirectory: state })).rejects.toThrow(
@@ -259,7 +259,7 @@ describe("metadata persistence", () => {
     );
 
     const unchanged = new Database(databasePath);
-    expect(unchanged.pragma("user_version", { simple: true })).toBe(3);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(4);
     unchanged.close();
   });
 

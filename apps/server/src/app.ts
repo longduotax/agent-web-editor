@@ -17,6 +17,7 @@ import {
   RemoveProjectRequestSchema,
   RenameThreadRequestSchema,
   RunIdSchema,
+  StartThreadRequestSchema,
   SteerRequestSchema,
   TerminalClientFrameSchema,
   ThreadIdSchema,
@@ -170,6 +171,51 @@ function safeError(error: unknown): {
         code: "git_path_not_changed",
         message: "The file is not in the current change set.",
       },
+      source_changed: {
+        status: 409,
+        code: "source_changed",
+        message: "Local changes changed after review. Refresh and try again.",
+      },
+      source_changes_unsupported: {
+        status: 409,
+        code: "source_changes_unsupported",
+        message: "These local changes cannot be transferred safely.",
+      },
+      source_transfer_failed: {
+        status: 409,
+        code: "source_transfer_failed",
+        message: "Local changes could not be applied to the worktree.",
+      },
+      source_transfer_mismatch: {
+        status: 409,
+        code: "source_transfer_mismatch",
+        message: "The transferred worktree did not match the reviewed changes.",
+      },
+      worktree_unavailable: {
+        status: 409,
+        code: "worktree_unavailable",
+        message: "The thread worktree is unavailable.",
+      },
+      worktree_create_failed: {
+        status: 409,
+        code: "worktree_create_failed",
+        message: "Git could not create the worktree.",
+      },
+      worktree_recovery_required: {
+        status: 409,
+        code: "worktree_recovery_required",
+        message: "Worktree setup needs manual recovery before retrying.",
+      },
+      worktree_not_clean: {
+        status: 409,
+        code: "worktree_not_clean",
+        message: "The new worktree was not clean after checkout.",
+      },
+      worktree_identity_failed: {
+        status: 409,
+        code: "worktree_identity_failed",
+        message: "The worktree did not match its expected repository identity.",
+      },
     };
     const mapped = known[error.message];
     if (mapped !== undefined) return mapped;
@@ -217,7 +263,7 @@ export async function buildServer(
   const terminals = new ProjectTerminalManager(options.ptyFactory);
   const workspace = new WorkspaceService(
     store,
-    options.runtime ?? new PiAgentRuntime(),
+    options.runtime ?? new PiAgentRuntime(undefined, config.namingModel),
     broker,
     terminals,
   );
@@ -282,6 +328,24 @@ export async function buildServer(
     const body = RemoveProjectRequestSchema.parse(request.body);
     await workspace.removeProject(params.projectId, body.idempotencyKey);
     return { removed: true };
+  });
+
+  server.get(
+    "/api/projects/:projectId/workspace-preflight",
+    async (request) => {
+      const params = projectParamsSchema.parse(request.params);
+      return await workspace.workspacePreflight(params.projectId);
+    },
+  );
+  server.post("/api/projects/:projectId/threads/start", async (request) => {
+    const params = projectParamsSchema.parse(request.params);
+    const body = StartThreadRequestSchema.parse(request.body);
+    return await workspace.startThread(
+      params.projectId,
+      body.prompt,
+      body.workspace,
+      body.idempotencyKey,
+    );
   });
 
   server.get("/api/projects/:projectId/sessions", async (request) => {
@@ -387,6 +451,59 @@ export async function buildServer(
     },
   );
 
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/files",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const query = fileQuerySchema.parse(request.query);
+      const root = await workspace.requireThreadRoot(
+        params.projectId,
+        params.threadId,
+      );
+      if (query.path !== "") RelativePathSchema.parse(query.path);
+      const target =
+        query.path === ""
+          ? root
+          : (
+              await (
+                await import("./inspector/files.js")
+              ).resolveContained(root, query.path, true)
+            ).target;
+      return await listProjectFiles(target, query.search);
+    },
+  );
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/file",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const query = z.object({ path: RelativePathSchema }).parse(request.query);
+      return await previewProjectFile(
+        await workspace.requireThreadRoot(params.projectId, params.threadId),
+        query.path,
+      );
+    },
+  );
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/git/status",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      return await getGitStatus(
+        await workspace.requireThreadRoot(params.projectId, params.threadId),
+      );
+    },
+  );
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/git/diff",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const query = z.object({ path: RelativePathSchema }).parse(request.query);
+      return await getGitDiff(
+        await workspace.requireThreadRoot(params.projectId, params.threadId),
+        query.path,
+      );
+    },
+  );
+
   server.get("/api/projects/:projectId/files", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     const query = fileQuerySchema.parse(request.query);
@@ -470,26 +587,47 @@ export async function buildServer(
           if (Buffer.byteLength(text) > config.bodyLimit)
             throw new Error("frame_too_large");
           const frame = TerminalClientFrameSchema.parse(JSON.parse(text));
-          const root = await workspace.requireProjectRoot(frame.projectId);
+          const context =
+            frame.threadId === undefined
+              ? null
+              : await workspace.threadExecutionContext(
+                  frame.projectId,
+                  frame.threadId,
+                );
+          const root =
+            context?.executionRoot ??
+            (await workspace.requireProjectRoot(frame.projectId));
+          const scopeId = context?.scopeId ?? frame.projectId;
           if (frame.type === "attach") {
             detach?.();
-            detach = await terminals.attach(frame.projectId, root, {
-              send: (message) => {
-                socket.send(JSON.stringify(message));
+            detach = await terminals.attach(
+              frame.projectId,
+              root,
+              {
+                send: (message) => {
+                  socket.send(JSON.stringify(message));
+                },
               },
-            });
+              scopeId,
+            );
           } else if (frame.type === "input")
-            terminals.input(frame.projectId, frame.terminalId, frame.data);
+            terminals.input(
+              frame.projectId,
+              frame.terminalId,
+              frame.data,
+              scopeId,
+            );
           else if (frame.type === "resize")
             terminals.resize(
               frame.projectId,
               frame.terminalId,
               frame.columns,
               frame.rows,
+              scopeId,
             );
           else if (frame.type === "restart")
-            await terminals.restart(frame.projectId, frame.terminalId);
-          else terminals.terminate(frame.projectId, frame.terminalId);
+            await terminals.restart(frame.projectId, frame.terminalId, scopeId);
+          else terminals.terminate(frame.projectId, frame.terminalId, scopeId);
         } catch {
           socket.send(
             JSON.stringify({

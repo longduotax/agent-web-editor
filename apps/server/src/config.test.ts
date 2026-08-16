@@ -83,6 +83,27 @@ describe("server configuration", () => {
     expect(parsePort("0", true)).toBe(0);
   });
 
+  it("parses an optional naming model and rejects malformed selectors", () => {
+    expect(
+      parseConfig({
+        argv: [],
+        environment: {
+          PI_WEB_STATE_DIR: resolve("tmp-state"),
+          PI_WEB_NAMING_MODEL: "openai-codex/gpt-5.4-mini",
+        },
+      }).namingModel,
+    ).toBe("openai-codex/gpt-5.4-mini");
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: {
+          PI_WEB_STATE_DIR: resolve("tmp-state"),
+          PI_WEB_NAMING_MODEL: "missing-separator",
+        },
+      }),
+    ).toThrow(/provider\/model/);
+  });
+
   it("rejects relative state directories", () => {
     expect(() =>
       parseConfig({ argv: [], environment: { PI_WEB_STATE_DIR: "relative" } }),

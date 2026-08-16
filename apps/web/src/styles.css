@@ -817,6 +817,68 @@ a:focus-visible {
     background: rgba(0, 0, 0, 0.58);
   }
 }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.new-chat {
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.new-chat-card {
+  width: min(760px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #17191d;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.new-chat-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.65rem 0.75rem 0;
+}
+.new-chat-toolbar select {
+  max-width: 220px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+}
+.new-chat-toolbar select:hover:not(:disabled),
+.new-chat-toolbar select:focus-visible {
+  background: var(--surface-hover);
+}
+.new-chat-toolbar select:disabled {
+  color: var(--muted);
+}
+.new-chat-input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.new-chat-input textarea {
+  min-height: 150px;
+}
+.new-chat-note {
+  margin: 0.5rem 1rem 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.new-chat-note.warning {
+  color: #d8b26d;
+}
 @media (max-width: 480px) {
   .transcript,
   .composer {

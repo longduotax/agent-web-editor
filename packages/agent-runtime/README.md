@@ -1,7 +1,7 @@
 # Agent runtime
 
-SDK-neutral interfaces for persistent session discovery/create/open, transcript
-snapshots, prompt preflight and settlement, steering, stopping, events, and
+SDK-neutral interfaces for bounded prompt-derived naming, persistent session
+discovery/create/open, transcript snapshots, prompt preflight and settlement, steering, stopping, events, and
 lifecycle disposal.
 
 Failures use application-owned categories. No Pi classes, paths, content blocks,

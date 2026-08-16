@@ -26,7 +26,7 @@ import {
 
 import {
   browseProject,
-  createThread,
+  commandId,
   discoverSessions,
   getDiff,
   getFile,
@@ -34,12 +34,14 @@ import {
   getSnapshot,
   getStatus,
   getWorkspace,
+  getWorkspacePreflight,
   importThread,
   markViewed,
   prompt,
   removeProject,
   renameThread,
   setExpanded,
+  startThread,
   steer,
   stop,
   webSocketUrl,
@@ -77,15 +79,6 @@ function Sidebar({
     onSuccess: async (result) => {
       if (result.outcome === "selected")
         await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    },
-  });
-  const create = useMutation({
-    mutationFn: createThread,
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-      void navigate(
-        `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
-      );
     },
   });
   const [discoveringProjectId, setDiscoveringProjectId] = useState<
@@ -213,7 +206,7 @@ function Sidebar({
                   className="icon-button"
                   aria-label={`New thread in ${project.displayName}`}
                   onClick={() => {
-                    create.mutate(project.id);
+                    void navigate(`/projects/${project.id}/new`);
                   }}
                 >
                   ＋
@@ -388,6 +381,11 @@ function Sidebar({
           );
         })}
       </div>
+      {workspace.data?.diagnostics.map((diagnostic) => (
+        <p className="diagnostic warning" key={diagnostic}>
+          {diagnostic}
+        </p>
+      ))}
       <footer className="local-only">
         <span aria-hidden="true">⌂</span> Loopback-only server
       </footer>
@@ -593,28 +591,34 @@ export function Composer({
   );
 }
 
-function Inspector({ project }: { project: Project }) {
+function Inspector({
+  project,
+  threadId,
+}: {
+  project: Project;
+  threadId: ThreadId;
+}) {
   const [tab, setTab] = useState<"changes" | "files" | "terminal">("changes");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const status = useQuery({
     queryKey: ["git", project.id],
-    queryFn: () => getStatus(project.id),
+    queryFn: () => getStatus(project.id, threadId),
     enabled: tab === "changes",
   });
   const files = useQuery({
     queryKey: ["files", project.id, search],
-    queryFn: () => getFiles(project.id, search),
+    queryFn: () => getFiles(project.id, threadId, search),
     enabled: tab === "files",
   });
   const preview = useQuery({
     queryKey: ["file", project.id, selectedPath],
-    queryFn: () => getFile(project.id, selectedPath ?? ""),
+    queryFn: () => getFile(project.id, threadId, selectedPath ?? ""),
     enabled: tab === "files" && selectedPath !== null,
   });
   const diff = useQuery({
     queryKey: ["diff", project.id, selectedPath],
-    queryFn: () => getDiff(project.id, selectedPath ?? ""),
+    queryFn: () => getDiff(project.id, threadId, selectedPath ?? ""),
     enabled: tab === "changes" && selectedPath !== null,
   });
   return (
@@ -638,7 +642,7 @@ function Inspector({ project }: { project: Project }) {
       <div className="inspector-content">
         {tab === "changes" && (
           <>
-            <p className="scope-note">Current project-wide working tree</p>
+            <p className="scope-note">Current thread workspace</p>
             {status.data?.available === false && (
               <div className="empty">{status.data.message}</div>
             )}
@@ -742,9 +746,282 @@ function Inspector({ project }: { project: Project }) {
             )}
           </>
         )}
-        {tab === "terminal" && <TerminalView projectId={project.id} />}
+        {tab === "terminal" && (
+          <TerminalView projectId={project.id} threadId={threadId} />
+        )}
       </div>
     </aside>
+  );
+}
+
+function NewChatRoute() {
+  const params = useParams();
+  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  const projectId = projectResult.success ? projectResult.data : undefined;
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const workspace = useQuery({
+    queryKey: ["workspace"],
+    queryFn: getWorkspace,
+  });
+  const preflight = useQuery({
+    queryKey: ["workspace-preflight", projectId],
+    queryFn: async () => {
+      if (projectId === undefined) throw new Error("Project is unavailable.");
+      return await getWorkspacePreflight(projectId);
+    },
+    enabled: projectId !== undefined,
+  });
+  const [mode, setMode] = useState<"worktree" | "shared">("worktree");
+  const [sourceChanges, setSourceChanges] = useState<
+    "none" | "tracked_and_untracked"
+  >("none");
+  const [baseBranch, setBaseBranch] = useState("");
+  const [creationKey, setCreationKey] = useState(commandId);
+  const [text, setText] = useState(() =>
+    projectId === undefined
+      ? ""
+      : (localStorage.getItem(`pi-new-draft:${projectId}`) ?? ""),
+  );
+  useEffect(() => {
+    setMode("worktree");
+    setSourceChanges("none");
+    setBaseBranch("");
+    setCreationKey(commandId());
+    setText(
+      projectId === undefined
+        ? ""
+        : (localStorage.getItem(`pi-new-draft:${projectId}`) ?? ""),
+    );
+  }, [projectId]);
+  useEffect(() => {
+    if (preflight.data?.currentBranch !== null && baseBranch === "")
+      setBaseBranch(preflight.data?.currentBranch ?? "");
+  }, [baseBranch, preflight.data?.currentBranch]);
+  useEffect(() => {
+    if (projectId !== undefined)
+      localStorage.setItem(`pi-new-draft:${projectId}`, text);
+  }, [projectId, text]);
+  const create = useMutation({
+    mutationFn: async () => {
+      if (projectId === undefined) throw new Error("Project is unavailable.");
+      return await startThread(
+        projectId,
+        text,
+        mode === "shared"
+          ? { mode: "shared" }
+          : {
+              mode: "worktree",
+              baseBranch,
+              sourceChanges,
+              ...(sourceChanges === "tracked_and_untracked" &&
+              preflight.data?.changes !== null &&
+              preflight.data?.changes !== undefined
+                ? { sourceStateToken: preflight.data.changes.token }
+                : {}),
+            },
+        creationKey,
+      );
+    },
+    onSuccess: async (result) => {
+      if (projectId !== undefined)
+        localStorage.removeItem(`pi-new-draft:${projectId}`);
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      void navigate(
+        `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
+      );
+    },
+  });
+  if (!projectResult.success) return <NotFound />;
+  const project = workspace.data?.projects.find(
+    (candidate) => candidate.id === projectResult.data,
+  );
+  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (
+      text.trim() === "" ||
+      (mode === "worktree" &&
+        (!preflight.data?.worktreeAvailable || baseBranch === ""))
+    )
+      return;
+    create.mutate();
+  };
+  return (
+    <WorkspaceLayout selectedProjectId={projectResult.data}>
+      <main className="center new-chat">
+        <form className="new-chat-card" onSubmit={submit}>
+          <div className="new-chat-toolbar" aria-label="New chat configuration">
+            <label>
+              <span className="sr-only">Project</span>
+              <select
+                aria-label="Project"
+                value={projectResult.data}
+                onChange={(event) => {
+                  void navigate(`/projects/${event.target.value}/new`);
+                }}
+              >
+                {workspace.data?.projects.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    📁 {candidate.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Execution location</span>
+              <select
+                aria-label="Execution location"
+                value={mode}
+                onChange={(event) => {
+                  setMode(
+                    event.target.value === "shared" ? "shared" : "worktree",
+                  );
+                  setSourceChanges("none");
+                  setCreationKey(commandId());
+                }}
+              >
+                <option
+                  value="worktree"
+                  disabled={preflight.data?.worktreeAvailable === false}
+                >
+                  ↗ New worktree
+                </option>
+                <option value="shared">⌂ Local checkout</option>
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Starting state</span>
+              <select
+                aria-label="Starting state"
+                value={mode === "shared" ? "current" : sourceChanges}
+                disabled={mode === "shared"}
+                onChange={(event) => {
+                  setSourceChanges(
+                    event.target.value === "tracked_and_untracked"
+                      ? "tracked_and_untracked"
+                      : "none",
+                  );
+                  setCreationKey(commandId());
+                }}
+              >
+                {mode === "shared" && (
+                  <option value="current">● Current local files</option>
+                )}
+                {mode === "worktree" && (
+                  <>
+                    <option value="none">◫ Clean start</option>
+                    <option
+                      value="tracked_and_untracked"
+                      disabled={
+                        baseBranch !==
+                          (preflight.data === undefined
+                            ? null
+                            : preflight.data.currentBranch) ||
+                        (preflight.data?.changes?.files.length ?? 0) === 0
+                      }
+                    >
+                      ● Include local changes
+                    </option>
+                  </>
+                )}
+              </select>
+            </label>
+            <label>
+              <span className="sr-only">Base branch</span>
+              <select
+                aria-label="Base branch"
+                value={baseBranch}
+                disabled={mode === "shared"}
+                onChange={(event) => {
+                  setBaseBranch(event.target.value);
+                  setSourceChanges("none");
+                  setCreationKey(commandId());
+                }}
+              >
+                {(preflight.data?.branches ?? []).map((branch) => (
+                  <option key={branch} value={branch}>
+                    ⑂ {branch}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {mode === "worktree" &&
+            preflight.data?.worktreeAvailable === false && (
+              <p className="new-chat-note" role="alert">
+                {preflight.data.unavailableReason}
+              </p>
+            )}
+          {mode === "worktree" && sourceChanges === "none" && (
+            <p className="new-chat-note">
+              Starts from committed {baseBranch || "HEAD"}. Local changes are
+              not copied.
+            </p>
+          )}
+          {mode === "worktree" && sourceChanges === "tracked_and_untracked" && (
+            <div className="new-chat-note warning">
+              <p>
+                Including {String(preflight.data?.changes?.files.length ?? 0)}{" "}
+                local changes. Ignored files are excluded.
+              </p>
+              <details>
+                <summary>Review files</summary>
+                <ul>
+                  {preflight.data?.changes?.files.map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          )}
+          {mode === "shared" && (
+            <p className="new-chat-note warning">
+              Pi will work directly in the existing checkout and see its current
+              files.
+            </p>
+          )}
+          <div className="composer-input new-chat-input">
+            <textarea
+              aria-label="First message"
+              placeholder={`Ask Pi to work in ${project?.displayName ?? "this project"}…`}
+              rows={6}
+              autoFocus
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
+                setCreationKey(commandId());
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "Enter" ||
+                  event.shiftKey ||
+                  event.nativeEvent.isComposing
+                )
+                  return;
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }}
+            />
+            <div className="composer-actions">
+              <span>
+                {create.isPending
+                  ? "Naming and preparing workspace…"
+                  : "Enter to send · Shift + Enter for a new line"}
+              </span>
+              <button
+                type="submit"
+                className="send"
+                aria-label="Create chat and send"
+                disabled={create.isPending || text.trim() === ""}
+              >
+                <span aria-hidden="true">↑</span>
+              </button>
+            </div>
+          </div>
+          {create.error !== null && <ErrorNotice error={create.error} />}
+        </form>
+      </main>
+    </WorkspaceLayout>
   );
 }
 
@@ -771,6 +1048,11 @@ function ThreadRoute() {
     snapshot.data?.thread.unread,
     threadId,
   ]);
+  const threadWorkspace = snapshot.data?.thread.workspace ?? {
+    mode: "shared" as const,
+    branchName: null,
+    available: true,
+  };
   return (
     <WorkspaceLayout selectedProjectId={projectId} selectedThreadId={threadId}>
       {snapshot.isPending ? (
@@ -784,7 +1066,15 @@ function ThreadRoute() {
           <main className="center">
             <header className="thread-header">
               <div>
-                <small>{snapshot.data.project.displayName}</small>
+                <small>
+                  {snapshot.data.project.displayName} ·{" "}
+                  {threadWorkspace.mode === "worktree"
+                    ? "↗ Worktree"
+                    : "⌂ Local checkout"}
+                  {threadWorkspace.branchName === null
+                    ? ""
+                    : ` · ⑂ ${threadWorkspace.branchName}`}
+                </small>
                 <h1>{snapshot.data.thread.title}</h1>
               </div>
               <Status
@@ -807,7 +1097,7 @@ function ThreadRoute() {
               snapshot={snapshot.data}
             />
           </main>
-          <Inspector project={snapshot.data.project} />
+          <Inspector project={snapshot.data.project} threadId={threadId} />
         </>
       )}
     </WorkspaceLayout>
@@ -851,7 +1141,6 @@ function ProjectRoute() {
         <h1>{project.displayName}</h1>
         <p>Create a thread using the + button beside the project.</p>
       </main>
-      <Inspector project={project} />
     </WorkspaceLayout>
   );
 }
@@ -954,6 +1243,7 @@ export function App() {
     <Routes>
       <Route path="/" element={<EmptyRoot />} />
       <Route path="/projects/:projectId" element={<ProjectRoute />} />
+      <Route path="/projects/:projectId/new" element={<NewChatRoute />} />
       <Route
         path="/projects/:projectId/threads/:threadId"
         element={<ThreadRoute />}

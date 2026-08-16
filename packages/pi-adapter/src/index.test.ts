@@ -149,15 +149,18 @@ describe("PiAgentRuntime session creation boundary", () => {
     );
 
     await expect(
-      new PiAgentRuntime(context.agentDirectory).create(context.project),
+      new PiAgentRuntime(context.agentDirectory).create(
+        context.project,
+        "Implement thread workspaces",
+      ),
     ).resolves.toEqual({ sessionId });
     expect(sdk.create).toHaveBeenCalledWith(
       context.project,
       context.sessionDirectory,
     );
-    await expect(readFile(context.sessionPath, "utf8")).resolves.toContain(
-      `"id":"${sessionId}"`,
-    );
+    const persisted = await readFile(context.sessionPath, "utf8");
+    expect(persisted).toContain(`"id":"${sessionId}"`);
+    expect(persisted).toContain(`"name":"Implement thread workspaces"`);
   });
 
   it("does not overwrite an existing native session file", async () => {

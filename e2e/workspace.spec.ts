@@ -24,8 +24,10 @@ class BrowserSession implements OpenRuntimeSession {
   }
   public prompt() {
     return Promise.resolve({
-      accepted: false,
-      settlement: Promise.resolve("failed" as const),
+      accepted: true,
+      settlement: new Promise<"completed" | "failed" | "interrupted">(
+        () => undefined,
+      ),
       releaseEvents: () => undefined,
       discardEvents: () => undefined,
     });
@@ -143,6 +145,14 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await page
     .getByRole("button", { name: `New thread in ${projectName}` })
     .click();
+  await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/new$/);
+  await page
+    .getByRole("combobox", { name: "Execution location" })
+    .selectOption("shared");
+  await page
+    .getByRole("textbox", { name: "First message" })
+    .fill("Inspect this project");
+  await page.getByRole("button", { name: "Create chat and send" }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/threads\/[0-9a-f-]+$/);
   await expect(
     page.getByText(/Pi tools run with your user permissions/),

@@ -6,6 +6,7 @@ import {
   ProjectIdSchema,
   SessionIdSchema,
   RelativePathSchema,
+  StartThreadRequestSchema,
   TerminalClientFrameSchema,
 } from "./index.js";
 
@@ -34,6 +35,32 @@ describe("wire contracts", () => {
       BrowseProjectResponseSchema.safeParse({
         outcome: "cancelled",
         path: "/tmp/project",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses explicit clean and local-change worktree starts", () => {
+    expect(
+      StartThreadRequestSchema.parse({
+        prompt: "Build worktrees",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "none",
+        },
+        idempotencyKey: id,
+      }).workspace,
+    ).toMatchObject({ mode: "worktree", sourceChanges: "none" });
+    expect(
+      StartThreadRequestSchema.safeParse({
+        prompt: "Build worktrees",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "tracked_and_untracked",
+          path: "/tmp/unsafe",
+        },
+        idempotencyKey: id,
       }).success,
     ).toBe(false);
   });

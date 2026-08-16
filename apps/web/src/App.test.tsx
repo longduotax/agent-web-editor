@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -17,9 +17,11 @@ const api = vi.hoisted(() => ({
   discoverSessions: vi.fn(),
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
+  getWorkspacePreflight: vi.fn(),
   importThread: vi.fn(),
   prompt: vi.fn(),
   renameThread: vi.fn(),
+  startThread: vi.fn(),
   steer: vi.fn(),
 }));
 
@@ -33,6 +35,7 @@ import { Status } from "./components/Status.js";
 import { App, Composer } from "./App.js";
 
 afterEach(() => {
+  cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -59,6 +62,70 @@ describe("safe and accessible workspace rendering", () => {
     expect(
       screen.queryByText("Opening local workspace…"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows Codex-style worktree choices with a clean default and no environment control", async () => {
+    const user = userEvent.setup();
+    const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "example",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          available: true,
+          gitAvailable: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [],
+      diagnostics: [],
+    });
+    api.getWorkspacePreflight.mockResolvedValue({
+      worktreeAvailable: true,
+      unavailableReason: null,
+      currentBranch: "main",
+      branches: ["main", "release"],
+      headCommit: "1234567",
+      changes: {
+        staged: 1,
+        modified: 1,
+        deleted: 0,
+        renamed: 0,
+        untracked: 1,
+        files: ["one.ts", "two.ts", "three.ts"],
+        token: "1234567890abcdef",
+      },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}/new`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByLabelText("Execution location")).toHaveValue(
+      "worktree",
+    );
+    expect(screen.getByLabelText("Starting state")).toHaveValue("none");
+    expect(screen.queryByLabelText(/environment/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Local changes are not copied/),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    });
+    await user.selectOptions(
+      screen.getByLabelText("Starting state"),
+      "tracked_and_untracked",
+    );
+    expect(screen.getByText(/Including 3 local changes/)).toBeInTheDocument();
   });
 
   it("sends with Enter, uses Shift+Enter for a new line, and steers active runs", async () => {
@@ -99,6 +166,7 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        workspace: { mode: "shared", branchName: null, available: true },
       },
       transcript: [],
       currentRun: null,

@@ -13,10 +13,12 @@ import {
   RunStateSchema,
   ThreadIdSchema,
   TimestampSchema,
+  WorktreeIdSchema,
   type ProjectId,
   type RunId,
   type RunState,
   type ThreadId,
+  type WorktreeId,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -40,6 +42,54 @@ const threadRowSchema = z.object({
   last_activity_at: TimestampSchema,
   last_completed_run_id: RunIdSchema.nullable(),
   last_viewed_completed_run_id: RunIdSchema.nullable(),
+  worktree_id: WorktreeIdSchema.nullable(),
+});
+const worktreeRowSchema = z.object({
+  id: WorktreeIdSchema,
+  project_id: ProjectIdSchema,
+  state: z.enum(["provisioning", "ready", "failed"]),
+  execution_root: z.string().min(1),
+  worktree_root: z.string().min(1),
+  git_common_dir: z.string().min(1),
+  project_subpath: z.string(),
+  base_branch: z.string().min(1).max(255),
+  base_commit: z.string().regex(/^[0-9a-f]{7,64}$/),
+  branch_name: z.string().min(1).max(255),
+  created_at: TimestampSchema,
+  updated_at: TimestampSchema,
+  failure_code: z.string().max(80).nullable(),
+  failure_message: z.string().max(500).nullable(),
+});
+const creationRowSchema = z.object({
+  id: z.uuid(),
+  project_id: ProjectIdSchema,
+  idempotency_key: z.uuid(),
+  request_hash: z.string().length(64),
+  state: z.enum([
+    "naming",
+    "provisioning",
+    "session_created",
+    "thread_created",
+    "prompt_accepted",
+    "failed",
+  ]),
+  workspace_mode: z.enum(["shared", "worktree"]),
+  base_branch: z.string().max(255).nullable(),
+  source_changes: z.enum(["none", "tracked_and_untracked"]).nullable(),
+  title: z.string().min(1).max(60).nullable(),
+  slug: z
+    .string()
+    .regex(/^[a-z0-9-]+$/)
+    .nullable(),
+  worktree_id: WorktreeIdSchema.nullable(),
+  runtime_session_id: z.uuid().nullable(),
+  thread_id: ThreadIdSchema.nullable(),
+  run_id: RunIdSchema.nullable(),
+  prompt_command_id: z.uuid(),
+  created_at: TimestampSchema,
+  updated_at: TimestampSchema,
+  failure_code: z.string().max(80).nullable(),
+  failure_message: z.string().max(500).nullable(),
 });
 const runRowSchema = z.object({
   id: RunIdSchema,
@@ -64,6 +114,8 @@ const sqliteSchemaVersionSchema = z.number().int().nonnegative();
 export type ProjectRecord = z.infer<typeof projectRowSchema>;
 export type ThreadRecord = z.infer<typeof threadRowSchema>;
 export type RunRecord = z.infer<typeof runRowSchema>;
+export type WorktreeRecord = z.infer<typeof worktreeRowSchema>;
+export type ThreadCreationRecord = z.infer<typeof creationRowSchema>;
 export type ListReadResult<T> =
   | { readonly record: T; readonly diagnostic: null }
   | { readonly record: null; readonly diagnostic: string };
@@ -175,7 +227,7 @@ export class MetadataStore {
       const schemaVersion = sqliteSchemaVersionSchema.parse(
         sqlite.pragma("user_version", { simple: true }),
       );
-      if (schemaVersion > 2)
+      if (schemaVersion > 3)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
@@ -219,6 +271,19 @@ export class MetadataStore {
         sqlite.transaction(() => {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 2");
+        })();
+        migratedSchemaVersion = 2;
+      }
+      if (migratedSchemaVersion < 3) {
+        if (schemaVersion >= 2) await backupBefore(3);
+        const migrationPath = new URL(
+          "../../migrations/0003_thread_workspaces.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 3");
         })();
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
@@ -411,15 +476,24 @@ export class MetadataStore {
     projectId: ProjectId,
     runtimeSessionId: string,
     title?: string,
+    worktreeId: WorktreeId | null = null,
   ): ThreadRecord {
     const id = ThreadIdSchema.parse(this.id());
     const now = this.now();
     this.sqlite.transaction(() => {
       this.sqlite
         .prepare(
-          "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)",
+          "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, worktree_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
         )
-        .run(id, projectId, title ?? "New thread", runtimeSessionId, now, now);
+        .run(
+          id,
+          projectId,
+          title ?? "New thread",
+          runtimeSessionId,
+          now,
+          now,
+          worktreeId,
+        );
       this.sqlite
         .prepare("UPDATE projects SET last_opened_thread_id = ? WHERE id = ?")
         .run(id, projectId);
@@ -593,6 +667,234 @@ export class MetadataStore {
     return (
       thread.last_completed_run_id !== null &&
       thread.last_completed_run_id !== thread.last_viewed_completed_run_id
+    );
+  }
+
+  public listWorktreeDiagnostics(): string[] {
+    const rows = this.sqlite
+      .prepare(
+        "SELECT w.state, w.branch_name FROM worktrees w JOIN projects p ON p.id = w.project_id WHERE p.removed_at IS NULL AND w.state <> 'ready' ORDER BY w.created_at",
+      )
+      .all();
+    return rows.slice(0, 100).map((row) => {
+      const parsed = z
+        .object({
+          state: z.enum(["provisioning", "failed"]),
+          branch_name: z.string().min(1).max(255),
+        })
+        .safeParse(row);
+      if (!parsed.success)
+        return "A malformed worktree recovery record exists.";
+      return parsed.data.state === "failed"
+        ? `Worktree ${parsed.data.branch_name} needs recovery after setup failed.`
+        : `Worktree ${parsed.data.branch_name} has incomplete setup.`;
+    });
+  }
+
+  public getWorktree(id: string): WorktreeRecord | null {
+    const parsedId = WorktreeIdSchema.parse(id);
+    const row = this.sqlite
+      .prepare("SELECT * FROM worktrees WHERE id = ?")
+      .get(parsedId);
+    return row === undefined
+      ? null
+      : parseRow(worktreeRowSchema, row, "worktree", parsedId);
+  }
+
+  public reserveWorktree(input: {
+    id?: string;
+    projectId: ProjectId;
+    executionRoot: string;
+    worktreeRoot: string;
+    gitCommonDir: string;
+    projectSubpath: string;
+    baseBranch: string;
+    baseCommit: string;
+    branchName: string;
+  }): WorktreeRecord {
+    const id = WorktreeIdSchema.parse(input.id ?? this.id());
+    const now = this.now();
+    this.sqlite
+      .prepare(
+        "INSERT INTO worktrees (id, project_id, state, execution_root, worktree_root, git_common_dir, project_subpath, base_branch, base_commit, branch_name, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, 'provisioning', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+      )
+      .run(
+        id,
+        input.projectId,
+        input.executionRoot,
+        input.worktreeRoot,
+        input.gitCommonDir,
+        input.projectSubpath,
+        input.baseBranch,
+        input.baseCommit,
+        input.branchName,
+        now,
+        now,
+      );
+    return requireRecord(this.getWorktree(id), "worktree_insert_failed");
+  }
+
+  public setWorktreeState(
+    id: WorktreeId,
+    state: "ready" | "failed",
+    failureCode: string | null = null,
+    failureMessage: string | null = null,
+  ): WorktreeRecord {
+    this.sqlite
+      .prepare(
+        "UPDATE worktrees SET state = ?, updated_at = ?, failure_code = ?, failure_message = ? WHERE id = ?",
+      )
+      .run(state, this.now(), failureCode, failureMessage, id);
+    return requireRecord(this.getWorktree(id), "worktree_not_found");
+  }
+
+  public getThreadCreation(
+    projectId: ProjectId,
+    idempotencyKey: string,
+  ): ThreadCreationRecord | null {
+    const row = this.sqlite
+      .prepare(
+        "SELECT * FROM thread_creation_operations WHERE project_id = ? AND idempotency_key = ?",
+      )
+      .get(projectId, idempotencyKey);
+    return row === undefined
+      ? null
+      : parseRow(creationRowSchema, row, "thread creation", idempotencyKey);
+  }
+
+  public beginThreadCreation(input: {
+    projectId: ProjectId;
+    idempotencyKey: string;
+    requestHash: string;
+    workspaceMode: "shared" | "worktree";
+    baseBranch: string | null;
+    sourceChanges: "none" | "tracked_and_untracked" | null;
+  }): ThreadCreationRecord {
+    const existing = this.getThreadCreation(
+      input.projectId,
+      input.idempotencyKey,
+    );
+    if (existing !== null) {
+      if (existing.request_hash !== input.requestHash)
+        throw new ReceiptConflictError();
+      return existing;
+    }
+    const id = z.uuid().parse(this.id());
+    const promptCommandId = z.uuid().parse(this.id());
+    const now = this.now();
+    this.sqlite
+      .prepare(
+        "INSERT INTO thread_creation_operations (id, project_id, idempotency_key, request_hash, state, workspace_mode, base_branch, source_changes, title, slug, worktree_id, runtime_session_id, thread_id, run_id, prompt_command_id, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, 'naming', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NULL, NULL)",
+      )
+      .run(
+        id,
+        input.projectId,
+        input.idempotencyKey,
+        input.requestHash,
+        input.workspaceMode,
+        input.baseBranch,
+        input.sourceChanges,
+        promptCommandId,
+        now,
+        now,
+      );
+    return requireRecord(
+      this.getThreadCreation(input.projectId, input.idempotencyKey),
+      "thread_creation_insert_failed",
+    );
+  }
+
+  private updateThreadCreation(
+    projectId: ProjectId,
+    key: string,
+    assignments: string,
+    values: unknown[],
+  ): ThreadCreationRecord {
+    this.sqlite
+      .prepare(
+        `UPDATE thread_creation_operations SET ${assignments}, updated_at = ? WHERE project_id = ? AND idempotency_key = ?`,
+      )
+      .run(...values, this.now(), projectId, key);
+    return requireRecord(
+      this.getThreadCreation(projectId, key),
+      "thread_creation_not_found",
+    );
+  }
+
+  public nameThreadCreation(
+    projectId: ProjectId,
+    key: string,
+    title: string,
+    slug: string,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "title = ?, slug = ?, state = 'provisioning'",
+      [title, slug],
+    );
+  }
+
+  public attachCreationWorktree(
+    projectId: ProjectId,
+    key: string,
+    worktreeId: WorktreeId,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(projectId, key, "worktree_id = ?", [
+      worktreeId,
+    ]);
+  }
+
+  public attachCreationSession(
+    projectId: ProjectId,
+    key: string,
+    sessionId: string,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "runtime_session_id = ?, state = 'session_created'",
+      [sessionId],
+    );
+  }
+
+  public attachCreationThread(
+    projectId: ProjectId,
+    key: string,
+    threadId: ThreadId,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "thread_id = ?, state = 'thread_created'",
+      [threadId],
+    );
+  }
+
+  public attachCreationRun(
+    projectId: ProjectId,
+    key: string,
+    runId: RunId,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "run_id = ?, state = 'prompt_accepted'",
+      [runId],
+    );
+  }
+
+  public failThreadCreation(
+    projectId: ProjectId,
+    key: string,
+    code: string,
+    message: string,
+  ): ThreadCreationRecord {
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "state = 'failed', failure_code = ?, failure_message = ?",
+      [code, message],
     );
   }
 

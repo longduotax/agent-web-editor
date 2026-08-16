@@ -7,8 +7,9 @@ React workspace for persistent local projects and Pi-backed threads.
 React Router owns project/thread selection, TanStack Query owns parsed HTTP
 state, and live WebSocket events invalidate authoritative thread snapshots. The
 UI provides the nested project sidebar, native Browse-based project
-registration, transcript and run controls, Files/Changes/Terminal inspector,
-direct-execution disclosures, and responsive drawers. Selection and
+registration, a Codex-style inline new-chat composer with clean-worktree,
+local-change-transfer, or local-checkout choices, transcript and run controls,
+a thread-scoped Files/Changes/Terminal inspector, direct-execution disclosures, and responsive drawers. Selection and
 registration are combined on the server, so the native selected path never
 enters browser state.
 

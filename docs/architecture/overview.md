@@ -60,7 +60,9 @@ local backend, frontend, and state-directory settings.
 `apps/server/src/db/schema.ts` owns the Drizzle relational schema. Committed
 migrations create projects, threads, runs, command receipts, and ownership
 constraints; migration v2 replaces the original project-wide running-run index
-with a partial one-running-run-per-thread index. `MetadataStore` opens
+with a partial one-running-run-per-thread index, and migration v3 adds durable
+thread-creation operations, managed worktrees, and nullable thread/worktree
+associations without performing Git operations. `MetadataStore` opens
 `metadata.sqlite` under `PI_WEB_STATE_DIR` or
 `~/.pi/web-workspace`, enables foreign keys and WAL, parses every selected row,
 and interrupts unfinished runs during restart reconciliation.
@@ -72,13 +74,18 @@ opaque Pi session UUID; full transcripts stay in native Pi JSONL.
 ## Runtime and live data flow
 
 `WorkspaceService` resolves project/thread ownership and owns open runtime
-instances. `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi
-listing for the canonical project before opening private native paths. Prompt
+instances. `ThreadExecutionContextResolver` constructs the trusted cwd for each
+thread from either the registered checkout or a verified managed worktree.
+`@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
+that execution root before opening private native paths. A bounded tool-free Pi
+model call may summarize the first prompt for the initial thread/worktree name;
+deterministic local naming is the non-blocking fallback. Prompt
 preflight acceptance precedes atomic run/receipt creation. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads
-of the same project to run concurrently. Those sessions share the project
-working directory and project-wide inspector state. Project removal first
+of the same project to run concurrently. Shared sessions use the registered working directory; isolated sessions use
+their own worktree. Each thread's inspector and terminal resolve the same root
+as its Pi session. Project removal first
 fences new prompt acceptance, then interrupts or cancels already-started
 running and preflight work before soft-removing its metadata.
 
@@ -90,15 +97,21 @@ state is never durable truth.
 
 ## Inspector and terminal boundaries
 
-File APIs accept project IDs and strict project-relative paths. Existing targets
+Thread-view file APIs accept project/thread IDs and strict workspace-relative
+paths. Existing targets
 are resolved with `realpath` and checked against the canonical root before
 opening. Tree/search and preview output is bounded and `.git` is excluded.
 
 Git is spawned directly without a shell and status is parsed from porcelain v2
-NUL records. Diffs are bounded and identified as current project-wide state.
+NUL records. Diffs are bounded and identified as current thread-workspace state.
+`GitWorktreeManager` creates app-namespaced branches under the private state
+directory, verifies repository/commit identity, and applies an explicitly
+reviewed staged/unstaged/untracked snapshot without mutating the source checkout.
+Clean creation never transfers source changes.
 
-`ProjectTerminalManager` lazily owns one node-pty process per active project and
-a bounded replay buffer. The separate terminal WebSocket parses all attach,
+`ProjectTerminalManager` lazily owns one node-pty process per active execution
+scope and a bounded replay buffer. Shared threads map to the project scope;
+isolated threads map to their worktree scope. The separate terminal WebSocket parses all attach,
 input, resize, restart, and terminate frames. PTYs are process-local and are
 disposed at shutdown.
 
@@ -108,11 +121,15 @@ The route is the selected-thread authority:
 
 - `/`
 - `/projects/:projectId`
+- `/projects/:projectId/new`
 - `/projects/:projectId/threads/:threadId`
 
 TanStack Query owns parsed server state. The project sidebar uses one Browse
-control backed by a request-policy-protected browse-and-register mutation; selected
-canonical paths never enter browser state or wire responses. The workspace
+control backed by a request-policy-protected browse-and-register mutation;
+selected canonical paths never enter browser state or wire responses. New chat
+uses an inline project, execution-location, starting-state, and branch toolbar
+above the first prompt. Worktree and clean-start are the safe defaults;
+local-change transfer and direct checkout use are explicit. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
 direct active-run steering and stop controls, direct-execution disclosure,
 Files/Changes/Terminal inspector, and

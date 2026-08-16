@@ -10,6 +10,7 @@ export interface ServerConfig {
   stateDirectory: string;
   bodyLimit: number;
   production: boolean;
+  namingModel: string | null;
   allowedHosts: ReadonlySet<string>;
   allowedOrigins: ReadonlySet<string>;
 }
@@ -60,6 +61,12 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     options.allowTestPortZero === true,
   );
   const devPort = parsePort(environment.PI_WEB_DEV_PORT ?? "5173");
+  const namingModel = environment.PI_WEB_NAMING_MODEL ?? null;
+  if (
+    namingModel !== null &&
+    !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(namingModel)
+  )
+    throw new Error("PI_WEB_NAMING_MODEL must be provider/model");
   const configuredState = environment.PI_WEB_STATE_DIR;
   const stateDirectory =
     configuredState ?? join(homedir(), ".pi", "web-workspace");
@@ -82,6 +89,7 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     stateDirectory: normalizedState,
     bodyLimit: 1_048_576,
     production,
+    namingModel,
     allowedHosts: hosts,
     allowedOrigins: origins,
   };

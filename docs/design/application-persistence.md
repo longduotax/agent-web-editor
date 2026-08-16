@@ -71,6 +71,16 @@ Opaque application IDs are server-generated UUIDv4 strings. Times are UTC ISO-86
 
 No approval table or speculative reviewer-agent schema is added. A future approved automatic-review feature uses forward migrations and explicit new contracts.
 
+## Schema v3: thread workspaces
+
+Migration v3 adds `worktrees`, durable `thread_creation_operations`, and nullable
+`threads.worktree_id`. Null preserves every existing/imported thread as a shared
+checkout. Worktree rows retain private execution/common-directory paths, base
+commit/branch, generated branch, lifecycle, and scoped failure metadata.
+Creation-operation rows make naming, provisioning, Pi session creation, thread
+insertion, and first-prompt acceptance idempotent across HTTP retries. Migration
+itself performs no Git or model operation.
+
 ## Repository and transaction rules
 
 - Route handlers never consume Drizzle rows directly.

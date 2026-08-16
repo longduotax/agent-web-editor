@@ -1,6 +1,8 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import type {
   AgentRuntime,
@@ -10,6 +12,7 @@ import type {
 import {
   BrowseProjectResponseSchema,
   ProjectsResponseSchema,
+  StartThreadResponseSchema,
 } from "@pi-web/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +20,7 @@ import { buildServer } from "./app.js";
 import type { DirectoryPicker } from "./directory-picker/native.js";
 import { parseConfig } from "./config.js";
 
+const exec = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -83,6 +87,16 @@ class PromptingSession implements OpenRuntimeSession {
 
 class PromptingRuntime implements AgentRuntime {
   private readonly session = new PromptingSession();
+  public createdPath: string | null = null;
+  public createdTitle: string | null = null;
+  public openedPath: string | null = null;
+  public createCount = 0;
+  public namingCount = 0;
+
+  public suggestTitle(): Promise<string> {
+    this.namingCount += 1;
+    return Promise.resolve("Implement thread workspaces");
+  }
 
   public discover(): Promise<{
     sessions: [];
@@ -91,11 +105,15 @@ class PromptingRuntime implements AgentRuntime {
     return Promise.resolve({ sessions: [], diagnostics: [] });
   }
 
-  public create(): Promise<{ sessionId: string }> {
+  public create(path: string, title?: string): Promise<{ sessionId: string }> {
+    this.createCount += 1;
+    this.createdPath = path;
+    this.createdTitle = title ?? null;
     return Promise.resolve({ sessionId: this.session.id });
   }
 
-  public open(): Promise<OpenRuntimeSession> {
+  public open(path: string): Promise<OpenRuntimeSession> {
+    this.openedPath = path;
     return Promise.resolve(this.session);
   }
 }
@@ -114,6 +132,102 @@ const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
 describe("credential-free project API", () => {
+  it("creates and names a shared thread from its first prompt", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const runtime = new PromptingRuntime();
+    const server = await buildServer({ config, runtime, logger: false });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Build thread worktree support",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000010",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const parsed = StartThreadResponseSchema.parse(response.json());
+    expect(parsed.thread.title).toBe("Implement thread workspaces");
+    expect(parsed.thread.workspace.mode).toBe("shared");
+    expect(parsed.run.state).toBe("running");
+    const retry = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Build thread worktree support",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000010",
+      },
+    });
+    expect(StartThreadResponseSchema.parse(retry.json())).toEqual(parsed);
+    expect(runtime.namingCount).toBe(1);
+    expect(runtime.createCount).toBe(1);
+    await server.close();
+  });
+
+  it("creates a clean isolated thread and runs Pi in its worktree", async () => {
+    const paths = await directories();
+    await exec("git", ["init", "-b", "main"], { cwd: paths.project });
+    await exec("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: paths.project,
+    });
+    await exec("git", ["config", "user.name", "Test"], {
+      cwd: paths.project,
+    });
+    await writeFile(join(paths.project, "tracked.txt"), "committed\n");
+    await exec("git", ["add", "."], { cwd: paths.project });
+    await exec("git", ["commit", "-m", "initial"], { cwd: paths.project });
+    await writeFile(join(paths.project, "tracked.txt"), "dirty\n");
+    const runtime = new PromptingRuntime();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({ config, runtime, logger: false });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const preflight = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/workspace-preflight`,
+      headers: { host },
+    });
+    expect(preflight.statusCode).toBe(200);
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Build isolated worktrees",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "none",
+        },
+        idempotencyKey: "00000000-0000-4000-8000-000000000011",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const parsed = StartThreadResponseSchema.parse(response.json());
+    expect(parsed.thread.workspace.mode).toBe("worktree");
+    expect(runtime.createdPath).toContain(join("worktrees", project.id));
+    expect(runtime.createdPath).not.toBe(paths.project);
+    expect(runtime.openedPath).toBe(runtime.createdPath);
+    expect(runtime.createdTitle).toBe("Implement thread workspaces");
+    await server.close();
+  });
+
   it("maps a durable thread-run lease conflict to the busy response", async () => {
     const paths = await directories();
     const config = parseConfig({

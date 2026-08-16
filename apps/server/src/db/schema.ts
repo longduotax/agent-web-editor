@@ -24,6 +24,39 @@ export const projects = sqliteTable(
   ],
 );
 
+export const worktrees = sqliteTable(
+  "worktrees",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    state: text("state", {
+      enum: ["provisioning", "ready", "failed"],
+    }).notNull(),
+    executionRoot: text("execution_root").notNull(),
+    worktreeRoot: text("worktree_root").notNull(),
+    gitCommonDir: text("git_common_dir").notNull(),
+    projectSubpath: text("project_subpath").notNull(),
+    baseBranch: text("base_branch").notNull(),
+    baseCommit: text("base_commit").notNull(),
+    branchName: text("branch_name").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+  },
+  (table) => [
+    uniqueIndex("worktrees_execution_root_unique").on(table.executionRoot),
+    uniqueIndex("worktrees_worktree_root_unique").on(table.worktreeRoot),
+    uniqueIndex("worktrees_common_branch_unique").on(
+      table.gitCommonDir,
+      table.branchName,
+    ),
+    index("worktrees_project_state_idx").on(table.projectId, table.state),
+  ],
+);
+
 export const threads = sqliteTable(
   "threads",
   {
@@ -37,6 +70,7 @@ export const threads = sqliteTable(
     lastActivityAt: text("last_activity_at").notNull(),
     lastCompletedRunId: text("last_completed_run_id"),
     lastViewedCompletedRunId: text("last_viewed_completed_run_id"),
+    worktreeId: text("worktree_id").references(() => worktrees.id),
   },
   (table) => [
     uniqueIndex("threads_project_runtime_unique").on(
@@ -48,6 +82,7 @@ export const threads = sqliteTable(
       table.projectId,
       table.lastActivityAt,
     ),
+    uniqueIndex("threads_worktree_unique").on(table.worktreeId),
   ],
 );
 
@@ -75,6 +110,53 @@ export const runs = sqliteTable(
     uniqueIndex("runs_one_running_per_thread")
       .on(table.threadId)
       .where(sql`${table.state} = 'running'`),
+  ],
+);
+
+export const threadCreationOperations = sqliteTable(
+  "thread_creation_operations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    state: text("state", {
+      enum: [
+        "naming",
+        "provisioning",
+        "session_created",
+        "thread_created",
+        "prompt_accepted",
+        "failed",
+      ],
+    }).notNull(),
+    workspaceMode: text("workspace_mode", {
+      enum: ["shared", "worktree"],
+    }).notNull(),
+    baseBranch: text("base_branch"),
+    sourceChanges: text("source_changes", {
+      enum: ["none", "tracked_and_untracked"],
+    }),
+    title: text("title"),
+    slug: text("slug"),
+    worktreeId: text("worktree_id").references(() => worktrees.id),
+    runtimeSessionId: text("runtime_session_id"),
+    threadId: text("thread_id").references(() => threads.id),
+    runId: text("run_id").references(() => runs.id),
+    promptCommandId: text("prompt_command_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+  },
+  (table) => [
+    uniqueIndex("thread_creation_project_key_unique").on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    index("thread_creation_project_state_idx").on(table.projectId, table.state),
   ],
 );
 

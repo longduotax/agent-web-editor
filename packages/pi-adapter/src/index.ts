@@ -12,7 +12,9 @@ import {
 } from "node:path";
 
 import {
+  ModelRuntime,
   SessionManager,
+  SettingsManager,
   createAgentSession,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -59,7 +61,7 @@ const createdSessionInfoSchema = z.strictObject({
   id: z.string().min(1).max(200),
   parentId: z.null(),
   timestamp: TimestampSchema,
-  name: z.literal("New thread"),
+  name: z.string().min(1).max(200),
 });
 const createdSessionEntriesSchema = z.tuple([createdSessionInfoSchema]);
 
@@ -731,11 +733,91 @@ class PiOpenSession implements OpenRuntimeSession {
 
 export class PiAgentRuntime implements AgentRuntime {
   private readonly agentDirectory: string;
+  private readonly namingModel: string | null;
+  private modelRuntime: Promise<ModelRuntime> | undefined;
 
   public constructor(
     agentDirectory: unknown = process.env.PI_CODING_AGENT_DIR,
+    namingModel: string | null = process.env.PI_WEB_NAMING_MODEL ?? null,
   ) {
     this.agentDirectory = parseAgentDirectory(agentDirectory);
+    this.namingModel = namingModel;
+  }
+
+  public async suggestTitle(
+    projectPath: string,
+    prompt: string,
+  ): Promise<string> {
+    const canonical = await realpath(projectPath);
+    const runtime = await (this.modelRuntime ??= ModelRuntime.create({
+      authPath: join(this.agentDirectory, "auth.json"),
+      modelsPath: join(this.agentDirectory, "models.json"),
+      allowModelNetwork: false,
+    }));
+    const available = await runtime.getAvailable(undefined, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    let model;
+    if (this.namingModel !== null) {
+      const separator = this.namingModel.indexOf("/");
+      const provider = this.namingModel.slice(0, separator);
+      const id = this.namingModel.slice(separator + 1);
+      model = available.find(
+        (candidate) => candidate.provider === provider && candidate.id === id,
+      );
+    } else {
+      const settings = SettingsManager.create(canonical, this.agentDirectory);
+      const provider = settings.getDefaultProvider();
+      const defaultId = settings.getDefaultModel();
+      const defaultModel =
+        provider === undefined || defaultId === undefined
+          ? undefined
+          : runtime.getModel(provider, defaultId);
+      if (provider !== undefined && defaultModel !== undefined) {
+        const defaultCost =
+          defaultModel.cost.input * 1_000 + defaultModel.cost.output * 32;
+        model = available
+          .filter(
+            (candidate) =>
+              candidate.provider === provider &&
+              candidate.id !== defaultModel.id &&
+              candidate.cost.input * 1_000 + candidate.cost.output * 32 <
+                defaultCost,
+          )
+          .sort((left, right) => {
+            const leftCost = left.cost.input * 1_000 + left.cost.output * 32;
+            const rightCost = right.cost.input * 1_000 + right.cost.output * 32;
+            return leftCost - rightCost || left.id.localeCompare(right.id);
+          })[0];
+      }
+    }
+    if (model === undefined) throw new Error("naming_model_unavailable");
+    const response = await runtime.completeSimple(
+      model,
+      {
+        systemPrompt:
+          "Return only a concise 3-7 word title summarizing the user's coding task. No quotes, markdown, or punctuation suffix.",
+        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+      },
+      {
+        maxTokens: 32,
+        cacheRetention: "none",
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
+    if (response.stopReason !== "stop") throw new Error("naming_model_failed");
+    const text = response.content.filter((block) => block.type === "text");
+    if (text.length !== 1 || response.content.length !== 1)
+      throw new Error("naming_model_malformed");
+    const title = text[0]?.text.replace(/\s+/g, " ").trim();
+    if (
+      title === undefined ||
+      title === "" ||
+      title.length > 60 ||
+      title.includes("\n")
+    )
+      throw new Error("naming_model_malformed");
+    return title.replace(/^["'`*_#\s]+|["'`*_#\s.!?:;]+$/g, "").trim();
   }
 
   public async discover(
@@ -794,13 +876,16 @@ export class PiAgentRuntime implements AgentRuntime {
     return { sessions, diagnostics };
   }
 
-  public async create(projectPath: string): Promise<{ sessionId: string }> {
+  public async create(
+    projectPath: string,
+    title = "New thread",
+  ): Promise<{ sessionId: string }> {
     const canonical = await realpath(projectPath);
     const manager = SessionManager.create(
       canonical,
       defaultSessionDirectory(this.agentDirectory, canonical),
     );
-    manager.appendSessionInfo("New thread");
+    manager.appendSessionInfo(title);
     return {
       sessionId: await persistNewSession(
         manager,

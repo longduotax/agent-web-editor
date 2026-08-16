@@ -38,13 +38,26 @@ No Pi class, event, content block, path, or generic SDK type crosses the adapter
 ## Pi resources, trust, and tools
 
 - Use Pi SDK's normal `ModelRuntime`, settings, resource loading, built-in tools, and project-trust rules rather than creating a second policy system.
-- The selected project is Pi's cwd.
+- The trusted thread execution root is Pi's cwd: the registered checkout for a
+  shared thread or its verified managed worktree for an isolated thread.
 - Native project trust decides whether project-local settings, extensions, skills, and packages load. The adapter surfaces trust/resource diagnostics safely when Pi does not load them.
 - Enabled tools follow Pi's current defaults/configuration. The application neither broadens nor wraps them with approval logic.
 - Global/project Pi extensions can execute according to Pi's trust model and may register or replace tools. This is disclosed as part of direct Pi behavior.
 - Commands, reads, writes, and tool calls may access outside the project when Pi and the operating system permit it.
 
 The UI displays command/tool input, cwd, bounded output, exit/error state, and a persistent concise warning that agent actions use the user's permissions without application approval or OS sandboxing.
+
+## Prompt-derived naming
+
+Before a new thread session is created, the adapter may make one tool-free,
+non-persistent `ModelRuntime.completeSimple()` request containing only the first
+prompt and fixed title instructions. `PI_WEB_NAMING_MODEL` explicitly selects a
+model; automatic selection stays within Pi's configured default provider and
+requires a lower-cost authenticated model. Output is bounded and parsed as one
+short text title. Timeout, auth/model unavailability, and malformed output fall
+back to deterministic server naming and never block creation. The parsed title
+names native session metadata; only a separately sanitized server slug can
+enter Git paths/refs.
 
 ## Run lifecycle
 
