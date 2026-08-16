@@ -718,6 +718,28 @@ export class MetadataStore {
     return thread;
   }
 
+  public archiveThread(projectId: ProjectId, threadId: ThreadId): boolean {
+    return this.sqlite.transaction(() => {
+      const existing = this.getThread(projectId, threadId, {
+        includeArchived: true,
+      });
+      if (existing === null) return false;
+      if (existing.archived_at !== null) return true;
+      const archived = this.sqlite
+        .prepare(
+          "UPDATE threads SET archived_at = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM runs WHERE thread_id = ? AND state = 'running')",
+        )
+        .run(this.now(), threadId, projectId, threadId);
+      if (archived.changes === 0) return false;
+      this.sqlite
+        .prepare(
+          "UPDATE projects SET last_opened_thread_id = (SELECT id FROM threads WHERE project_id = ? AND archived_at IS NULL ORDER BY last_activity_at DESC, id DESC LIMIT 1) WHERE id = ? AND last_opened_thread_id = ?",
+        )
+        .run(projectId, projectId, threadId);
+      return true;
+    })();
+  }
+
   public setLastOpenedThread(projectId: ProjectId, threadId: ThreadId): void {
     this.sqlite
       .prepare(

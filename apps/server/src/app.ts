@@ -6,6 +6,7 @@ import websocket from "@fastify/websocket";
 import type { AgentRuntime } from "@pi-web/agent-runtime";
 import type { RawData } from "ws";
 import {
+  ArchiveThreadRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
   ImportThreadRequestSchema,
@@ -109,6 +110,11 @@ function safeError(error: unknown): {
         status: 404,
         code: "thread_not_found",
         message: "Thread was not found in this project.",
+      },
+      thread_busy: {
+        status: 409,
+        code: "thread_busy",
+        message: "A running thread cannot be archived.",
       },
       session_not_found: {
         status: 404,
@@ -375,6 +381,18 @@ export async function buildServer(
       ),
     };
   });
+  server.post(
+    "/api/projects/:projectId/threads/:threadId/archive",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const body = ArchiveThreadRequestSchema.parse(request.body);
+      return await workspace.archiveThread(
+        params.projectId,
+        params.threadId,
+        body.idempotencyKey,
+      );
+    },
+  );
   server.get("/api/projects/:projectId/threads/:threadId", async (request) => {
     const params = threadParamsSchema.parse(request.params);
     return await workspace.snapshot(params.projectId, params.threadId);

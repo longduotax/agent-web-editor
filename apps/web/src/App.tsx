@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ReactNode,
   type SyntheticEvent,
@@ -25,6 +26,7 @@ import {
 } from "react-router-dom";
 
 import {
+  archiveThread,
   browseProject,
   commandId,
   discoverSessions,
@@ -149,6 +151,15 @@ function Sidebar({
     threadId: ThreadId;
     title: string;
   } | null>(null);
+  const [threadMenu, setThreadMenu] = useState<{
+    projectId: ProjectId;
+    threadId: ThreadId;
+    title: string;
+    running: boolean;
+    left: number;
+    top: number;
+  } | null>(null);
+  const threadMenuRef = useRef<HTMLDivElement>(null);
   const sessions = useQuery({
     queryKey: ["sessions", discoveringProjectId],
     queryFn: async () => {
@@ -179,6 +190,21 @@ function Sidebar({
       );
     },
   });
+  const archive = useMutation({
+    mutationFn: async ({
+      projectId,
+      threadId,
+    }: {
+      projectId: ProjectId;
+      threadId: ThreadId;
+    }) => await archiveThread(projectId, threadId),
+    onSuccess: async (_result, variables) => {
+      setThreadMenu(null);
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      if (selectedThreadId === variables.threadId)
+        void navigate(`/projects/${variables.projectId}`);
+    },
+  });
   const rename = useMutation({
     mutationFn: async ({
       projectId,
@@ -194,6 +220,43 @@ function Sidebar({
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
+
+  useEffect(() => {
+    if (threadMenu === null) return;
+    const firstItem = threadMenuRef.current?.querySelector<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)',
+    );
+    firstItem?.focus();
+    const dismissOutside = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        threadMenuRef.current?.contains(event.target) === true
+      )
+        return;
+      setThreadMenu(null);
+    };
+    const dismissWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setThreadMenu(null);
+    };
+    const dismiss = () => {
+      setThreadMenu(null);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("keydown", dismissWithEscape);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("scroll", dismiss, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("keydown", dismissWithEscape);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("scroll", dismiss, true);
+    };
+  }, [threadMenu]);
+
+  const requestArchive = (projectId: ProjectId, threadId: ThreadId) => {
+    setThreadMenu(null);
+    archive.mutate({ projectId, threadId });
+  };
 
   return (
     <nav className="sidebar" aria-label="Projects and threads">
@@ -217,6 +280,7 @@ function Sidebar({
         </button>
       </div>
       {browse.error !== null && <ErrorNotice error={browse.error} />}
+      {archive.error !== null && <ErrorNotice error={archive.error} />}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
@@ -354,14 +418,42 @@ function Sidebar({
                       const editing =
                         renamingThread?.projectId === project.id &&
                         renamingThread.threadId === thread.id;
+                      const running = thread.runState === "running";
+                      const openMenu = (left: number, top: number) => {
+                        setThreadMenu({
+                          projectId: project.id,
+                          threadId: thread.id,
+                          title: thread.title,
+                          running,
+                          left,
+                          top,
+                        });
+                      };
                       return (
                         <li
                           key={thread.id}
-                          className={
+                          className={`thread-row ${
                             selectedThreadId === thread.id
                               ? "selected-thread"
                               : ""
-                          }
+                          }`}
+                          onContextMenu={(event) => {
+                            if (editing) return;
+                            event.preventDefault();
+                            openMenu(event.clientX, event.clientY);
+                          }}
+                          onKeyDown={(event) => {
+                            if (
+                              editing ||
+                              (event.key !== "ContextMenu" &&
+                                !(event.shiftKey && event.key === "F10"))
+                            )
+                              return;
+                            event.preventDefault();
+                            const bounds =
+                              event.currentTarget.getBoundingClientRect();
+                            openMenu(bounds.right, bounds.bottom);
+                          }}
                         >
                           {editing ? (
                             <form
@@ -382,6 +474,14 @@ function Sidebar({
                                 autoFocus
                                 maxLength={200}
                                 value={renamingThread.title}
+                                onFocus={(event) => {
+                                  event.currentTarget.select();
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Escape") return;
+                                  event.stopPropagation();
+                                  setRenamingThread(null);
+                                }}
                                 onChange={(event) => {
                                   setRenamingThread({
                                     ...renamingThread,
@@ -408,26 +508,46 @@ function Sidebar({
                           ) : (
                             <>
                               <Link
+                                className="thread-link"
                                 to={`/projects/${project.id}/threads/${thread.id}`}
+                                onClick={() => {
+                                  setThreadMenu(null);
+                                }}
                               >
-                                <span>{thread.title}</span>
+                                <span className="thread-title">
+                                  {thread.title}
+                                </span>
                                 <Status
                                   state={thread.runState}
                                   unread={thread.unread}
                                 />
                               </Link>
                               <button
-                                className="icon-button"
-                                aria-label={`Rename ${thread.title}`}
+                                className="thread-archive-button"
+                                type="button"
+                                aria-label={
+                                  running
+                                    ? `Archive ${thread.title} (unavailable while running)`
+                                    : `Archive ${thread.title}`
+                                }
+                                disabled={running || archive.isPending}
+                                title={
+                                  running
+                                    ? "Wait for this thread to finish before archiving it."
+                                    : `Archive ${thread.title}`
+                                }
                                 onClick={() => {
-                                  setRenamingThread({
-                                    projectId: project.id,
-                                    threadId: thread.id,
-                                    title: thread.title,
-                                  });
+                                  requestArchive(project.id, thread.id);
                                 }}
                               >
-                                ✎
+                                <svg
+                                  aria-hidden="true"
+                                  viewBox="0 0 16 16"
+                                  width="14"
+                                  height="14"
+                                >
+                                  <path d="M2.25 3.25h11.5v2.5H2.25zM3.5 6.75h9v6h-9zM6 8.25h4" />
+                                </svg>
                               </button>
                             </>
                           )}
@@ -441,6 +561,50 @@ function Sidebar({
           );
         })}
       </div>
+      {threadMenu !== null && (
+        <div
+          className="thread-context-menu"
+          role="menu"
+          aria-label={`Actions for ${threadMenu.title}`}
+          ref={threadMenuRef}
+          style={{ left: threadMenu.left, top: threadMenu.top }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setRenamingThread({
+                projectId: threadMenu.projectId,
+                threadId: threadMenu.threadId,
+                title: threadMenu.title,
+              });
+              setThreadMenu(null);
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            aria-label={
+              threadMenu.running
+                ? "Archive (unavailable while running)"
+                : "Archive"
+            }
+            disabled={threadMenu.running || archive.isPending}
+            title={
+              threadMenu.running
+                ? "Wait for this thread to finish before archiving it."
+                : undefined
+            }
+            onClick={() => {
+              requestArchive(threadMenu.projectId, threadMenu.threadId);
+            }}
+          >
+            Archive
+          </button>
+        </div>
+      )}
       {workspace.data?.diagnostics.map((diagnostic) => (
         <p className="diagnostic warning" key={diagnostic}>
           {diagnostic}

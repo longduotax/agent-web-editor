@@ -309,6 +309,109 @@ describe("run coordination", () => {
     context.store.close();
   });
 
+  it("archives an inactive thread idempotently and disposes its open runtime", async () => {
+    const context = await fixture();
+    const session = sessionFor(context, context.first.id);
+    await context.service.snapshot(context.project.id, context.first.id);
+    session.disposeGate = Promise.reject(new Error("runtime_dispose_failed"));
+
+    const key = "19000000-0000-4000-8000-000000000001";
+    await expect(
+      context.service.archiveThread(context.project.id, context.first.id, key),
+    ).resolves.toEqual({ archived: true });
+    await expect(
+      context.service.archiveThread(context.project.id, context.first.id, key),
+    ).resolves.toEqual({ archived: true });
+    expect(session.disposeCount).toBe(1);
+    expect(
+      (await context.service.list()).threads.map((thread) => thread.id),
+    ).toEqual([context.second.id]);
+    await expect(
+      context.service.snapshot(context.project.id, context.first.id),
+    ).rejects.toThrow("thread_not_found");
+
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("does not block archival when runtime disposal never settles", async () => {
+    const context = await fixture();
+    const session = sessionFor(context, context.first.id);
+    await context.service.snapshot(context.project.id, context.first.id);
+    session.disposeGate = new Promise<void>(() => undefined);
+
+    await expect(
+      context.service.archiveThread(
+        context.project.id,
+        context.first.id,
+        "19000000-0000-4000-8000-000000000002",
+      ),
+    ).resolves.toEqual({ archived: true });
+    await vi.waitFor(() => {
+      expect(session.disposeCount).toBe(1);
+    });
+    expect(
+      (await context.service.list()).threads.map((thread) => thread.id),
+    ).toEqual([context.second.id]);
+
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("rejects archival while a run or prompt preflight is active", async () => {
+    const context = await fixture();
+    await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      "Running work",
+      "19000000-0000-4000-8000-000000000010",
+    );
+    await expect(
+      context.service.archiveThread(
+        context.project.id,
+        context.first.id,
+        "19000000-0000-4000-8000-000000000011",
+      ),
+    ).rejects.toThrow("thread_busy");
+
+    let release: (() => void) | undefined;
+    const secondSession = sessionFor(context, context.second.id);
+    secondSession.promptGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = context.service.prompt(
+      context.project.id,
+      context.second.id,
+      "Preflight work",
+      "19000000-0000-4000-8000-000000000012",
+    );
+    await vi.waitFor(() => {
+      expect(secondSession.promptCount).toBe(1);
+    });
+    await expect(
+      context.service.archiveThread(
+        context.project.id,
+        context.second.id,
+        "19000000-0000-4000-8000-000000000013",
+      ),
+    ).rejects.toThrow("thread_busy");
+
+    release?.();
+    await pending;
+    await context.service.stop(
+      context.project.id,
+      context.first.id,
+      "19000000-0000-4000-8000-000000000014",
+    );
+    await context.service.stop(
+      context.project.id,
+      context.second.id,
+      "19000000-0000-4000-8000-000000000015",
+    );
+    await context.service.close();
+    context.store.close();
+  });
+
   it("runs project threads independently while enforcing each thread lease", async () => {
     const context = await fixture();
     const firstSession = sessionFor(context, context.first.id);

@@ -100,6 +100,80 @@ describe("metadata persistence", () => {
     store.close();
   });
 
+  it("archives inactive threads without deleting history and updates active navigation", async () => {
+    const state = await stateDirectory();
+    let now = "2026-08-15T12:00:00.000Z";
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => now,
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const remaining = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+      "Remaining",
+    );
+    now = "2026-08-15T12:01:00.000Z";
+    const archived = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000002",
+      "Archive me",
+    );
+    const completed = store.createRun(
+      project.id,
+      archived.id,
+      "20000000-0000-4000-8000-000000000001",
+    );
+    store.settleRun(completed.id, "completed");
+    expect(store.unreadCount(project.id)).toBe(1);
+
+    now = "2026-08-15T12:02:00.000Z";
+    expect(store.archiveThread(project.id, archived.id)).toBe(true);
+    expect(store.getThread(project.id, archived.id)).toBeNull();
+    expect(
+      store.getThread(project.id, archived.id, { includeArchived: true }),
+    ).toMatchObject({ id: archived.id, archived_at: now });
+    expect(store.listThreads(project.id).map((thread) => thread.id)).toEqual([
+      remaining.id,
+    ]);
+    expect(
+      store
+        .listThreads(project.id, { includeArchived: true })
+        .map((thread) => thread.id),
+    ).toContain(archived.id);
+    expect(store.unreadCount(project.id)).toBe(0);
+    expect(store.getProject(project.id)?.last_opened_thread_id).toBe(
+      remaining.id,
+    );
+    expect(store.latestRun(archived.id)?.id).toBe(completed.id);
+    expect(store.archiveThread(project.id, archived.id)).toBe(true);
+    store.close();
+  });
+
+  it("does not archive a thread with a persisted running run", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-15T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const thread = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    store.createRun(
+      project.id,
+      thread.id,
+      "20000000-0000-4000-8000-000000000001",
+    );
+
+    expect(store.archiveThread(project.id, thread.id)).toBe(false);
+    expect(store.getThread(project.id, thread.id)).not.toBeNull();
+    store.close();
+  });
+
   it("does not create a run after its project is soft-removed", async () => {
     const state = await stateDirectory();
     const store = await MetadataStore.open({

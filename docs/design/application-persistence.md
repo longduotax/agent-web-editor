@@ -32,7 +32,7 @@ All writable tests create a new temporary state directory and assert ownership b
 - Repositories use prepared queries where repeated and explicit transactions for multi-record invariants.
 - Repository read points pass raw selected values through Zod/domain parsers before returning trusted records. ORM inference only helps author queries.
 
-## Schema v2
+## Schema v3
 
 Opaque application IDs are server-generated UUIDv4 strings. Times are UTC ISO-8601 strings from an injected clock.
 
@@ -51,6 +51,7 @@ Opaque application IDs are server-generated UUIDv4 strings. Times are UTC ISO-86
 - `title`, `runtime_session_id`
 - `created_at`, `last_activity_at`
 - nullable `last_completed_run_id`, `last_viewed_completed_run_id`
+- nullable `archived_at`; `NULL` constructs the active-thread state
 - unique `(project_id, runtime_session_id)` and `(id, project_id)`
 
 ### `runs`
@@ -89,12 +90,17 @@ itself performs no Git or model operation.
 - Removal sets `removed_at` and never cascades into workspace or Pi files.
 - Run acceptance writes the receipt/run and acquires the partial unique thread lease atomically. Distinct threads may acquire independent leases even when they share a project.
 - Completion updates run state, activity, and last-completed marker atomically. Viewing uses compare-and-set against the displayed completion.
-- Project unread state is derived from child thread markers, not an independently mutable boolean.
+- Archiving is idempotent and metadata-only. Its transaction rejects a persisted running lease, sets `archived_at`, and replaces an archived `last_opened_thread_id` with the most recently active sibling or `NULL`.
+- Active thread reads parse persisted archive timestamps before filtering them. Archived sessions remain included in duplicate-import ownership checks.
+- Project unread state is derived from unarchived child thread markers, not an independently mutable boolean.
 
 ## Migrations and backups
 
 - Schema v1 used a partial running-run index on `project_id`. Migration v2 preserves all records while replacing it with the `thread_id` partial index.
-- Migration v3 adds nullable `threads.archived_at` and its archive-aware index.
+- Migration v3 adds nullable `threads.archived_at` and an archive/activity
+  index. Existing rows remain active without a data rewrite.
+- Migrations v4-v6 add managed worktrees, durable creation recovery, and
+  reviewed transfer tokens without changing archived-thread visibility.
 - Migration SQL and Drizzle's migration journal are committed and versioned.
 - Before applying pending migrations to a non-empty database, use SQLite's backup API to create a timestamped sibling backup.
 - Migration application is transactional where SQLite permits. Failure leaves the prior database authoritative.
@@ -116,8 +122,8 @@ Missing directories or native sessions produce record-scoped unavailable states.
 ## Required tests
 
 - Drizzle schema/query integration and real row-parser execution.
-- Empty-to-v2 and populated-v1-to-v2 migration, repeated startup, pending-migration backup, rollback, interrupted migration, and newer-version refusal.
+- Empty-to-v3, populated-v1-to-v3, and populated-v2-to-v3 migration, repeated startup, pending-migration backup, rollback, interrupted migration, and newer-version refusal.
 - Every table parser with valid, null, missing, wrong-type, enum/time/JSON, and relationship failures.
 - Canonical duplicate, soft remove/re-add, unavailable path, two-project restart, and workspace/Pi fixture byte preservation.
-- Thread/project ownership, concurrent distinct-thread runs, one-running-run-per-thread enforcement, receipt retry/conflict, and completion/viewed transactions.
+- Thread/project ownership, concurrent distinct-thread runs, one-running-run-per-thread enforcement, receipt retry/conflict, completion/viewed transactions, inactive-only archive races, active filtering, unread exclusion, and last-opened fallback.
 - Query plans or focused benchmarks for project/thread ordering and active-run lookup if fixture volume exposes regressions; avoid speculative caching first.

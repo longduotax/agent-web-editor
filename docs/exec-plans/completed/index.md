@@ -24,6 +24,10 @@ specifications, designs, code, or tests.
   — made capability specifications and versioned technical plans co-evolving
   Draft artifacts with explicit product and implementation approvals,
   traceability, invalidation rules, and validator coverage.
+- [Codex-style thread actions and archival](2026-08-16-thread-actions.md) —
+  added right-click and keyboard Rename/Archive actions, a direct hover/focus
+  Archive icon, durable inactive-thread archival, and compact inline run
+  signals.
 - [Thread workspace and worktree support](2026-08-16-thread-workspaces.md) —
   added the Codex-style new-chat flow, clean or explicitly transferred managed
   worktrees, prompt-derived names, durable creation recovery, and thread-scoped

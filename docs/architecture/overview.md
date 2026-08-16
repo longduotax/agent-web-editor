@@ -60,16 +60,20 @@ local backend, frontend, and state-directory settings.
 `apps/server/src/db/schema.ts` owns the Drizzle relational schema. Committed
 migrations create projects, threads, runs, command receipts, and ownership
 constraints; migration v2 replaces the original project-wide running-run index
-with a partial one-running-run-per-thread index, and migration v3 adds durable
-thread-creation operations, managed worktrees, and nullable thread/worktree
-associations without performing Git operations. `MetadataStore` opens
+with a partial one-running-run-per-thread index. Migration v3 adds nullable
+thread archive timestamps, while migrations v4-v6 add durable thread-creation
+operations, managed worktrees, nullable thread/worktree associations, recovery
+identities, and transfer tokens without performing Git operations.
+`MetadataStore` opens
 `metadata.sqlite` under `PI_WEB_STATE_DIR` or
 `~/.pi/web-workspace`, enables foreign keys and WAL, parses every selected row,
 and interrupts unfinished runs during restart reconciliation.
 
 Projects retain a canonical path only in server storage. Removal is a soft
 metadata operation and never deletes workspace or Pi files. Threads point to an
-opaque Pi session UUID; full transcripts stay in native Pi JSONL.
+opaque Pi session UUID; full transcripts stay in native Pi JSONL. Archiving an
+inactive thread is likewise metadata-only: active queries and unread aggregates
+exclude it while its thread, run, receipt, and Pi history remain retained.
 
 ## Runtime and live data flow
 
@@ -89,8 +93,12 @@ as its Pi session. Project removal first
 fences new prompt acceptance, then interrupts or cancels already-started
 running and preflight work before soft-removing its metadata.
 
-HTTP snapshots reconstructed from native history plus run metadata are
-authoritative. `LiveBroker` adds process-epoch, monotonic sequence events and a
+An idempotent archive command rejects in-process prompt preflight and persisted
+running work, atomically updates the project's active-thread fallback, then
+releases any inactive open runtime. Archived IDs are rejected by normal
+snapshot, prompt, steering, rename, and viewed routes. HTTP snapshots
+reconstructed from native history plus run metadata are authoritative.
+`LiveBroker` adds process-epoch, monotonic sequence events and a
 bounded replay ring for Origin-permitted WebSocket subscribers. Browser queries
 invalidate and replace snapshots after events or replay gaps; browser stream
 state is never durable truth.
@@ -133,7 +141,10 @@ local-change transfer and direct checkout use are explicit. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
 direct active-run steering and stop controls, direct-execution disclosure,
 Files/Changes/Terminal inspector, and
-responsive drawers. Local storage is limited to unsent per-thread drafts.
+responsive drawers. Thread rows expose a hover/focus Archive icon and an
+accessible right-click/keyboard Rename and Archive menu. Run and unread signals
+sit beside the thread title with icon-only visible presentation and accessible
+labels. Local storage is limited to unsent per-thread drafts.
 
 Every HTTP response and WebSocket frame is parsed with contracts. Raw Markdown
 HTML and images are disabled; terminal escape handling is confined to xterm.

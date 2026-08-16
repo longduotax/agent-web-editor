@@ -1,5 +1,6 @@
 import {
   ApiErrorSchema,
+  ArchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
@@ -126,6 +127,13 @@ export async function startThread(
       method: "POST",
       body: body({ prompt, workspace, idempotencyKey }),
     },
+  );
+}
+export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/archive`,
+    ArchiveThreadResponseSchema,
+    { method: "POST", body: body({ idempotencyKey: commandId() }) },
   );
 }
 export async function renameThread(
