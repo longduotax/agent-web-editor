@@ -32,3 +32,7 @@ specifications, designs, code, or tests.
   added the Codex-style new-chat flow, clean or explicitly transferred managed
   worktrees, prompt-derived names, durable creation recovery, and thread-scoped
   runtime, inspector, Git, and terminal roots.
+- [Isolated worktree review environment](2026-08-16-worktree-review-environment.md) —
+  added a manually invoked project-local Pi skill and checked-in start/close
+  commands for random-port, disposable-SQLite UI review environments that
+  install missing dependencies and hard-refuse the main worktree.
