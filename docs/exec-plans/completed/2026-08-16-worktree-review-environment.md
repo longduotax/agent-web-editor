@@ -1,6 +1,6 @@
 # Isolated worktree review environment
 
-**Status:** Active
+**Status:** Completed
 
 **Plan version:** 1
 
@@ -154,21 +154,27 @@ Recovery from interrupted startup or a dead supervisor removes only the worktree
 - [x] Investigated current development commands, state configuration, Pi skill behavior, worktree layout, and host-safety constraints.
 - [x] Drafted working specification and plan version 1.
 - [x] Obtained explicit user approval on 2026-08-16 for the no-product-change invariant, working specification `REVIEW-ENV-01` through `REVIEW-ENV-04`, and plan version 1.
-- [ ] Implement scripts, skill, tests, and documentation.
-- [ ] Verify automated and runtime behavior.
-- [ ] Complete and archive the plan.
+- [x] Implemented scripts, skill, tests, and documentation.
+- [x] Verified automated and runtime behavior, including dependency installation in a fresh linked worktree whose path contains spaces.
+- [x] Completed and archived the plan.
 
 ## Discoveries and blockers
 
 - The prior global skill prototype was removed; repository-local discovery under `.pi/skills/` is the intended scope.
 - The UI change PR was merged before this plan, so this workflow will use a separate branch and pull request.
 - The user approved the summarized working specification and implementation plan, then explicitly requested implementation.
+- The first reuse smoke test exposed an existing-state-directory `EEXIST` error; `createPrivateRuntimeDirectory` now parses an existing state path as a real non-symlink directory before reuse.
+- A detached temporary linked worktree at `/tmp/pi web review install test` verified the missing-dependency path, including frozen installation, random-port startup, SQLite creation, idempotent URL reuse, exact cleanup, and paths containing spaces.
 
 ## Decision and revision log
 
 - 2026-08-16: Created plan version 1 with a technical-only working specification, hard main-worktree refusal, one environment per worktree, automatic frozen dependency installation when needed, random loopback ports, explicit disposable SQLite state, supervised process ownership, and destructive cleanup of generated state.
 - 2026-08-16: The user approved the no-product-change invariant, working specification `REVIEW-ENV-01` through `REVIEW-ENV-04`, and technical plan version 1 after reviewing summaries of both; implementation moved through Ready to Active.
+- 2026-08-16: Implemented a project-local manual-only skill, versioned manifest parser, random loopback allocation, detached supervisor, dependency bootstrap, exact cleanup, package commands, tests, and workflow documentation.
+- 2026-08-16: Completed plan version 1 after the full static gate and linked-worktree smoke verification passed.
 
 ## Final outcomes
 
-Not completed.
+Completed. `/skill:start-env` is a repository-local manual command backed by `pnpm dev:review`; `/skill:start-env cleanup` uses `pnpm dev:review:close`. Each linked worktree receives at most one supervised random-port environment and an explicit disposable SQLite state directory. Main-worktree startup fails closed, persisted manifests are parsed before use, live process ownership is proven before termination, and cleanup removes only the derived runtime directory.
+
+Verification completed with `NODE_ENV=test pnpm check` (14 Vitest files and 163 tests, 8 review-environment Node tests, builds, formatting, lint, type checks, documentation tests, and documentation navigation). Manual smoke checks passed for direct/proxied HTTP readiness, SQLite ownership, supervisor identity, healthy reuse, exact cleanup, repeated cleanup, main-worktree refusal, project-skill discovery/manual-only exclusion, and automatic frozen installation in a fresh linked worktree with spaces in its path.
