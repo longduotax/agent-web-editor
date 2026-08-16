@@ -330,7 +330,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(join(state, "metadata.sqlite"));
-    expect(migrated.pragma("user_version", { simple: true })).toBe(6);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
     expect(
       migrated
         .prepare(
@@ -438,7 +438,7 @@ describe("metadata persistence", () => {
     const state = await stateDirectory();
     const databasePath = join(state, "metadata.sqlite");
     const newer = new Database(databasePath);
-    newer.pragma("user_version = 7");
+    newer.pragma("user_version = 8");
     newer.close();
 
     await expect(MetadataStore.open({ stateDirectory: state })).rejects.toThrow(
@@ -446,7 +446,7 @@ describe("metadata persistence", () => {
     );
 
     const unchanged = new Database(databasePath);
-    expect(unchanged.pragma("user_version", { simple: true })).toBe(7);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(8);
     unchanged.close();
   });
 
@@ -567,7 +567,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(databasePath);
-    expect(migrated.pragma("user_version", { simple: true })).toBe(6);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
     expect(
       migrated
         .prepare(

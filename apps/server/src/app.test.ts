@@ -74,6 +74,10 @@ class PromptingSession implements OpenRuntimeSession {
     });
   }
 
+  public recoverPrompt() {
+    return Promise.resolve({ outcome: "not_accepted" } as const);
+  }
+
   public steer(): Promise<void> {
     return Promise.resolve();
   }

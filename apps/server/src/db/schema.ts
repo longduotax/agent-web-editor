@@ -152,6 +152,10 @@ export const threadCreationOperations = sqliteTable(
     threadId: text("thread_id").references(() => threads.id),
     runId: text("run_id").references(() => runs.id),
     promptCommandId: text("prompt_command_id").notNull(),
+    initialPromptDispatchId: text("initial_prompt_dispatch_id"),
+    initialPromptDispatchState: text("initial_prompt_dispatch_state", {
+      enum: ["none", "prepared", "accepted", "rejected"],
+    }).notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     failureCode: text("failure_code"),

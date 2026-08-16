@@ -21,6 +21,8 @@ import {
 import type {
   AgentRuntime,
   OpenRuntimeSession,
+  PromptRecovery,
+  RuntimePromptDispatch,
   PromptAcceptance,
   RuntimeEvent,
   RuntimeSessionDescriptor,
@@ -164,6 +166,12 @@ interface NativeSessionDescriptor {
 }
 
 const creationMarker = / \[pi-create:([0-9a-f-]{36})\]$/;
+const initialPromptDispatchType = "pi-web-initial-prompt-dispatch";
+const initialPromptDispatchEntrySchema = z.object({
+  type: z.literal("custom"),
+  customType: z.literal(initialPromptDispatchType),
+  data: z.object({ id: z.uuid(), text: z.string() }),
+});
 
 function parseSessionName(value: string | null): {
   name: string | null;
@@ -764,7 +772,18 @@ class PiOpenSession implements OpenRuntimeSession {
     return Promise.resolve().then(() => transcriptFromManager(this.manager));
   }
 
-  public async prompt(text: string): Promise<PromptAcceptance> {
+  public async prompt(
+    text: string,
+    dispatch?: RuntimePromptDispatch,
+  ): Promise<PromptAcceptance> {
+    if (dispatch !== undefined) {
+      z.uuid().parse(dispatch.id);
+      if (!this.hasPromptDispatch(dispatch, text))
+        this.manager.appendCustomEntry(initialPromptDispatchType, {
+          id: dispatch.id,
+          text,
+        });
+    }
     if (this.disposed)
       throw new RuntimeFailure("unavailable", "Runtime session is closed.");
     if (this.bufferedEvents !== null)
@@ -813,6 +832,35 @@ class PiOpenSession implements OpenRuntimeSession {
     };
     if (!accepted) discardEvents();
     return { accepted, settlement, releaseEvents, discardEvents };
+  }
+
+  public async recoverPrompt(
+    text: string,
+    dispatch: RuntimePromptDispatch,
+  ): Promise<PromptRecovery> {
+    z.uuid().parse(dispatch.id);
+    const snapshot = await this.snapshot();
+    return this.hasPromptDispatch(dispatch, text) &&
+      snapshot.transcript.some(
+        (item) =>
+          item.kind === "message" && item.role === "user" && item.text === text,
+      )
+      ? { outcome: "accepted" }
+      : { outcome: "not_accepted" };
+  }
+
+  private hasPromptDispatch(
+    dispatch: RuntimePromptDispatch,
+    text: string,
+  ): boolean {
+    return parseNativeHistory(this.manager.getBranch()).some((entry) => {
+      const parsed = initialPromptDispatchEntrySchema.safeParse(entry);
+      return (
+        parsed.success &&
+        parsed.data.data.id === dispatch.id &&
+        parsed.data.data.text === text
+      );
+    });
   }
 
   public async steer(text: string): Promise<void> {

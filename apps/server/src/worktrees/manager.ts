@@ -15,11 +15,11 @@ import {
   WorkspacePreflightResponseSchema,
   GitBranchSchema,
   type GitBranch,
+  type GitFileStatus,
   type ProjectId,
+  RelativePathSchema,
   type WorkspacePreflightResponse,
 } from "@pi-web/contracts";
-
-import { parsePorcelainV2 } from "../inspector/git.js";
 
 interface GitResult {
   code: number;
@@ -131,6 +131,129 @@ export function parseGitBranchList(stdout: Buffer): string[] {
     .map((entry) => parseGitBranch(Buffer.from(`${entry}\n`)));
 }
 
+export interface WorktreeStatusEntry {
+  path: string;
+  originalPath: string | null;
+  indexStatus: string;
+  worktreeStatus: string;
+  kind: GitFileStatus["kind"];
+  hasSubmoduleState: boolean;
+}
+
+const statusCode = "[.MTADRCU]";
+const ordinaryRecord = new RegExp(
+  `^1 (${statusCode}{2}) ((?:N\\.{3}|S[.C][.M][.U])) ([0-7]{6}) ([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) (.+)$`,
+);
+const renameRecord = new RegExp(
+  `^2 (${statusCode}{2}) ((?:N\\.{3}|S[.C][.M][.U])) ([0-7]{6}) ([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([RC][0-9]{3}) (.+)$`,
+);
+const unmergedRecord = new RegExp(
+  `^u (${statusCode}{2}) ((?:N\\.{3}|S[.C][.M][.U])) ([0-7]{6}) ([0-7]{6}) ([0-7]{6}) ([0-7]{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) (.+)$`,
+);
+
+function statusKind(
+  index: string,
+  worktree: string,
+  recordType: "1" | "2" | "u" | "?",
+): GitFileStatus["kind"] {
+  if (recordType === "?") return "untracked";
+  if (
+    index === "U" ||
+    worktree === "U" ||
+    (index === "A" && worktree === "A") ||
+    (index === "D" && worktree === "D")
+  )
+    return "conflicted";
+  if (index === "R" || worktree === "R") return "renamed";
+  if (index === "C" || worktree === "C") return "copied";
+  if (index === "D" || worktree === "D") return "deleted";
+  if (index === "A" || worktree === "A") return "added";
+  return "modified";
+}
+
+/** Parses trusted, project-relative file states from Git porcelain v2 output. */
+export function parseWorktreePorcelainV2(bytes: Buffer): WorktreeStatusEntry[] {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (text === "") return [];
+  if (!text.endsWith("\0")) throw new Error("malformed_git_status");
+  const records = text.slice(0, -1).split("\0");
+  const files: WorktreeStatusEntry[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record === undefined || record === "")
+      throw new Error("malformed_git_status");
+    if (record.startsWith("? ")) {
+      const path = RelativePathSchema.parse(record.slice(2));
+      files.push({
+        path,
+        originalPath: null,
+        indexStatus: "?",
+        worktreeStatus: "?",
+        kind: "untracked",
+        hasSubmoduleState: false,
+      });
+      continue;
+    }
+    const recordType = record[0];
+    if (recordType === "1") {
+      const match = ordinaryRecord.exec(record);
+      if (match === null) throw new Error("malformed_git_status");
+      const [, xy, submodule, , , , , , rawPath] = match;
+      if (xy === undefined || submodule === undefined || rawPath === undefined)
+        throw new Error("malformed_git_status");
+      const path = RelativePathSchema.parse(rawPath);
+      files.push({
+        path,
+        originalPath: null,
+        indexStatus: xy[0] ?? ".",
+        worktreeStatus: xy[1] ?? ".",
+        kind: statusKind(xy[0] ?? ".", xy[1] ?? ".", "1"),
+        hasSubmoduleState: submodule.startsWith("S"),
+      });
+      continue;
+    }
+    if (recordType === "2") {
+      const match = renameRecord.exec(record);
+      const originalPath = records[index + 1];
+      if (match === null || originalPath === undefined || originalPath === "")
+        throw new Error("malformed_git_status");
+      const [, xy, submodule, , , , , , , rawPath] = match;
+      if (xy === undefined || submodule === undefined || rawPath === undefined)
+        throw new Error("malformed_git_status");
+      const path = RelativePathSchema.parse(rawPath);
+      files.push({
+        path,
+        originalPath: RelativePathSchema.parse(originalPath),
+        indexStatus: xy[0] ?? ".",
+        worktreeStatus: xy[1] ?? ".",
+        kind: statusKind(xy[0] ?? ".", xy[1] ?? ".", "2"),
+        hasSubmoduleState: submodule.startsWith("S"),
+      });
+      index += 1;
+      continue;
+    }
+    if (recordType === "u") {
+      const match = unmergedRecord.exec(record);
+      if (match === null) throw new Error("malformed_git_status");
+      const [, xy, submodule, , , , , , , , rawPath] = match;
+      if (xy === undefined || submodule === undefined || rawPath === undefined)
+        throw new Error("malformed_git_status");
+      const path = RelativePathSchema.parse(rawPath);
+      files.push({
+        path,
+        originalPath: null,
+        indexStatus: xy[0] ?? ".",
+        worktreeStatus: xy[1] ?? ".",
+        kind: statusKind(xy[0] ?? ".", xy[1] ?? ".", "u"),
+        hasSubmoduleState: submodule.startsWith("S"),
+      });
+      continue;
+    }
+    throw new Error("malformed_git_status");
+  }
+  return files;
+}
+
 async function gitOutput(cwd: string, args: string[]): Promise<Buffer> {
   const result = await git(cwd, args);
   if (result.code !== 0) throw new Error("git_command_failed");
@@ -142,7 +265,7 @@ async function untrackedManifest(
   status: Buffer,
 ): Promise<Buffer> {
   const entries: string[] = [];
-  for (const file of parsePorcelainV2(status).filter(
+  for (const file of parseWorktreePorcelainV2(status).filter(
     (entry) => entry.kind === "untracked",
   )) {
     const source = safeContained(root, file.path);
@@ -189,14 +312,8 @@ async function stateToken(
   );
 }
 
-function hasSubmoduleState(status: Buffer): boolean {
-  return status
-    .toString("utf8")
-    .split("\0")
-    .some((record) => {
-      if (!/^[12u] /.test(record)) return false;
-      return record.split(" ")[2]?.startsWith("S") === true;
-    });
+function hasSubmoduleState(entries: WorktreeStatusEntry[]): boolean {
+  return entries.some((entry) => entry.hasSubmoduleState);
 }
 
 function safeContained(root: string, path: string): string {
@@ -269,7 +386,7 @@ export class GitWorktreeManager {
         "--untracked-files=all",
       ]);
       if (status.code !== 0) throw new Error("git_status_failed");
-      const files = parsePorcelainV2(status.stdout);
+      const files = parseWorktreePorcelainV2(status.stdout);
       return WorkspacePreflightResponseSchema.parse({
         worktreeAvailable: true,
         unavailableReason: null,
@@ -374,6 +491,7 @@ export class GitWorktreeManager {
       "--untracked-files=all",
     ]);
     if (status.code !== 0) throw new Error("git_status_failed");
+    const files = parseWorktreePorcelainV2(status.stdout);
     const token = await stateToken(repoRoot, head, status.stdout);
     if (input.includeChanges) {
       const current = parseGitBranch(
@@ -392,10 +510,8 @@ export class GitWorktreeManager {
       )
         throw new Error("source_changed");
       if (
-        parsePorcelainV2(status.stdout).some(
-          (file) => file.kind === "conflicted",
-        ) ||
-        hasSubmoduleState(status.stdout)
+        files.some((file) => file.kind === "conflicted") ||
+        hasSubmoduleState(files)
       )
         throw new Error("source_changes_unsupported");
     }
@@ -531,6 +647,7 @@ export class GitWorktreeManager {
       "--untracked-files=all",
     ]);
     if (status.code !== 0) throw new Error("git_status_failed");
+    const files = parseWorktreePorcelainV2(status.stdout);
     const sourceToken = await stateToken(repoRoot, head, status.stdout);
     if (
       input.includeChanges &&
@@ -554,10 +671,8 @@ export class GitWorktreeManager {
     }
     if (
       input.includeChanges &&
-      (parsePorcelainV2(status.stdout).some(
-        (file) => file.kind === "conflicted",
-      ) ||
-        hasSubmoduleState(status.stdout))
+      (files.some((file) => file.kind === "conflicted") ||
+        hasSubmoduleState(files))
     )
       throw new Error("source_changes_unsupported");
     return {
@@ -632,7 +747,8 @@ export class GitWorktreeManager {
         ]);
         if (existingStatus.code !== 0)
           throw new Error("worktree_identity_failed");
-        if (!includeChanges && existingStatus.stdout.length === 0) return;
+        const existingFiles = parseWorktreePorcelainV2(existingStatus.stdout);
+        if (!includeChanges && existingFiles.length === 0) return;
         if (
           includeChanges &&
           (await stateToken(
@@ -642,7 +758,7 @@ export class GitWorktreeManager {
           )) === plan.sourceToken
         )
           return;
-        if (existingStatus.stdout.length !== 0)
+        if (existingFiles.length !== 0)
           throw new Error("worktree_recovery_required");
       }
       let staged: Buffer = Buffer.alloc(0);
@@ -675,7 +791,7 @@ export class GitWorktreeManager {
         unstaged = (
           await git(plan.repoRoot, ["diff", "--binary", "--full-index"])
         ).stdout;
-        untracked = parsePorcelainV2(before.stdout)
+        untracked = parseWorktreePorcelainV2(before.stdout)
           .filter((file) => file.kind === "untracked")
           .map((file) => file.path);
         const after = await git(plan.repoRoot, [
@@ -768,7 +884,8 @@ export class GitWorktreeManager {
         "--untracked-files=all",
       ]);
       if (finalStatus.code !== 0) throw new Error("worktree_verify_failed");
-      if (!includeChanges && finalStatus.stdout.length !== 0)
+      const finalFiles = parseWorktreePorcelainV2(finalStatus.stdout);
+      if (!includeChanges && finalFiles.length !== 0)
         throw new Error("worktree_not_clean");
       if (
         includeChanges &&

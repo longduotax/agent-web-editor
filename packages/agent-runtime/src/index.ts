@@ -58,10 +58,25 @@ export interface PromptAcceptance {
   discardEvents(): void;
 }
 
+/** A durable caller-owned identity for a prompt that may need recovery. */
+export interface RuntimePromptDispatch {
+  id: string;
+}
+
+export type PromptRecovery =
+  { outcome: "accepted" } | { outcome: "not_accepted" };
+
 export interface OpenRuntimeSession {
   readonly id: string;
   snapshot(): Promise<RuntimeSnapshot>;
-  prompt(text: string): Promise<PromptAcceptance>;
+  prompt(
+    text: string,
+    dispatch?: RuntimePromptDispatch,
+  ): Promise<PromptAcceptance>;
+  recoverPrompt(
+    text: string,
+    dispatch: RuntimePromptDispatch,
+  ): Promise<PromptRecovery>;
   steer(text: string): Promise<void>;
   stop(): Promise<void>;
   subscribe(listener: (event: RuntimeEvent) => void): () => void;

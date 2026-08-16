@@ -32,6 +32,9 @@ class BrowserSession implements OpenRuntimeSession {
       discardEvents: () => undefined,
     });
   }
+  public recoverPrompt() {
+    return Promise.resolve({ outcome: "not_accepted" as const });
+  }
   public steer() {
     return Promise.resolve();
   }

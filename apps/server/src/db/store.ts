@@ -101,6 +101,13 @@ const creationRowSchema = z
     thread_id: ThreadIdSchema.nullable(),
     run_id: RunIdSchema.nullable(),
     prompt_command_id: z.uuid(),
+    initial_prompt_dispatch_id: z.uuid().nullable(),
+    initial_prompt_dispatch_state: z.enum([
+      "none",
+      "prepared",
+      "accepted",
+      "rejected",
+    ]),
     created_at: TimestampSchema,
     updated_at: TimestampSchema,
     failure_code: z.string().max(80).nullable(),
@@ -156,6 +163,16 @@ const creationRowSchema = z
       context.addIssue({
         code: "custom",
         message: "creation run state is inconsistent",
+      });
+    const hasDispatch = row.initial_prompt_dispatch_id !== null;
+    if (
+      hasDispatch !== (row.initial_prompt_dispatch_state !== "none") ||
+      (row.initial_prompt_dispatch_state === "accepted") !==
+        (row.run_id !== null)
+    )
+      context.addIssue({
+        code: "custom",
+        message: "creation initial prompt dispatch state is inconsistent",
       });
   });
 const runRowSchema = z.object({
@@ -358,7 +375,7 @@ export class MetadataStore {
       const schemaVersion = sqliteSchemaVersionSchema.parse(
         sqlite.pragma("user_version", { simple: true }),
       );
-      if (schemaVersion > 6)
+      if (schemaVersion > 7)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
@@ -454,6 +471,18 @@ export class MetadataStore {
         sqlite.transaction(() => {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 6");
+        })();
+      }
+      if (migratedSchemaVersion < 7) {
+        if (schemaVersion >= 6) await backupBefore(7);
+        const migrationPath = new URL(
+          "../../migrations/0007_initial_prompt_dispatch.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 7");
         })();
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
@@ -1006,7 +1035,7 @@ export class MetadataStore {
     const now = this.now();
     this.sqlite
       .prepare(
-        "INSERT INTO thread_creation_operations (id, project_id, idempotency_key, request_hash, state, workspace_mode, base_branch, source_changes, title, slug, worktree_id, runtime_session_id, thread_id, run_id, prompt_command_id, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, 'naming', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NULL, NULL)",
+        "INSERT INTO thread_creation_operations (id, project_id, idempotency_key, request_hash, state, workspace_mode, base_branch, source_changes, title, slug, worktree_id, runtime_session_id, thread_id, run_id, prompt_command_id, initial_prompt_dispatch_id, initial_prompt_dispatch_state, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, 'naming', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, 'none', ?, ?, NULL, NULL)",
       )
       .run(
         id,
@@ -1257,9 +1286,58 @@ export class MetadataStore {
     return this.updateThreadCreation(
       projectId,
       key,
-      "run_id = ?, state = 'prompt_accepted'",
+      "run_id = ?, state = 'prompt_accepted', initial_prompt_dispatch_state = CASE WHEN initial_prompt_dispatch_id IS NULL THEN 'none' ELSE 'accepted' END",
       [runId],
     );
+  }
+
+  public reserveCreationPromptDispatch(
+    projectId: ProjectId,
+    key: string,
+  ): ThreadCreationRecord {
+    const creation = requireRecord(
+      this.getThreadCreation(projectId, key),
+      "thread_creation_not_found",
+    );
+    if (creation.initial_prompt_dispatch_id !== null) return creation;
+    return this.updateThreadCreation(
+      projectId,
+      key,
+      "initial_prompt_dispatch_id = ?, initial_prompt_dispatch_state = 'prepared'",
+      [creation.prompt_command_id],
+    );
+  }
+
+  public acceptRecoveredCreationPrompt(
+    projectId: ProjectId,
+    key: string,
+    threadId: ThreadId,
+  ): RunRecord {
+    return this.sqlite.transaction(() => {
+      const creation = requireRecord(
+        this.getThreadCreation(projectId, key),
+        "thread_creation_not_found",
+      );
+      if (creation.run_id !== null)
+        return requireRecord(this.getRun(creation.run_id), "run_not_found");
+      if (creation.initial_prompt_dispatch_state !== "prepared")
+        throw new Error("initial_prompt_dispatch_not_prepared");
+      const run = requireRecord(
+        this.createRunIfProjectActive(
+          projectId,
+          threadId,
+          creation.prompt_command_id,
+        ),
+        "thread_not_found",
+      );
+      this.updateThreadCreation(
+        projectId,
+        key,
+        "run_id = ?, state = 'prompt_accepted', initial_prompt_dispatch_state = 'accepted'",
+        [run.id],
+      );
+      return run;
+    })();
   }
 
   public failThreadCreation(

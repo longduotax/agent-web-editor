@@ -19,6 +19,7 @@ import {
   parseGitBranch,
   parseGitObjectId,
   parseGitPath,
+  parseWorktreePorcelainV2,
 } from "./manager.js";
 
 const exec = promisify(execFile);
@@ -372,5 +373,54 @@ describe("GitWorktreeManager", () => {
       expect(() => parseGitPath(output)).toThrow();
     expect(() => parseGitObjectId(Buffer.from("not-an-oid\n"))).toThrow();
     expect(() => parseGitBranch(Buffer.from("../unsafe\n"))).toThrow();
+  });
+
+  it("parses validated porcelain v2 entries at the worktree boundary", () => {
+    const oid = "a".repeat(40);
+    const otherOid = "b".repeat(40);
+    const entries = parseWorktreePorcelainV2(
+      Buffer.from(
+        [
+          `1 M. N... 100644 100644 100644 ${oid} ${otherOid} src/file.ts`,
+          `2 R. SC.. 100644 100644 100644 ${oid} ${otherOid} R100 src/new name.ts`,
+          "src/old name.ts",
+          `u UU N... 100644 100644 100644 100644 ${oid} ${otherOid} ${oid} conflicted.ts`,
+          "? untracked.txt",
+        ].join("\0") + "\0",
+      ),
+    );
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        path: "src/file.ts",
+        kind: "modified",
+        hasSubmoduleState: false,
+      }),
+      expect.objectContaining({
+        path: "src/new name.ts",
+        originalPath: "src/old name.ts",
+        kind: "renamed",
+        hasSubmoduleState: true,
+      }),
+      expect.objectContaining({ path: "conflicted.ts", kind: "conflicted" }),
+      expect.objectContaining({ path: "untracked.txt", kind: "untracked" }),
+    ]);
+  });
+
+  it("rejects malformed or unsafe porcelain v2 output", () => {
+    const oid = "a".repeat(40);
+    const valid = `1 M. N... 100644 100644 100644 ${oid} ${oid} file.ts\0`;
+    for (const output of [
+      Buffer.from([0xff, 0]),
+      Buffer.from(valid.slice(0, -1)),
+      Buffer.from(`1 M. N... 100644 ${oid} ${oid} file.ts\0`),
+      Buffer.from(`2 R. N... 100644 100644 100644 ${oid} ${oid} R100 new.ts\0`),
+      Buffer.from("# branch.head main\0"),
+      Buffer.from("! ignored.txt\0"),
+      Buffer.from(`? ../unsafe.txt\0`),
+      Buffer.from(`? src//non-normalized.txt\0`),
+      Buffer.from(`? valid.txt\0\0? second.txt\0`),
+    ])
+      expect(() => parseWorktreePorcelainV2(output)).toThrow();
   });
 });

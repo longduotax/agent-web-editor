@@ -411,28 +411,63 @@ export class WorkspaceService {
           creation.thread_id === null
             ? null
             : this.store.getThread(projectId, creation.thread_id);
-        if (thread === null) {
-          thread = this.store.createThreadForCreation(
-            projectId,
-            idempotencyKey,
-            creation.runtime_session_id ?? "",
-            creation.title ?? fallbackTitle(prompt),
-            worktreeId,
-          );
-          creation =
-            this.store.getThreadCreation(projectId, idempotencyKey) ?? creation;
-        }
+        thread ??= this.store.createThreadForCreation(
+          projectId,
+          idempotencyKey,
+          creation.runtime_session_id ?? "",
+          creation.title ?? fallbackTitle(prompt),
+          worktreeId,
+        );
+        creation = this.store.reserveCreationPromptDispatch(
+          projectId,
+          idempotencyKey,
+        );
         let run =
           creation.run_id === null ? null : this.store.getRun(creation.run_id);
         if (run?.id !== creation.run_id) {
-          const started = await this.prompt(
-            projectId,
-            thread.id,
-            prompt,
-            creation.prompt_command_id,
-          );
-          this.store.attachCreationRun(projectId, idempotencyKey, started.id);
-          run = this.store.getRun(started.id);
+          const dispatch = {
+            id:
+              creation.initial_prompt_dispatch_id ?? creation.prompt_command_id,
+          };
+          const runtime = await this.openRuntime(thread);
+          const recovered = await runtime.recoverPrompt(prompt, dispatch);
+          if (recovered.outcome === "accepted") {
+            const receipt = this.store.readReceipt(
+              projectId,
+              creation.prompt_command_id,
+              "prompt",
+              canonicalRequestHash("prompt", {
+                projectId,
+                threadId: thread.id,
+                text: prompt,
+              }),
+              RunSchema,
+            );
+            if (receipt !== null) {
+              this.store.attachCreationRun(
+                projectId,
+                idempotencyKey,
+                receipt.id,
+              );
+              run = this.store.getRun(receipt.id);
+            } else {
+              run = this.store.acceptRecoveredCreationPrompt(
+                projectId,
+                idempotencyKey,
+                thread.id,
+              );
+            }
+          } else {
+            const started = await this.prompt(
+              projectId,
+              thread.id,
+              prompt,
+              creation.prompt_command_id,
+              dispatch,
+            );
+            this.store.attachCreationRun(projectId, idempotencyKey, started.id);
+            run = this.store.getRun(started.id);
+          }
         }
         if (run === null) throw new Error("run_not_found");
         return StartThreadResponseSchema.parse({
@@ -1013,6 +1048,7 @@ export class WorkspaceService {
     threadId: ThreadId,
     text: string,
     idempotencyKey: string,
+    dispatch?: { id: string },
   ): Promise<Run> {
     const operation = "prompt";
     const hash = canonicalRequestHash(operation, {
@@ -1060,7 +1096,7 @@ export class WorkspaceService {
             this.requestPreflightStop(preflight);
             throw new Error("project_not_found");
           }
-          const acceptance = await runtime.prompt(text);
+          const acceptance = await runtime.prompt(text, dispatch);
           pendingAcceptance = acceptance;
           if (!acceptance.accepted) throw new Error("prompt_rejected");
           if (this.preflightPrompts.get(threadId) !== preflight)

@@ -33,6 +33,7 @@ class ControlledSession implements OpenRuntimeSession {
   public stopCount = 0;
   public discardCount = 0;
   public disposeCount = 0;
+  public recoveredPrompts = false;
 
   public constructor(public readonly id: string) {}
   private settle:
@@ -51,6 +52,7 @@ class ControlledSession implements OpenRuntimeSession {
   }
   public async prompt(): Promise<PromptAcceptance> {
     this.promptCount += 1;
+    this.recoveredPrompts = true;
     await this.promptGate;
     const settlement = new Promise<"completed" | "failed" | "interrupted">(
       (resolve) => {
@@ -65,6 +67,13 @@ class ControlledSession implements OpenRuntimeSession {
         this.discardCount += 1;
       },
     };
+  }
+  public recoverPrompt() {
+    return Promise.resolve(
+      this.recoveredPrompts
+        ? ({ outcome: "accepted" } as const)
+        : ({ outcome: "not_accepted" } as const),
+    );
   }
   public steer() {
     this.steerCount += 1;
@@ -222,6 +231,52 @@ describe("run coordination", () => {
     expect(replay.thread.id).toBe(initial.thread.id);
     expect(replay.run.id).toBe(initial.run.id);
     await context.service.close();
+    context.store.close();
+  });
+
+  it("recovers an accepted initial prompt without dispatching it again", async () => {
+    const context = await fixture();
+    const key = "90000000-0000-4000-8000-000000000099";
+    const attach = vi
+      .spyOn(context.store, "attachCreationRun")
+      .mockImplementationOnce(() => {
+        throw new Error("crash_after_acceptance");
+      });
+
+    await expect(
+      context.service.startThread(
+        context.project.id,
+        "Recover one prompt",
+        { mode: "shared" },
+        key,
+      ),
+    ).rejects.toThrow("crash_after_acceptance");
+    attach.mockRestore();
+    await context.service.close();
+    const restarted = new WorkspaceService(
+      context.store,
+      context.runtime,
+      new LiveBroker(),
+    );
+    const recovered = await restarted.startThread(
+      context.project.id,
+      "Recover one prompt",
+      { mode: "shared" },
+      key,
+    );
+    const thread = context.store.getThread(
+      context.project.id,
+      recovered.thread.id,
+    );
+    if (thread === null) throw new Error("recovered thread was not stored");
+    expect(
+      context.runtime.sessionById(thread.runtime_session_id).promptCount,
+    ).toBe(1);
+    expect(recovered.run.id).toBeTruthy();
+    expect(
+      context.store.getThreadCreation(context.project.id, key)?.run_id,
+    ).toBe(recovered.run.id);
+    await restarted.close();
     context.store.close();
   });
 

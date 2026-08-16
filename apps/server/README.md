@@ -28,10 +28,10 @@ and approved designs under `docs/design/`.
 - Production binds only `127.0.0.1`, serves the built SPA, and prints a plain
   launch URL. No token, cookie, or login is required; any same-machine process
   can access the server while it runs.
-- Metadata migrations v1-v6 are committed under `migrations/`; v2 permits one
+- Metadata migrations v1-v7 are committed under `migrations/`; v2 permits one
   running run per thread, v3 adds thread archives, v4 adds durable
   thread-creation operations and managed worktrees, v5 adds creation-session
-  recovery, and v6 adds worktree transfer tokens.
+  recovery, v6 adds worktree transfer tokens, and v7 adds recoverable initial-prompt dispatches.
 - `PI_WEB_NAMING_MODEL=provider/model` optionally selects the lightweight model
   used to name new threads/worktrees; failure falls back to local naming.
 
