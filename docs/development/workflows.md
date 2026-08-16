@@ -69,7 +69,8 @@ Generated `dist/`, coverage, and TypeScript build-info files are ignored.
 
 ## Development processes
 
-The root command starts both applications and stays attached:
+The root command builds the internal runtime packages, starts both applications,
+and stays attached:
 
 ```sh
 pnpm dev
