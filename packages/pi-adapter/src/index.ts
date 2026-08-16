@@ -25,6 +25,7 @@ import type {
   RuntimeEvent,
   RuntimeSessionDescriptor,
   RuntimeSnapshot,
+  TitleSuggestion,
 } from "@pi-web/agent-runtime";
 import { RuntimeFailure } from "@pi-web/agent-runtime";
 import {
@@ -65,6 +66,90 @@ const createdSessionInfoSchema = z.strictObject({
 });
 const createdSessionEntriesSchema = z.tuple([createdSessionInfoSchema]);
 
+export interface NamingModelSelector {
+  readonly provider: string;
+  readonly id: string;
+}
+
+const namingModelSelectorSchema = z.object({
+  provider: z.string().min(1),
+  id: z.string().min(1),
+});
+const namingModelDescriptorSchema = z.object({
+  provider: z.string().min(1),
+  id: z.string().min(1),
+  cost: z.object({
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+  }),
+});
+type NamingModelDescriptor = z.infer<typeof namingModelDescriptorSchema>;
+const namingModelHandleSchema = z.object({
+  provider: z.string().min(1),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  api: z.string().min(1),
+  baseUrl: z.string().min(1),
+  reasoning: z.boolean(),
+  input: z.array(z.enum(["text", "image"])).min(1),
+  cost: z.object({
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+    cacheRead: z.number().nonnegative(),
+    cacheWrite: z.number().nonnegative(),
+  }),
+  contextWindow: z.number().int().positive(),
+  maxTokens: z.number().int().positive(),
+});
+type NamingModelHandle = z.infer<typeof namingModelHandleSchema>;
+const namingCompletionSchema = z.object({
+  stopReason: z.literal("stop"),
+  content: z.tuple([
+    z.strictObject({ type: z.literal("text"), text: z.string() }),
+  ]),
+});
+
+const generatedTitleSchema = z
+  .string()
+  .min(1)
+  .max(60)
+  .refine((value) => !/[\r\n]/.test(value), "Title must be one line.");
+
+export function parseGeneratedTitle(value: unknown): TitleSuggestion {
+  if (typeof value !== "string") return { outcome: "unavailable" };
+  const normalized = value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'`*_#\s]+|["'`*_#\s.!?:;]+$/g, "")
+    .trim();
+  const title = generatedTitleSchema.safeParse(normalized);
+  return title.success
+    ? { outcome: "available", title: title.data }
+    : { outcome: "unavailable" };
+}
+
+function parseNamingModelHandle(value: unknown): NamingModelHandle | null {
+  const parsed = namingModelHandleSchema.safeParse(value);
+  if (!parsed.success) return null;
+  return {
+    provider: parsed.data.provider,
+    id: parsed.data.id,
+    name: parsed.data.name,
+    api: parsed.data.api,
+    baseUrl: parsed.data.baseUrl,
+    reasoning: parsed.data.reasoning,
+    input: [...parsed.data.input],
+    cost: {
+      input: parsed.data.cost.input,
+      output: parsed.data.cost.output,
+      cacheRead: parsed.data.cost.cacheRead,
+      cacheWrite: parsed.data.cost.cacheWrite,
+    },
+    contextWindow: parsed.data.contextWindow,
+    maxTokens: parsed.data.maxTokens,
+  };
+}
+
 type SessionInfo = z.infer<typeof sessionInfoSchema>;
 
 interface NativeSessionDescriptor {
@@ -75,6 +160,22 @@ interface NativeSessionDescriptor {
   readonly messageCount: number;
   readonly preview: string;
   readonly path: string;
+  readonly creationId: string | undefined;
+}
+
+const creationMarker = / \[pi-create:([0-9a-f-]{36})\]$/;
+
+function parseSessionName(value: string | null): {
+  name: string | null;
+  creationId: string | undefined;
+} {
+  if (value === null) return { name: null, creationId: undefined };
+  const match = creationMarker.exec(value);
+  if (match === null) return { name: value, creationId: undefined };
+  const creationId = z.uuid().safeParse(match[1]);
+  return creationId.success
+    ? { name: value.slice(0, match.index), creationId: creationId.data }
+    : { name: value, creationId: undefined };
 }
 
 function parseNativeHistory(value: unknown): unknown[] {
@@ -195,14 +296,18 @@ async function parseNativeSessionDescriptor(
       "malformed",
       "The native session descriptor is malformed.",
     );
+  const name = parseSessionName(
+    nativeSessionNameSchema.parse(descriptor.name ?? null),
+  );
   return {
     id: descriptor.id,
-    name: nativeSessionNameSchema.parse(descriptor.name ?? null),
+    name: name.name,
     createdAt: descriptor.created.toISOString(),
     modifiedAt: descriptor.modified.toISOString(),
     messageCount: descriptor.messageCount,
     preview: descriptor.firstMessage.slice(0, 500),
     path: sessionPath,
+    creationId: name.creationId,
   };
 }
 
@@ -733,12 +838,12 @@ class PiOpenSession implements OpenRuntimeSession {
 
 export class PiAgentRuntime implements AgentRuntime {
   private readonly agentDirectory: string;
-  private readonly namingModel: string | null;
+  private readonly namingModel: NamingModelSelector | null;
   private modelRuntime: Promise<ModelRuntime> | undefined;
 
   public constructor(
     agentDirectory: unknown = process.env.PI_CODING_AGENT_DIR,
-    namingModel: string | null = process.env.PI_WEB_NAMING_MODEL ?? null,
+    namingModel: NamingModelSelector | null = null,
   ) {
     this.agentDirectory = parseAgentDirectory(agentDirectory);
     this.namingModel = namingModel;
@@ -747,77 +852,93 @@ export class PiAgentRuntime implements AgentRuntime {
   public async suggestTitle(
     projectPath: string,
     prompt: string,
-  ): Promise<string> {
-    const canonical = await realpath(projectPath);
-    const runtime = await (this.modelRuntime ??= ModelRuntime.create({
-      authPath: join(this.agentDirectory, "auth.json"),
-      modelsPath: join(this.agentDirectory, "models.json"),
-      allowModelNetwork: false,
-    }));
-    const available = await runtime.getAvailable(undefined, {
-      signal: AbortSignal.timeout(5_000),
-    });
-    let model;
-    if (this.namingModel !== null) {
-      const separator = this.namingModel.indexOf("/");
-      const provider = this.namingModel.slice(0, separator);
-      const id = this.namingModel.slice(separator + 1);
-      model = available.find(
-        (candidate) => candidate.provider === provider && candidate.id === id,
-      );
-    } else {
-      const settings = SettingsManager.create(canonical, this.agentDirectory);
-      const provider = settings.getDefaultProvider();
-      const defaultId = settings.getDefaultModel();
-      const defaultModel =
-        provider === undefined || defaultId === undefined
-          ? undefined
-          : runtime.getModel(provider, defaultId);
-      if (provider !== undefined && defaultModel !== undefined) {
-        const defaultCost =
-          defaultModel.cost.input * 1_000 + defaultModel.cost.output * 32;
-        model = available
-          .filter(
-            (candidate) =>
-              candidate.provider === provider &&
-              candidate.id !== defaultModel.id &&
-              candidate.cost.input * 1_000 + candidate.cost.output * 32 <
-                defaultCost,
-          )
-          .sort((left, right) => {
-            const leftCost = left.cost.input * 1_000 + left.cost.output * 32;
-            const rightCost = right.cost.input * 1_000 + right.cost.output * 32;
-            return leftCost - rightCost || left.id.localeCompare(right.id);
-          })[0];
-      }
-    }
-    if (model === undefined) throw new Error("naming_model_unavailable");
-    const response = await runtime.completeSimple(
-      model,
-      {
-        systemPrompt:
-          "Return only a concise 3-7 word title summarizing the user's coding task. No quotes, markdown, or punctuation suffix.",
-        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-      },
-      {
-        maxTokens: 32,
-        cacheRetention: "none",
+  ): Promise<TitleSuggestion> {
+    try {
+      const canonical = await realpath(projectPath);
+      const runtime = await (this.modelRuntime ??= ModelRuntime.create({
+        authPath: join(this.agentDirectory, "auth.json"),
+        modelsPath: join(this.agentDirectory, "models.json"),
+        allowModelNetwork: false,
+      }));
+      const rawAvailable: unknown = await runtime.getAvailable(undefined, {
         signal: AbortSignal.timeout(5_000),
-      },
-    );
-    if (response.stopReason !== "stop") throw new Error("naming_model_failed");
-    const text = response.content.filter((block) => block.type === "text");
-    if (text.length !== 1 || response.content.length !== 1)
-      throw new Error("naming_model_malformed");
-    const title = text[0]?.text.replace(/\s+/g, " ").trim();
-    if (
-      title === undefined ||
-      title === "" ||
-      title.length > 60 ||
-      title.includes("\n")
-    )
-      throw new Error("naming_model_malformed");
-    return title.replace(/^["'`*_#\s]+|["'`*_#\s.!?:;]+$/g, "").trim();
+      });
+      const available = z
+        .array(namingModelDescriptorSchema)
+        .parse(rawAvailable);
+      let model: NamingModelDescriptor | undefined;
+      const explicitNamingModel = this.namingModel;
+      if (explicitNamingModel !== null) {
+        model = available.find(
+          (candidate) =>
+            candidate.provider === explicitNamingModel.provider &&
+            candidate.id === explicitNamingModel.id,
+        );
+      } else {
+        const settings = SettingsManager.create(canonical, this.agentDirectory);
+        const defaultSelector = namingModelSelectorSchema.safeParse({
+          provider: settings.getDefaultProvider(),
+          id: settings.getDefaultModel(),
+        });
+        if (!defaultSelector.success) return { outcome: "unavailable" };
+        const rawDefaultModel = runtime.getModel(
+          defaultSelector.data.provider,
+          defaultSelector.data.id,
+        );
+        const defaultModel =
+          namingModelDescriptorSchema.safeParse(rawDefaultModel).data;
+        if (
+          defaultModel?.provider === defaultSelector.data.provider &&
+          defaultModel.id === defaultSelector.data.id
+        ) {
+          const defaultCost =
+            defaultModel.cost.input * 1_000 + defaultModel.cost.output * 32;
+          model = available
+            .filter(
+              (candidate) =>
+                candidate.provider === defaultSelector.data.provider &&
+                candidate.id !== defaultSelector.data.id &&
+                candidate.cost.input * 1_000 + candidate.cost.output * 32 <
+                  defaultCost,
+            )
+            .sort((left, right) => {
+              const leftCost = left.cost.input * 1_000 + left.cost.output * 32;
+              const rightCost =
+                right.cost.input * 1_000 + right.cost.output * 32;
+              return leftCost - rightCost || left.id.localeCompare(right.id);
+            })[0];
+        }
+      }
+      if (model === undefined) return { outcome: "unavailable" };
+      const rawHandle = runtime.getModel(model.provider, model.id);
+      const handle = parseNamingModelHandle(rawHandle);
+      if (handle === null) return { outcome: "unavailable" };
+      const resolved = namingModelDescriptorSchema.safeParse(handle);
+      if (
+        !resolved.success ||
+        resolved.data.provider !== model.provider ||
+        resolved.data.id !== model.id
+      )
+        return { outcome: "unavailable" };
+      const rawResponse: unknown = await runtime.completeSimple(
+        handle,
+        {
+          systemPrompt:
+            "Return only a concise 3-7 word title summarizing the user's coding task. No quotes, markdown, or punctuation suffix.",
+          messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+        },
+        {
+          maxTokens: 32,
+          cacheRetention: "none",
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      const response = namingCompletionSchema.safeParse(rawResponse);
+      if (!response.success) return { outcome: "unavailable" };
+      return parseGeneratedTitle(response.data.content[0].text);
+    } catch {
+      return { outcome: "unavailable" };
+    }
   }
 
   public async discover(
@@ -852,6 +973,9 @@ export class PiAgentRuntime implements AgentRuntime {
           modifiedAt: descriptor.modifiedAt,
           messageCount: descriptor.messageCount,
           preview: descriptor.preview,
+          ...(descriptor.creationId === undefined
+            ? {}
+            : { creationId: descriptor.creationId }),
         });
       } catch (error) {
         if (error instanceof RuntimeFailure && error.code === "unauthorized")
@@ -879,13 +1003,23 @@ export class PiAgentRuntime implements AgentRuntime {
   public async create(
     projectPath: string,
     title = "New thread",
+    creationId?: string,
   ): Promise<{ sessionId: string }> {
     const canonical = await realpath(projectPath);
+    if (creationId !== undefined) {
+      const discovered = await this.discover(canonical);
+      const existing = discovered.sessions.find(
+        (session) => session.creationId === creationId,
+      );
+      if (existing !== undefined) return { sessionId: existing.id };
+    }
     const manager = SessionManager.create(
       canonical,
       defaultSessionDirectory(this.agentDirectory, canonical),
     );
-    manager.appendSessionInfo(title);
+    manager.appendSessionInfo(
+      creationId === undefined ? title : `${title} [pi-create:${creationId}]`,
+    );
     return {
       sessionId: await persistNewSession(
         manager,

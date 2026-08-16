@@ -4,6 +4,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  readFile,
   readlink,
   realpath,
   symlink,
@@ -12,6 +13,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   WorkspacePreflightResponseSchema,
+  GitBranchSchema,
+  type GitBranch,
   type ProjectId,
   type WorkspacePreflightResponse,
 } from "@pi-web/contracts";
@@ -89,18 +92,101 @@ async function git(
   });
 }
 
-async function gitText(cwd: string, args: string[]): Promise<string> {
-  const result = await git(cwd, args);
-  if (result.code !== 0) throw new Error("git_command_failed");
-  return result.stdout.toString("utf8").trim();
+function gitLine(stdout: Buffer): string {
+  if (stdout.includes(0)) throw new Error("malformed_git_output");
+  const value = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
+  if (!value.endsWith("\n") || value.slice(0, -1).includes("\n"))
+    throw new Error("malformed_git_output");
+  return value.slice(0, -1);
 }
 
-function stateToken(head: string, status: Buffer): string {
-  return createHash("sha256")
-    .update(head)
-    .update("\0")
-    .update(status)
-    .digest("hex");
+export function parseGitPath(stdout: Buffer): string {
+  const value = gitLine(stdout);
+  if (value === "" || value.includes("\0"))
+    throw new Error("malformed_git_path");
+  return value;
+}
+
+export function parseGitObjectId(stdout: Buffer): string {
+  const value = gitLine(stdout);
+  if (!/^[0-9a-f]{40,64}$/.test(value)) throw new Error("malformed_git_oid");
+  return value;
+}
+
+export function parseGitBranch(stdout: Buffer): GitBranch {
+  const value = gitLine(stdout);
+  const parsed = GitBranchSchema.safeParse(value);
+  if (!parsed.success) throw new Error("malformed_git_ref");
+  return parsed.data;
+}
+
+export function parseGitBranchList(stdout: Buffer): string[] {
+  if (stdout.includes(0)) throw new Error("malformed_git_output");
+  const value = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
+  if (value === "") return [];
+  if (!value.endsWith("\n")) throw new Error("malformed_git_output");
+  return value
+    .slice(0, -1)
+    .split("\n")
+    .map((entry) => parseGitBranch(Buffer.from(`${entry}\n`)));
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<Buffer> {
+  const result = await git(cwd, args);
+  if (result.code !== 0) throw new Error("git_command_failed");
+  return result.stdout;
+}
+
+async function untrackedManifest(
+  root: string,
+  status: Buffer,
+): Promise<Buffer> {
+  const entries: string[] = [];
+  for (const file of parsePorcelainV2(status).filter(
+    (entry) => entry.kind === "untracked",
+  )) {
+    const source = safeContained(root, file.path);
+    const info = await lstat(source);
+    if (info.isFile()) {
+      const content = await readFile(source);
+      entries.push(
+        `${file.path}\0file\0${(info.mode & 0o777).toString(8).padStart(3, "0")}\0${createHash("sha256").update(content).digest("hex")}`,
+      );
+    } else if (info.isSymbolicLink()) {
+      entries.push(
+        `${file.path}\0symlink\0${createHash("sha256")
+          .update(await readlink(source))
+          .digest("hex")}`,
+      );
+    } else throw new Error("source_changes_unsupported");
+  }
+  return Buffer.from(entries.sort().join("\n"), "utf8");
+}
+
+async function stateToken(
+  root: string,
+  head: string,
+  status: Buffer,
+): Promise<string> {
+  const [staged, unstaged] = await Promise.all([
+    gitOutput(root, ["diff", "--cached", "--binary", "--full-index", "HEAD"]),
+    gitOutput(root, ["diff", "--binary", "--full-index"]),
+  ]);
+  return (
+    createHash("sha256")
+      .update(head)
+      .update("\0")
+      .update(status)
+      .update("\0")
+      // Porcelain records only a tracked file's state.  Hash the exact binary
+      // patch inputs too, so a reviewed modification cannot be replaced before
+      // transfer without changing this token.
+      .update(createHash("sha256").update(staged).digest())
+      .update(createHash("sha256").update(unstaged).digest())
+      .update("\0")
+      .update(await untrackedManifest(root, status))
+      .digest("hex")
+  );
 }
 
 function hasSubmoduleState(status: Buffer): boolean {
@@ -138,9 +224,9 @@ export interface WorktreePlan {
   repoRoot: string;
   gitCommonDir: string;
   projectSubpath: string;
-  baseBranch: string;
+  baseBranch: GitBranch;
   baseCommit: string;
-  branchName: string;
+  branchName: GitBranch;
   worktreeRoot: string;
   executionRoot: string;
   sourceToken: string;
@@ -154,13 +240,13 @@ export class GitWorktreeManager {
   ): Promise<WorkspacePreflightResponse> {
     try {
       const repoRoot = await realpath(
-        await gitText(projectRoot, ["rev-parse", "--show-toplevel"]),
+        parseGitPath(
+          await gitOutput(projectRoot, ["rev-parse", "--show-toplevel"]),
+        ),
       );
-      const head = await gitText(repoRoot, [
-        "rev-parse",
-        "--verify",
-        "HEAD^{commit}",
-      ]);
+      const head = parseGitObjectId(
+        await gitOutput(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
+      );
       const branchResult = await git(repoRoot, [
         "symbolic-ref",
         "--quiet",
@@ -168,14 +254,14 @@ export class GitWorktreeManager {
         "HEAD",
       ]);
       const currentBranch =
-        branchResult.code === 0
-          ? branchResult.stdout.toString("utf8").trim()
-          : null;
-      const branchesText = await gitText(repoRoot, [
-        "for-each-ref",
-        "--format=%(refname:short)",
-        "refs/heads",
-      ]);
+        branchResult.code === 0 ? parseGitBranch(branchResult.stdout) : null;
+      const branches = parseGitBranchList(
+        await gitOutput(repoRoot, [
+          "for-each-ref",
+          "--format=%(refname:short)",
+          "refs/heads",
+        ]),
+      );
       const status = await git(repoRoot, [
         "status",
         "--porcelain=v2",
@@ -188,7 +274,7 @@ export class GitWorktreeManager {
         worktreeAvailable: true,
         unavailableReason: null,
         currentBranch,
-        branches: branchesText === "" ? [] : branchesText.split("\n"),
+        branches,
         headCommit: head,
         changes: {
           staged: files.filter(
@@ -199,7 +285,7 @@ export class GitWorktreeManager {
           renamed: files.filter((file) => file.kind === "renamed").length,
           untracked: files.filter((file) => file.kind === "untracked").length,
           files: files.map((file) => file.path),
-          token: stateToken(head, status.stdout),
+          token: await stateToken(repoRoot, head, status.stdout),
         },
       });
     } catch {
@@ -215,23 +301,44 @@ export class GitWorktreeManager {
     }
   }
 
+  /** Authorizes a parsed branch against this repository's local heads. */
+  public async authorizeBaseBranch(
+    projectRoot: string,
+    branch: GitBranch,
+  ): Promise<void> {
+    const repoRoot = await realpath(
+      parseGitPath(
+        await gitOutput(projectRoot, ["rev-parse", "--show-toplevel"]),
+      ),
+    );
+    const branches = parseGitBranchList(
+      await gitOutput(repoRoot, [
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "refs/heads",
+      ]),
+    );
+    if (!branches.includes(branch)) throw new Error("base_branch_unavailable");
+  }
+
   public async plan(input: {
     projectRoot: string;
     stateDirectory: string;
     projectId: ProjectId;
     worktreeId: string;
     title: string;
-    baseBranch: string;
+    baseBranch: GitBranch;
     expectedToken?: string;
     includeChanges: boolean;
   }): Promise<WorktreePlan> {
     const repoRoot = await realpath(
-      await gitText(input.projectRoot, ["rev-parse", "--show-toplevel"]),
+      parseGitPath(
+        await gitOutput(input.projectRoot, ["rev-parse", "--show-toplevel"]),
+      ),
     );
-    const commonRaw = await gitText(repoRoot, [
-      "rev-parse",
-      "--git-common-dir",
-    ]);
+    const commonRaw = parseGitPath(
+      await gitOutput(repoRoot, ["rev-parse", "--git-common-dir"]),
+    );
     const gitCommonDir = await realpath(
       isAbsolute(commonRaw) ? commonRaw : resolve(repoRoot, commonRaw),
     );
@@ -241,16 +348,25 @@ export class GitWorktreeManager {
     );
     if (projectSubpath.startsWith("..") || isAbsolute(projectSubpath))
       throw new Error("project_repository_mismatch");
-    const baseCommit = await gitText(repoRoot, [
-      "rev-parse",
-      "--verify",
-      `refs/heads/${input.baseBranch}^{commit}`,
-    ]);
-    const head = await gitText(repoRoot, [
-      "rev-parse",
-      "--verify",
-      "HEAD^{commit}",
-    ]);
+    const branches = parseGitBranchList(
+      await gitOutput(repoRoot, [
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "refs/heads",
+      ]),
+    );
+    if (!branches.includes(input.baseBranch))
+      throw new Error("base_branch_unavailable");
+    const baseCommit = parseGitObjectId(
+      await gitOutput(repoRoot, [
+        "rev-parse",
+        "--verify",
+        `refs/heads/${input.baseBranch}^{commit}`,
+      ]),
+    );
+    const head = parseGitObjectId(
+      await gitOutput(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    );
     const status = await git(repoRoot, [
       "status",
       "--porcelain=v2",
@@ -258,14 +374,16 @@ export class GitWorktreeManager {
       "--untracked-files=all",
     ]);
     if (status.code !== 0) throw new Error("git_status_failed");
-    const token = stateToken(head, status.stdout);
+    const token = await stateToken(repoRoot, head, status.stdout);
     if (input.includeChanges) {
-      const current = await gitText(repoRoot, [
-        "symbolic-ref",
-        "--quiet",
-        "--short",
-        "HEAD",
-      ]);
+      const current = parseGitBranch(
+        await gitOutput(repoRoot, [
+          "symbolic-ref",
+          "--quiet",
+          "--short",
+          "HEAD",
+        ]),
+      );
       if (
         current !== input.baseBranch ||
         baseCommit !== head ||
@@ -297,13 +415,161 @@ export class GitWorktreeManager {
       projectSubpath,
       baseBranch: input.baseBranch,
       baseCommit,
-      branchName: `pi/${leaf}`,
+      branchName: GitBranchSchema.parse(`pi/${leaf}`),
       worktreeRoot,
       executionRoot:
         projectSubpath === ""
           ? worktreeRoot
           : join(worktreeRoot, projectSubpath),
       sourceToken: token,
+    };
+  }
+
+  /** Rebuilds a provisioning plan from the immutable identity already stored. */
+  public async recoveryPlan(input: {
+    projectRoot: string;
+    stateDirectory: string;
+    projectId: ProjectId;
+    worktreeId: string;
+    title: string;
+    record: {
+      execution_root: string;
+      worktree_root: string;
+      git_common_dir: string;
+      project_subpath: string;
+      base_branch: GitBranch;
+      base_commit: string;
+      branch_name: GitBranch;
+      transfer_token: string | null;
+    };
+    expectedToken?: string;
+    includeChanges: boolean;
+  }): Promise<WorktreePlan> {
+    const repoRoot = await realpath(
+      parseGitPath(
+        await gitOutput(input.projectRoot, ["rev-parse", "--show-toplevel"]),
+      ),
+    );
+    const commonRaw = parseGitPath(
+      await gitOutput(repoRoot, ["rev-parse", "--git-common-dir"]),
+    );
+    const gitCommonDir = await realpath(
+      isAbsolute(commonRaw) ? commonRaw : resolve(repoRoot, commonRaw),
+    );
+    const projectSubpath = relative(
+      repoRoot,
+      await realpath(input.projectRoot),
+    );
+    if (projectSubpath.startsWith("..") || isAbsolute(projectSubpath))
+      throw new Error("project_repository_mismatch");
+    const slug = worktreeSlug(input.title);
+    const suffix = input.worktreeId.replaceAll("-", "").slice(0, 8);
+    const leaf = `${slug}-${suffix}`;
+    const canonicalStateDirectory = await realpath(input.stateDirectory);
+    const worktreeRoot = join(
+      canonicalStateDirectory,
+      "worktrees",
+      input.projectId,
+      leaf,
+    );
+    const executionRoot =
+      projectSubpath === "" ? worktreeRoot : join(worktreeRoot, projectSubpath);
+    const { record } = input;
+    if (
+      gitCommonDir !== record.git_common_dir ||
+      projectSubpath !== record.project_subpath ||
+      worktreeRoot !== record.worktree_root ||
+      executionRoot !== record.execution_root ||
+      `pi/${leaf}` !== record.branch_name
+    )
+      throw new Error("worktree_identity_failed");
+    if (input.includeChanges && record.transfer_token !== null) {
+      try {
+        if (
+          (await lstat(worktreeRoot)).isDirectory() &&
+          parseGitObjectId(
+            await gitOutput(worktreeRoot, ["rev-parse", "HEAD^{commit}"]),
+          ) === record.base_commit
+        ) {
+          const targetStatus = await git(worktreeRoot, [
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+          ]);
+          if (
+            targetStatus.code === 0 &&
+            (await stateToken(
+              worktreeRoot,
+              record.base_commit,
+              targetStatus.stdout,
+            )) === record.transfer_token
+          )
+            return {
+              repoRoot,
+              gitCommonDir,
+              projectSubpath,
+              baseBranch: record.base_branch,
+              baseCommit: record.base_commit,
+              branchName: record.branch_name,
+              worktreeRoot,
+              executionRoot,
+              sourceToken: record.transfer_token,
+            };
+        }
+      } catch {
+        // An absent or malformed target is unproven and must use normal recovery.
+      }
+    }
+    const head = parseGitObjectId(
+      await gitOutput(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    );
+    const status = await git(repoRoot, [
+      "status",
+      "--porcelain=v2",
+      "-z",
+      "--untracked-files=all",
+    ]);
+    if (status.code !== 0) throw new Error("git_status_failed");
+    const sourceToken = await stateToken(repoRoot, head, status.stdout);
+    if (
+      input.includeChanges &&
+      (input.expectedToken === undefined || input.expectedToken !== sourceToken)
+    )
+      throw new Error("source_changed");
+    if (input.includeChanges) {
+      const current = parseGitBranch(
+        await gitOutput(repoRoot, [
+          "symbolic-ref",
+          "--quiet",
+          "--short",
+          "HEAD",
+        ]),
+      );
+      if (
+        current !== input.record.base_branch ||
+        head !== input.record.base_commit
+      )
+        throw new Error("source_changed");
+    }
+    if (
+      input.includeChanges &&
+      (parsePorcelainV2(status.stdout).some(
+        (file) => file.kind === "conflicted",
+      ) ||
+        hasSubmoduleState(status.stdout))
+    )
+      throw new Error("source_changes_unsupported");
+    return {
+      repoRoot,
+      gitCommonDir,
+      projectSubpath,
+      baseBranch: record.base_branch,
+      baseCommit: record.base_commit,
+      branchName: record.branch_name,
+      worktreeRoot,
+      executionRoot,
+      sourceToken,
     };
   }
 
@@ -327,11 +593,37 @@ export class GitWorktreeManager {
         targetExists = false;
       }
       if (targetExists) {
-        if (
-          (await gitText(plan.worktreeRoot, ["rev-parse", "HEAD^{commit}"])) !==
-          plan.baseCommit
-        )
+        try {
+          const commonRaw = parseGitPath(
+            await gitOutput(plan.worktreeRoot, [
+              "rev-parse",
+              "--git-common-dir",
+            ]),
+          );
+          const commonDir = await realpath(
+            isAbsolute(commonRaw)
+              ? commonRaw
+              : resolve(plan.worktreeRoot, commonRaw),
+          );
+          const branch = parseGitBranch(
+            await gitOutput(plan.worktreeRoot, [
+              "symbolic-ref",
+              "--short",
+              "HEAD",
+            ]),
+          );
+          const head = parseGitObjectId(
+            await gitOutput(plan.worktreeRoot, ["rev-parse", "HEAD^{commit}"]),
+          );
+          if (
+            commonDir !== plan.gitCommonDir ||
+            branch !== plan.branchName ||
+            head !== plan.baseCommit
+          )
+            throw new Error("worktree_identity_failed");
+        } catch {
           throw new Error("worktree_identity_failed");
+        }
         const existingStatus = await git(plan.worktreeRoot, [
           "status",
           "--porcelain=v2",
@@ -343,8 +635,11 @@ export class GitWorktreeManager {
         if (!includeChanges && existingStatus.stdout.length === 0) return;
         if (
           includeChanges &&
-          stateToken(plan.baseCommit, existingStatus.stdout) ===
-            plan.sourceToken
+          (await stateToken(
+            plan.worktreeRoot,
+            plan.baseCommit,
+            existingStatus.stdout,
+          )) === plan.sourceToken
         )
           return;
         if (existingStatus.stdout.length !== 0)
@@ -360,11 +655,13 @@ export class GitWorktreeManager {
           "-z",
           "--untracked-files=all",
         ]);
-        const head = await gitText(plan.repoRoot, [
-          "rev-parse",
-          "HEAD^{commit}",
-        ]);
-        if (stateToken(head, before.stdout) !== plan.sourceToken)
+        const head = parseGitObjectId(
+          await gitOutput(plan.repoRoot, ["rev-parse", "HEAD^{commit}"]),
+        );
+        if (
+          (await stateToken(plan.repoRoot, head, before.stdout)) !==
+          plan.sourceToken
+        )
           throw new Error("source_changed");
         staged = (
           await git(plan.repoRoot, [
@@ -387,7 +684,10 @@ export class GitWorktreeManager {
           "-z",
           "--untracked-files=all",
         ]);
-        if (stateToken(head, after.stdout) !== plan.sourceToken)
+        if (
+          (await stateToken(plan.repoRoot, head, after.stdout)) !==
+          plan.sourceToken
+        )
           throw new Error("source_changed");
       }
       if (!targetExists) {
@@ -412,8 +712,9 @@ export class GitWorktreeManager {
         if (added.code !== 0) throw new Error("worktree_create_failed");
       }
       if (
-        (await gitText(plan.worktreeRoot, ["rev-parse", "HEAD^{commit}"])) !==
-        plan.baseCommit
+        parseGitObjectId(
+          await gitOutput(plan.worktreeRoot, ["rev-parse", "HEAD^{commit}"]),
+        ) !== plan.baseCommit
       )
         throw new Error("worktree_identity_failed");
       if (staged.length > 0) {
@@ -442,6 +743,23 @@ export class GitWorktreeManager {
         else if (info.isFile()) await copyFile(source, target);
         else throw new Error("source_changes_unsupported");
       }
+      if (includeChanges) {
+        const afterCopy = await git(plan.repoRoot, [
+          "status",
+          "--porcelain=v2",
+          "-z",
+          "--untracked-files=all",
+        ]);
+        const currentHead = parseGitObjectId(
+          await gitOutput(plan.repoRoot, ["rev-parse", "HEAD^{commit}"]),
+        );
+        if (
+          afterCopy.code !== 0 ||
+          (await stateToken(plan.repoRoot, currentHead, afterCopy.stdout)) !==
+            plan.sourceToken
+        )
+          throw new Error("source_changed");
+      }
       await realpath(plan.executionRoot);
       const finalStatus = await git(plan.worktreeRoot, [
         "status",
@@ -454,7 +772,11 @@ export class GitWorktreeManager {
         throw new Error("worktree_not_clean");
       if (
         includeChanges &&
-        stateToken(plan.baseCommit, finalStatus.stdout) !== plan.sourceToken
+        (await stateToken(
+          plan.worktreeRoot,
+          plan.baseCommit,
+          finalStatus.stdout,
+        )) !== plan.sourceToken
       )
         throw new Error("source_transfer_mismatch");
     } finally {

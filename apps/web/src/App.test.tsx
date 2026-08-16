@@ -64,6 +64,140 @@ describe("safe and accessible workspace rendering", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("discards malformed persisted composer drafts", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => 42,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    });
+    const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+    const snapshot: ThreadSnapshot = {
+      version: 1,
+      project: {
+        id: projectId,
+        displayName: "Example project",
+        displayPath: "/example",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        available: true,
+        gitAvailable: true,
+        sidebarExpanded: true,
+        unreadCount: 0,
+        lastOpenedThreadId: threadId,
+      },
+      thread: {
+        id: threadId,
+        projectId,
+        title: "Example thread",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:00.000Z",
+        runState: null,
+        unread: false,
+        runtimeAvailable: true,
+        workspace: { mode: "shared", branchName: null, available: true },
+      },
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Composer
+          projectId={projectId}
+          threadId={threadId}
+          snapshot={snapshot}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("");
+  });
+
+  it("uses bound storage methods for draft reads and writes", async () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem(
+        this: { values: Map<string, string> },
+        key: string,
+      ): string | null {
+        return this.values.get(key) ?? null;
+      },
+      setItem(
+        this: { values: Map<string, string> },
+        key: string,
+        value: string,
+      ): void {
+        this.values.set(key, value);
+      },
+      removeItem(this: { values: Map<string, string> }, key: string): void {
+        this.values.delete(key);
+      },
+      values,
+    };
+    vi.stubGlobal("localStorage", storage);
+    const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+    const snapshot = {
+      version: 1,
+      project: {
+        id: projectId,
+        displayName: "Example project",
+        displayPath: "/example",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        available: true,
+        gitAvailable: true,
+        sidebarExpanded: true,
+        unreadCount: 0,
+        lastOpenedThreadId: threadId,
+      },
+      thread: {
+        id: threadId,
+        projectId,
+        title: "Example thread",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:00.000Z",
+        runState: null,
+        unread: false,
+        runtimeAvailable: true,
+        workspace: { mode: "shared", branchName: null, available: true },
+      },
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot;
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Composer
+          projectId={projectId}
+          threadId={threadId}
+          snapshot={snapshot}
+        />
+      </QueryClientProvider>,
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Pi" }),
+      "Bound",
+    );
+    await waitFor(() => {
+      expect(values.get(`pi-draft:${threadId}`)).toBe("Bound");
+    });
+  });
+
   it("shows Codex-style worktree choices with a clean default and no environment control", async () => {
     const user = userEvent.setup();
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;

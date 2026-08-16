@@ -28,6 +28,7 @@ export interface RuntimeSessionDescriptor {
   modifiedAt: string;
   messageCount: number;
   preview: string;
+  creationId?: string;
 }
 
 export interface RuntimeSnapshot {
@@ -35,6 +36,9 @@ export interface RuntimeSnapshot {
   transcript: TranscriptItem[];
   diagnostics: string[];
 }
+
+export type TitleSuggestion =
+  { outcome: "available"; title: string } | { outcome: "unavailable" };
 
 export type RuntimeEvent =
   | { type: "transcript"; item: TranscriptItem }
@@ -65,10 +69,14 @@ export interface OpenRuntimeSession {
 }
 
 export interface AgentRuntime {
-  suggestTitle?(projectPath: string, prompt: string): Promise<string>;
+  suggestTitle?(projectPath: string, prompt: string): Promise<TitleSuggestion>;
   discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }>;
-  create(projectPath: string, title?: string): Promise<{ sessionId: string }>;
+  create(
+    projectPath: string,
+    title?: string,
+    creationId?: string,
+  ): Promise<{ sessionId: string }>;
   open(projectPath: string, sessionId: string): Promise<OpenRuntimeSession>;
 }

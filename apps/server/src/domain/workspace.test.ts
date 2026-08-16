@@ -189,6 +189,42 @@ function sessionFor(
 }
 
 describe("run coordination", () => {
+  it("replays the original start run after a later run exists", async () => {
+    const context = await fixture();
+    const key = "90000000-0000-4000-8000-000000000001";
+    const initial = await context.service.startThread(
+      context.project.id,
+      "Implement an idempotent start",
+      { mode: "shared" },
+      key,
+    );
+    const initialThread = context.store.getThread(
+      context.project.id,
+      initial.thread.id,
+    );
+    if (initialThread === null)
+      throw new Error("initial thread was not stored");
+    context.runtime.sessionById(initialThread.runtime_session_id).complete();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const later = await context.service.prompt(
+      context.project.id,
+      initial.thread.id,
+      "A later request",
+      "90000000-0000-4000-8000-000000000002",
+    );
+    const replay = await context.service.startThread(
+      context.project.id,
+      "Implement an idempotent start",
+      { mode: "shared" },
+      key,
+    );
+    expect(later.id).not.toBe(initial.run.id);
+    expect(replay.thread.id).toBe(initial.thread.id);
+    expect(replay.run.id).toBe(initial.run.id);
+    await context.service.close();
+    context.store.close();
+  });
+
   it("retains healthy list entries when persisted project or thread rows are corrupt", async () => {
     const context = await fixture();
     const healthyPath = join(context.projectPath, "healthy");

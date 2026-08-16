@@ -8,7 +8,6 @@ import type { RawData } from "ws";
 import {
   BrowseProjectRequestSchema,
   CommandRequestSchema,
-  CreateThreadRequestSchema,
   ImportThreadRequestSchema,
   LiveSubscribeSchema,
   ProjectIdSchema,
@@ -352,17 +351,6 @@ export async function buildServer(
     const params = projectParamsSchema.parse(request.params);
     return await workspace.discoverSessions(params.projectId);
   });
-  server.post("/api/projects/:projectId/threads", async (request) => {
-    const params = projectParamsSchema.parse(request.params);
-    const body = CreateThreadRequestSchema.parse(request.body);
-    return {
-      thread: await workspace.createThread(
-        params.projectId,
-        body.title,
-        body.idempotencyKey,
-      ),
-    };
-  });
   server.post("/api/projects/:projectId/threads/import", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     const body = ImportThreadRequestSchema.parse(request.body);
@@ -504,44 +492,6 @@ export async function buildServer(
     },
   );
 
-  server.get("/api/projects/:projectId/files", async (request) => {
-    const params = projectParamsSchema.parse(request.params);
-    const query = fileQuerySchema.parse(request.query);
-    const root = await workspace.requireProjectRoot(params.projectId);
-    if (query.path !== "") RelativePathSchema.parse(query.path);
-    const target =
-      query.path === ""
-        ? root
-        : (
-            await (
-              await import("./inspector/files.js")
-            ).resolveContained(root, query.path, true)
-          ).target;
-    return await listProjectFiles(target, query.search);
-  });
-  server.get("/api/projects/:projectId/file", async (request) => {
-    const params = projectParamsSchema.parse(request.params);
-    const query = z.object({ path: RelativePathSchema }).parse(request.query);
-    return await previewProjectFile(
-      await workspace.requireProjectRoot(params.projectId),
-      query.path,
-    );
-  });
-  server.get("/api/projects/:projectId/git/status", async (request) => {
-    const params = projectParamsSchema.parse(request.params);
-    return await getGitStatus(
-      await workspace.requireProjectRoot(params.projectId),
-    );
-  });
-  server.get("/api/projects/:projectId/git/diff", async (request) => {
-    const params = projectParamsSchema.parse(request.params);
-    const query = z.object({ path: RelativePathSchema }).parse(request.query);
-    return await getGitDiff(
-      await workspace.requireProjectRoot(params.projectId),
-      query.path,
-    );
-  });
-
   server.get("/api/live", { websocket: true }, (socket, request) => {
     try {
       requireSocketPolicy(request, server.workspaceContext);
@@ -587,17 +537,12 @@ export async function buildServer(
           if (Buffer.byteLength(text) > config.bodyLimit)
             throw new Error("frame_too_large");
           const frame = TerminalClientFrameSchema.parse(JSON.parse(text));
-          const context =
-            frame.threadId === undefined
-              ? null
-              : await workspace.threadExecutionContext(
-                  frame.projectId,
-                  frame.threadId,
-                );
-          const root =
-            context?.executionRoot ??
-            (await workspace.requireProjectRoot(frame.projectId));
-          const scopeId = context?.scopeId ?? frame.projectId;
+          const context = await workspace.threadExecutionContext(
+            frame.projectId,
+            frame.threadId,
+          );
+          const root = context.executionRoot;
+          const scopeId = context.scopeId;
           if (frame.type === "attach") {
             detach?.();
             detach = await terminals.attach(

@@ -26,6 +26,27 @@ export type SessionId = z.infer<typeof SessionIdSchema>;
 export type IdempotencyKey = z.infer<typeof IdempotencyKeySchema>;
 export type RunState = z.infer<typeof RunStateSchema>;
 
+/** A Git local branch name safe to use only after repository authorization. */
+export const GitBranchSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(
+    (value) =>
+      !value.startsWith("-") &&
+      !value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.endsWith(".") &&
+      !value.includes("..") &&
+      !value.includes("//") &&
+      !value.includes("@{") &&
+      value !== "@" &&
+      !/[\s~^:?*\\[\0]/.test(value),
+    "Invalid Git branch name.",
+  )
+  .brand<"GitBranch">();
+export type GitBranch = z.infer<typeof GitBranchSchema>;
+
 export const ApiErrorSchema = z.object({
   error: z.object({
     code: z.string().min(1).max(80),
@@ -57,8 +78,8 @@ export const ThreadWorkspaceSummarySchema = z
     }),
     z.object({
       mode: z.literal("worktree"),
-      branchName: z.string().min(1).max(255),
-      baseBranch: z.string().min(1).max(255),
+      branchName: GitBranchSchema,
+      baseBranch: GitBranchSchema,
       baseCommit: z.string().regex(/^[0-9a-f]{7,64}$/),
       available: z.boolean(),
     }),
@@ -186,7 +207,7 @@ export const ThreadWorkspaceRequestSchema = z.discriminatedUnion("mode", [
   z
     .object({
       mode: z.literal("worktree"),
-      baseBranch: z.string().min(1).max(255),
+      baseBranch: GitBranchSchema,
       sourceChanges: z.enum(["none", "tracked_and_untracked"]),
       sourceStateToken: z.string().min(16).max(128).optional(),
     })
@@ -378,13 +399,13 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("attach"),
     projectId: ProjectIdSchema,
-    threadId: ThreadIdSchema.optional(),
+    threadId: ThreadIdSchema,
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("input"),
     projectId: ProjectIdSchema,
-    threadId: ThreadIdSchema.optional(),
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
     data: z.string().max(65_536),
   }),
@@ -392,7 +413,7 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("resize"),
     projectId: ProjectIdSchema,
-    threadId: ThreadIdSchema.optional(),
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
     columns: z.number().int().min(2).max(500),
     rows: z.number().int().min(2).max(200),
@@ -401,14 +422,14 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     version: z.literal(1),
     type: z.literal("restart"),
     projectId: ProjectIdSchema,
-    threadId: ThreadIdSchema.optional(),
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
   }),
   z.object({
     version: z.literal(1),
     type: z.literal("terminate"),
     projectId: ProjectIdSchema,
-    threadId: ThreadIdSchema.optional(),
+    threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
   }),
 ]);

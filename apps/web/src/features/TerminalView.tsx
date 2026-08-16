@@ -16,7 +16,7 @@ export function TerminalView({
   threadId,
 }: {
   projectId: ProjectId;
-  threadId?: ThreadId;
+  threadId: ThreadId;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);

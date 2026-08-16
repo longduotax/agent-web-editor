@@ -3,7 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProjectIdSchema } from "@pi-web/contracts";
+import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
 
 const terminals = vi.hoisted(() => ({
   instances: [] as { lines: string[] }[],
@@ -52,6 +52,7 @@ vi.mock("@xterm/addon-fit", () => ({
 import { TerminalView } from "./TerminalView.js";
 
 const projectId = ProjectIdSchema.parse("10000000-0000-4000-8000-000000000001");
+const threadId = ThreadIdSchema.parse("30000000-0000-4000-8000-000000000001");
 const terminalId = "20000000-0000-4000-8000-000000000001" as const;
 
 class MockWebSocket extends EventTarget {
@@ -106,7 +107,7 @@ describe("TerminalView", () => {
         }
       },
     );
-    render(<TerminalView projectId={projectId} />);
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
     const socket = MockWebSocket.instances[0];
     if (socket === undefined) throw new Error("WebSocket was not created");
     act(() => {
@@ -119,6 +120,7 @@ describe("TerminalView", () => {
       version: 1,
       type: "terminate",
       projectId,
+      threadId,
       terminalId,
     });
 
@@ -137,6 +139,7 @@ describe("TerminalView", () => {
       version: 1,
       type: "attach",
       projectId,
+      threadId,
     });
   });
 });

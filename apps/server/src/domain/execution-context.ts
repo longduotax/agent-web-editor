@@ -10,6 +10,7 @@ import {
   type ThreadRecord,
   type WorktreeRecord,
 } from "../db/store.js";
+import { parseGitBranch, parseGitPath } from "../worktrees/manager.js";
 
 const exec = promisify(execFile);
 
@@ -62,9 +63,9 @@ export class ThreadExecutionContextResolver {
       const commonResult = await exec(
         "git",
         ["-C", worktree.worktree_root, "rev-parse", "--git-common-dir"],
-        { timeout: 10_000 },
+        { timeout: 10_000, encoding: "buffer" },
       );
-      const commonText = commonResult.stdout.trim();
+      const commonText = parseGitPath(commonResult.stdout);
       const common = await realpath(
         isAbsolute(commonText)
           ? commonText
@@ -73,11 +74,11 @@ export class ThreadExecutionContextResolver {
       const branchResult = await exec(
         "git",
         ["-C", worktree.worktree_root, "symbolic-ref", "--short", "HEAD"],
-        { timeout: 10_000 },
+        { timeout: 10_000, encoding: "buffer" },
       );
       if (
         common !== worktree.git_common_dir ||
-        branchResult.stdout.trim() !== worktree.branch_name
+        parseGitBranch(branchResult.stdout) !== worktree.branch_name
       )
         throw new Error("worktree_unavailable");
     } catch {

@@ -3,6 +3,29 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { z } from "zod";
 
+const namingModelTextSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/);
+
+export interface NamingModelSelector {
+  provider: string;
+  id: string;
+}
+
+export function parseNamingModelSelector(
+  value: string | undefined,
+): NamingModelSelector | null {
+  if (value === undefined) return null;
+  const parsed = namingModelTextSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error("PI_WEB_NAMING_MODEL must be provider/model");
+  const separator = parsed.data.indexOf("/");
+  return {
+    provider: parsed.data.slice(0, separator),
+    id: parsed.data.slice(separator + 1),
+  };
+}
+
 export interface ServerConfig {
   host: "127.0.0.1";
   port: number;
@@ -10,7 +33,7 @@ export interface ServerConfig {
   stateDirectory: string;
   bodyLimit: number;
   production: boolean;
-  namingModel: string | null;
+  namingModel: NamingModelSelector | null;
   allowedHosts: ReadonlySet<string>;
   allowedOrigins: ReadonlySet<string>;
 }
@@ -61,12 +84,7 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     options.allowTestPortZero === true,
   );
   const devPort = parsePort(environment.PI_WEB_DEV_PORT ?? "5173");
-  const namingModel = environment.PI_WEB_NAMING_MODEL ?? null;
-  if (
-    namingModel !== null &&
-    !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._:/-]+$/.test(namingModel)
-  )
-    throw new Error("PI_WEB_NAMING_MODEL must be provider/model");
+  const namingModel = parseNamingModelSelector(environment.PI_WEB_NAMING_MODEL);
   const configuredState = environment.PI_WEB_STATE_DIR;
   const stateDirectory =
     configuredState ?? join(homedir(), ".pi", "web-workspace");

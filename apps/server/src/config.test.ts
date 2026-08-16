@@ -92,7 +92,7 @@ describe("server configuration", () => {
           PI_WEB_NAMING_MODEL: "openai-codex/gpt-5.4-mini",
         },
       }).namingModel,
-    ).toBe("openai-codex/gpt-5.4-mini");
+    ).toEqual({ provider: "openai-codex", id: "gpt-5.4-mini" });
     expect(() =>
       parseConfig({
         argv: [],

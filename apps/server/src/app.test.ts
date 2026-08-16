@@ -11,6 +11,10 @@ import type {
 } from "@pi-web/agent-runtime";
 import {
   BrowseProjectResponseSchema,
+  FilePreviewResponseSchema,
+  FileTreeResponseSchema,
+  GitDiffResponseSchema,
+  GitStatusResponseSchema,
   ProjectsResponseSchema,
   StartThreadResponseSchema,
 } from "@pi-web/contracts";
@@ -19,6 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "./app.js";
 import type { DirectoryPicker } from "./directory-picker/native.js";
 import { parseConfig } from "./config.js";
+import { GitWorktreeManager } from "./worktrees/manager.js";
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -93,9 +98,12 @@ class PromptingRuntime implements AgentRuntime {
   public createCount = 0;
   public namingCount = 0;
 
-  public suggestTitle(): Promise<string> {
+  public suggestTitle(): Promise<{ outcome: "available"; title: string }> {
     this.namingCount += 1;
-    return Promise.resolve("Implement thread workspaces");
+    return Promise.resolve({
+      outcome: "available",
+      title: "Implement thread workspaces",
+    });
   }
 
   public discover(): Promise<{
@@ -225,6 +233,270 @@ describe("credential-free project API", () => {
     expect(runtime.createdPath).not.toBe(paths.project);
     expect(runtime.openedPath).toBe(runtime.createdPath);
     expect(runtime.createdTitle).toBe("Implement thread workspaces");
+    await server.close();
+  });
+
+  it("recovers a failed isolated provisioning retry only after proving its stored identity", async () => {
+    const paths = await directories();
+    await exec("git", ["init", "-b", "main"], { cwd: paths.project });
+    await exec("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: paths.project,
+    });
+    await exec("git", ["config", "user.name", "Test"], {
+      cwd: paths.project,
+    });
+    await writeFile(join(paths.project, "tracked.txt"), "committed\n");
+    await exec("git", ["add", "."], { cwd: paths.project });
+    await exec("git", ["commit", "-m", "initial"], { cwd: paths.project });
+    const provision = vi
+      .spyOn(GitWorktreeManager.prototype, "provision")
+      .mockRejectedValueOnce(new Error("provision_failed"));
+    const runtime = new PromptingRuntime();
+    const server = await buildServer({
+      config: parseConfig({
+        argv: [],
+        environment: { PI_WEB_STATE_DIR: paths.state },
+      }),
+      runtime,
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const payload = {
+      prompt: "Recover an isolated worktree",
+      workspace: {
+        mode: "worktree" as const,
+        baseBranch: "main",
+        sourceChanges: "none" as const,
+      },
+      idempotencyKey: "00000000-0000-4000-8000-000000000016",
+    };
+    const first = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload,
+    });
+    expect(first.statusCode).toBe(500);
+    const creation = server.workspaceContext.store.getThreadCreation(
+      project.id,
+      payload.idempotencyKey,
+    );
+    if (creation?.worktree_id === undefined || creation.worktree_id === null)
+      throw new Error("failed worktree creation was not stored");
+    expect(creation.state).toBe("failed");
+    expect(
+      server.workspaceContext.store.getWorktree(creation.worktree_id)?.state,
+    ).toBe("failed");
+    expect(runtime.createCount).toBe(0);
+
+    const retry = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload,
+    });
+    expect(retry.statusCode).toBe(200);
+    const parsed = StartThreadResponseSchema.parse(retry.json());
+    const recovered = server.workspaceContext.store.getThreadCreation(
+      project.id,
+      payload.idempotencyKey,
+    );
+    expect(recovered?.state).toBe("prompt_accepted");
+    expect(parsed.thread.id).toBe(recovered?.thread_id);
+    expect(runtime.createCount).toBe(1);
+    expect(provision).toHaveBeenCalledTimes(2);
+    await server.close();
+    provision.mockRestore();
+  });
+
+  it("retains a failed isolated creation when recovery proof fails", async () => {
+    const paths = await directories();
+    await exec("git", ["init", "-b", "main"], { cwd: paths.project });
+    await exec("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: paths.project,
+    });
+    await exec("git", ["config", "user.name", "Test"], {
+      cwd: paths.project,
+    });
+    await writeFile(join(paths.project, "tracked.txt"), "committed\n");
+    await exec("git", ["add", "."], { cwd: paths.project });
+    await exec("git", ["commit", "-m", "initial"], { cwd: paths.project });
+    const provision = vi
+      .spyOn(GitWorktreeManager.prototype, "provision")
+      .mockRejectedValueOnce(new Error("provision_failed"));
+    const runtime = new PromptingRuntime();
+    const server = await buildServer({
+      config: parseConfig({
+        argv: [],
+        environment: { PI_WEB_STATE_DIR: paths.state },
+      }),
+      runtime,
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const payload = {
+      prompt: "Reject unproven recovery",
+      workspace: {
+        mode: "worktree" as const,
+        baseBranch: "main",
+        sourceChanges: "none" as const,
+      },
+      idempotencyKey: "00000000-0000-4000-8000-000000000017",
+    };
+    await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload,
+    });
+    const recoveryPlan = vi
+      .spyOn(GitWorktreeManager.prototype, "recoveryPlan")
+      .mockRejectedValueOnce(new Error("worktree_identity_failed"));
+    const retry = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload,
+    });
+    expect(retry.statusCode).toBe(409);
+    expect(
+      server.workspaceContext.store.getThreadCreation(
+        project.id,
+        payload.idempotencyKey,
+      )?.state,
+    ).toBe("failed");
+    expect(runtime.createCount).toBe(0);
+    await server.close();
+    recoveryPlan.mockRestore();
+    provision.mockRestore();
+  });
+
+  it("requires a thread and scopes inspector endpoints to its worktree", async () => {
+    const paths = await directories();
+    await exec("git", ["init", "-b", "main"], { cwd: paths.project });
+    await exec("git", ["config", "user.email", "test@example.invalid"], {
+      cwd: paths.project,
+    });
+    await exec("git", ["config", "user.name", "Test"], {
+      cwd: paths.project,
+    });
+    await writeFile(join(paths.project, "tracked.txt"), "committed\n");
+    await exec("git", ["add", "."], { cwd: paths.project });
+    await exec("git", ["commit", "-m", "initial"], { cwd: paths.project });
+    await writeFile(join(paths.project, "tracked.txt"), "source only\n");
+    await writeFile(join(paths.project, "source-only.txt"), "source only\n");
+
+    const runtime = new PromptingRuntime();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({ config, runtime, logger: false });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const start = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Inspect an isolated worktree",
+        workspace: {
+          mode: "worktree",
+          baseBranch: "main",
+          sourceChanges: "none",
+        },
+        idempotencyKey: "00000000-0000-4000-8000-000000000012",
+      },
+    });
+    const thread = StartThreadResponseSchema.parse(start.json()).thread;
+
+    const files = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/files?search=source-only`,
+      headers: { host },
+    });
+    expect(files.statusCode).toBe(200);
+    expect(FileTreeResponseSchema.parse(files.json()).entries).toEqual([]);
+
+    const file = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/file?path=tracked.txt`,
+      headers: { host },
+    });
+    expect(file.statusCode).toBe(200);
+    expect(FilePreviewResponseSchema.parse(file.json()).content).toBe(
+      "committed\n",
+    );
+
+    const status = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/git/status`,
+      headers: { host },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(GitStatusResponseSchema.parse(status.json()).files).toEqual([]);
+
+    if (runtime.createdPath === null)
+      throw new Error("worktree was not created");
+    await writeFile(join(runtime.createdPath, "tracked.txt"), "thread only\n");
+    const diff = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/git/diff?path=tracked.txt`,
+      headers: { host },
+    });
+    expect(diff.statusCode).toBe(200);
+    expect(GitDiffResponseSchema.parse(diff.json()).unstaged).toContain(
+      "+thread only",
+    );
+
+    for (const url of [
+      `/api/projects/${project.id}/files`,
+      `/api/projects/${project.id}/file?path=tracked.txt`,
+      `/api/projects/${project.id}/git/status`,
+      `/api/projects/${project.id}/git/diff?path=tracked.txt`,
+    ]) {
+      const response = await server.inject({
+        method: "GET",
+        url,
+        headers: { host },
+      });
+      expect(response.statusCode).toBe(404);
+    }
+    await server.close();
+  });
+
+  it("does not expose the legacy empty-thread creation route", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: { idempotencyKey: "00000000-0000-4000-8000-000000000099" },
+    });
+
+    expect(response.statusCode).toBe(404);
     await server.close();
   });
 

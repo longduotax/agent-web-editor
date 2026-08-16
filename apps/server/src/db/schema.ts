@@ -70,6 +70,7 @@ export const threads = sqliteTable(
     lastActivityAt: text("last_activity_at").notNull(),
     lastCompletedRunId: text("last_completed_run_id"),
     lastViewedCompletedRunId: text("last_viewed_completed_run_id"),
+    archivedAt: text("archived_at"),
     worktreeId: text("worktree_id").references(() => worktrees.id),
   },
   (table) => [
@@ -80,6 +81,11 @@ export const threads = sqliteTable(
     uniqueIndex("threads_id_project_unique").on(table.id, table.projectId),
     index("threads_project_activity_idx").on(
       table.projectId,
+      table.lastActivityAt,
+    ),
+    index("threads_project_archive_activity_idx").on(
+      table.projectId,
+      table.archivedAt,
       table.lastActivityAt,
     ),
     uniqueIndex("threads_worktree_unique").on(table.worktreeId),

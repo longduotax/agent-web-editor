@@ -71,9 +71,9 @@ Opaque application IDs are server-generated UUIDv4 strings. Times are UTC ISO-86
 
 No approval table or speculative reviewer-agent schema is added. A future approved automatic-review feature uses forward migrations and explicit new contracts.
 
-## Schema v3: thread workspaces
+## Schema v4: thread workspaces
 
-Migration v3 adds `worktrees`, durable `thread_creation_operations`, and nullable
+Migration v4 adds `worktrees`, durable `thread_creation_operations`, and nullable
 `threads.worktree_id`. Null preserves every existing/imported thread as a shared
 checkout. Worktree rows retain private execution/common-directory paths, base
 commit/branch, generated branch, lifecycle, and scoped failure metadata.
@@ -94,6 +94,7 @@ itself performs no Git or model operation.
 ## Migrations and backups
 
 - Schema v1 used a partial running-run index on `project_id`. Migration v2 preserves all records while replacing it with the `thread_id` partial index.
+- Migration v3 adds nullable `threads.archived_at` and its archive-aware index.
 - Migration SQL and Drizzle's migration journal are committed and versioned.
 - Before applying pending migrations to a non-empty database, use SQLite's backup API to create a timestamped sibling backup.
 - Migration application is transactional where SQLite permits. Failure leaves the prior database authoritative.

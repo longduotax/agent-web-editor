@@ -128,13 +128,6 @@ export async function startThread(
     },
   );
 }
-export async function createThread(projectId: ProjectId) {
-  return await request(
-    `/api/projects/${projectId}/threads`,
-    ThreadMutationResponseSchema,
-    { method: "POST", body: body({ idempotencyKey: commandId() }) },
-  );
-}
 export async function renameThread(
   projectId: ProjectId,
   threadId: ThreadId,

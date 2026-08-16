@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import type {
   AgentRuntime,
   OpenRuntimeSession,
+  TitleSuggestion,
   PromptAcceptance,
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
@@ -116,14 +117,6 @@ function fallbackTitle(prompt: string): string {
   const value = words.join(" ").slice(0, 60).trim();
   if (value === "") return "New coding task";
   return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
-}
-
-function parseGeneratedTitle(value: unknown, prompt: string): string {
-  if (typeof value !== "string") return fallbackTitle(prompt);
-  const title = value.replace(/\s+/g, " ").trim();
-  if (title === "" || title.length > 60 || title.includes("\n"))
-    return fallbackTitle(prompt);
-  return title;
 }
 
 export class WorkspaceService {
@@ -251,6 +244,15 @@ export class WorkspaceService {
       StartThreadResponseSchema,
       async () => {
         const projectRoot = await this.requireProjectRoot(projectId);
+        const existingCreation = this.store.getThreadCreation(
+          projectId,
+          idempotencyKey,
+        );
+        if (existingCreation === null && workspace.mode === "worktree")
+          await this.worktreeManager.authorizeBaseBranch(
+            projectRoot,
+            workspace.baseBranch,
+          );
         let creation = this.store.beginThreadCreation({
           projectId,
           idempotencyKey,
@@ -261,16 +263,28 @@ export class WorkspaceService {
           sourceChanges:
             workspace.mode === "worktree" ? workspace.sourceChanges : null,
         });
-        if (creation.state === "failed")
+        const recoverFailedWorktree =
+          creation.state === "failed" &&
+          creation.workspace_mode === "worktree" &&
+          creation.worktree_id !== null &&
+          creation.runtime_session_id === null &&
+          creation.thread_id === null &&
+          creation.run_id === null;
+        if (creation.state === "failed" && !recoverFailedWorktree)
           throw new Error(creation.failure_code ?? "thread_creation_failed");
         if (creation.title === null || creation.slug === null) {
-          let suggested: string | undefined;
+          let suggested: TitleSuggestion = { outcome: "unavailable" };
           try {
-            suggested = await this.runtime.suggestTitle?.(projectRoot, prompt);
+            suggested =
+              (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
+              suggested;
           } catch {
-            suggested = undefined;
+            // Naming is optional; use the deterministic product fallback.
           }
-          const title = parseGeneratedTitle(suggested, prompt);
+          const title =
+            suggested.outcome === "available"
+              ? suggested.title
+              : fallbackTitle(prompt);
           creation = this.store.nameThreadCreation(
             projectId,
             idempotencyKey,
@@ -284,23 +298,38 @@ export class WorkspaceService {
           let worktree =
             worktreeId === null ? null : this.store.getWorktree(worktreeId);
           if (worktree?.state !== "ready") {
-            const plan = await this.worktreeManager.plan({
-              projectRoot,
-              stateDirectory: this.store.stateDirectory,
-              projectId,
-              worktreeId: creation.id,
-              title: creation.title ?? fallbackTitle(prompt),
-              baseBranch: workspace.baseBranch,
-              ...(workspace.sourceStateToken === undefined
-                ? {}
-                : { expectedToken: workspace.sourceStateToken }),
-              includeChanges:
-                workspace.sourceChanges === "tracked_and_untracked",
-            });
+            const plan =
+              worktree === null
+                ? await this.worktreeManager.plan({
+                    projectRoot,
+                    stateDirectory: this.store.stateDirectory,
+                    projectId,
+                    worktreeId: creation.id,
+                    title: creation.title ?? fallbackTitle(prompt),
+                    baseBranch: workspace.baseBranch,
+                    ...(workspace.sourceStateToken === undefined
+                      ? {}
+                      : { expectedToken: workspace.sourceStateToken }),
+                    includeChanges:
+                      workspace.sourceChanges === "tracked_and_untracked",
+                  })
+                : await this.worktreeManager.recoveryPlan({
+                    projectRoot,
+                    stateDirectory: this.store.stateDirectory,
+                    projectId,
+                    worktreeId: creation.id,
+                    title: creation.title ?? fallbackTitle(prompt),
+                    record: worktree,
+                    ...(workspace.sourceStateToken === undefined
+                      ? {}
+                      : { expectedToken: workspace.sourceStateToken }),
+                    includeChanges:
+                      creation.source_changes === "tracked_and_untracked",
+                  });
             if (worktree === null) {
-              worktree = this.store.reserveWorktree({
-                id: creation.id,
+              const reserved = this.store.reserveCreationWorktree({
                 projectId,
+                idempotencyKey,
                 executionRoot: plan.executionRoot,
                 worktreeRoot: plan.worktreeRoot,
                 gitCommonDir: plan.gitCommonDir,
@@ -308,13 +337,14 @@ export class WorkspaceService {
                 baseBranch: plan.baseBranch,
                 baseCommit: plan.baseCommit,
                 branchName: plan.branchName,
+                transferToken:
+                  workspace.sourceChanges === "tracked_and_untracked"
+                    ? plan.sourceToken
+                    : null,
               });
+              worktree = reserved.worktree;
               worktreeId = worktree.id;
-              creation = this.store.attachCreationWorktree(
-                projectId,
-                idempotencyKey,
-                worktree.id,
-              );
+              creation = reserved.creation;
             } else if (
               worktree.execution_root !== plan.executionRoot ||
               worktree.worktree_root !== plan.worktreeRoot ||
@@ -323,6 +353,14 @@ export class WorkspaceService {
               worktree.branch_name !== plan.branchName
             ) {
               throw new Error("worktree_identity_failed");
+            }
+            if (recoverFailedWorktree) {
+              const resumed = this.store.resumeFailedCreationWorktree(
+                projectId,
+                idempotencyKey,
+              );
+              creation = resumed.creation;
+              worktree = resumed.worktree;
             }
             if (worktree.state === "provisioning") {
               try {
@@ -353,9 +391,14 @@ export class WorkspaceService {
           executionRoot = worktree.execution_root;
         }
         if (creation.runtime_session_id === null) {
+          creation = this.store.reserveCreationSession(
+            projectId,
+            idempotencyKey,
+          );
           const session = await this.runtime.create(
             executionRoot,
             creation.title ?? fallbackTitle(prompt),
+            creation.session_creation_id ?? undefined,
           );
           creation = this.store.attachCreationSession(
             projectId,
@@ -368,20 +411,18 @@ export class WorkspaceService {
             ? null
             : this.store.getThread(projectId, creation.thread_id);
         if (thread === null) {
-          thread = this.store.createThread(
+          thread = this.store.createThreadForCreation(
             projectId,
+            idempotencyKey,
             creation.runtime_session_id ?? "",
             creation.title ?? fallbackTitle(prompt),
             worktreeId,
           );
-          creation = this.store.attachCreationThread(
-            projectId,
-            idempotencyKey,
-            thread.id,
-          );
+          creation =
+            this.store.getThreadCreation(projectId, idempotencyKey) ?? creation;
         }
         let run =
-          creation.run_id === null ? null : this.store.latestRun(thread.id);
+          creation.run_id === null ? null : this.store.getRun(creation.run_id);
         if (run?.id !== creation.run_id) {
           const started = await this.prompt(
             projectId,
@@ -390,7 +431,7 @@ export class WorkspaceService {
             creation.prompt_command_id,
           );
           this.store.attachCreationRun(projectId, idempotencyKey, started.id);
-          run = this.store.latestRun(thread.id);
+          run = this.store.getRun(started.id);
         }
         if (run === null) throw new Error("run_not_found");
         return StartThreadResponseSchema.parse({
@@ -793,7 +834,7 @@ export class WorkspaceService {
     );
     const imported = new Set(
       this.store
-        .listThreads(projectId)
+        .listThreads(projectId, { includeArchived: true })
         .map((thread) => thread.runtime_session_id),
     );
     return {

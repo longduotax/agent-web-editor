@@ -51,6 +51,66 @@ import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
 
+interface DraftStorage {
+  getItem(key: string): unknown;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+function storageMethods(value: object): DraftStorage | null {
+  if (
+    !("getItem" in value) ||
+    !("setItem" in value) ||
+    !("removeItem" in value)
+  )
+    return null;
+  const { getItem, setItem, removeItem } = value;
+  if (
+    typeof getItem !== "function" ||
+    typeof setItem !== "function" ||
+    typeof removeItem !== "function"
+  )
+    return null;
+  return {
+    getItem: getItem.bind(value) as (key: string) => unknown,
+    setItem: setItem.bind(value) as (key: string, stored: string) => void,
+    removeItem: removeItem.bind(value) as (key: string) => void,
+  };
+}
+
+function draftStorage(): DraftStorage | null {
+  const storage: unknown = globalThis.localStorage;
+  return typeof storage === "object" && storage !== null
+    ? storageMethods(storage)
+    : null;
+}
+
+function readDraft(key: string): string {
+  try {
+    const value = draftStorage()?.getItem(key);
+    return typeof value === "string" ? value : "";
+  } catch {
+    // Browser storage can be disabled or replaced by an incomplete test shim.
+  }
+  return "";
+}
+
+function writeDraft(key: string, value: string): void {
+  try {
+    draftStorage()?.setItem(key, value);
+  } catch {
+    // Draft persistence is best-effort.
+  }
+}
+
+function removeDraft(key: string): void {
+  try {
+    draftStorage()?.removeItem(key);
+  } catch {
+    // Draft persistence is best-effort.
+  }
+}
+
 function ErrorNotice({ error }: { error: unknown }) {
   const message =
     error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -509,9 +569,7 @@ export function Composer({
   snapshot: ThreadSnapshot;
 }) {
   const queryClient = useQueryClient();
-  const [text, setText] = useState(
-    () => localStorage.getItem(`pi-draft:${threadId}`) ?? "",
-  );
+  const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
   const active = snapshot.currentRun?.state === "running";
   const mutation = useMutation({
     mutationFn: async () =>
@@ -520,7 +578,7 @@ export function Composer({
         : await prompt(projectId, threadId, text),
     onSuccess: async () => {
       setText("");
-      localStorage.removeItem(`pi-draft:${threadId}`);
+      removeDraft(`pi-draft:${threadId}`);
       await queryClient.invalidateQueries({
         queryKey: ["snapshot", projectId, threadId],
       });
@@ -528,7 +586,7 @@ export function Composer({
     },
   });
   useEffect(() => {
-    localStorage.setItem(`pi-draft:${threadId}`, text);
+    writeDraft(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
@@ -601,23 +659,28 @@ function Inspector({
   const [tab, setTab] = useState<"changes" | "files" | "terminal">("changes");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  useEffect(() => {
+    setSelectedPath(null);
+    setSearch("");
+    setTab("changes");
+  }, [threadId]);
   const status = useQuery({
-    queryKey: ["git", project.id],
+    queryKey: ["git", project.id, threadId],
     queryFn: () => getStatus(project.id, threadId),
     enabled: tab === "changes",
   });
   const files = useQuery({
-    queryKey: ["files", project.id, search],
+    queryKey: ["files", project.id, threadId, search],
     queryFn: () => getFiles(project.id, threadId, search),
     enabled: tab === "files",
   });
   const preview = useQuery({
-    queryKey: ["file", project.id, selectedPath],
+    queryKey: ["file", project.id, threadId, selectedPath],
     queryFn: () => getFile(project.id, threadId, selectedPath ?? ""),
     enabled: tab === "files" && selectedPath !== null,
   });
   const diff = useQuery({
-    queryKey: ["diff", project.id, selectedPath],
+    queryKey: ["diff", project.id, threadId, selectedPath],
     queryFn: () => getDiff(project.id, threadId, selectedPath ?? ""),
     enabled: tab === "changes" && selectedPath !== null,
   });
@@ -779,9 +842,7 @@ function NewChatRoute() {
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
   const [text, setText] = useState(() =>
-    projectId === undefined
-      ? ""
-      : (localStorage.getItem(`pi-new-draft:${projectId}`) ?? ""),
+    projectId === undefined ? "" : readDraft(`pi-new-draft:${projectId}`),
   );
   useEffect(() => {
     setMode("worktree");
@@ -789,9 +850,7 @@ function NewChatRoute() {
     setBaseBranch("");
     setCreationKey(commandId());
     setText(
-      projectId === undefined
-        ? ""
-        : (localStorage.getItem(`pi-new-draft:${projectId}`) ?? ""),
+      projectId === undefined ? "" : readDraft(`pi-new-draft:${projectId}`),
     );
   }, [projectId]);
   useEffect(() => {
@@ -799,8 +858,7 @@ function NewChatRoute() {
       setBaseBranch(preflight.data?.currentBranch ?? "");
   }, [baseBranch, preflight.data?.currentBranch]);
   useEffect(() => {
-    if (projectId !== undefined)
-      localStorage.setItem(`pi-new-draft:${projectId}`, text);
+    if (projectId !== undefined) writeDraft(`pi-new-draft:${projectId}`, text);
   }, [projectId, text]);
   const create = useMutation({
     mutationFn: async () => {
@@ -824,8 +882,7 @@ function NewChatRoute() {
       );
     },
     onSuccess: async (result) => {
-      if (projectId !== undefined)
-        localStorage.removeItem(`pi-new-draft:${projectId}`);
+      if (projectId !== undefined) removeDraft(`pi-new-draft:${projectId}`);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       void navigate(
         `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
