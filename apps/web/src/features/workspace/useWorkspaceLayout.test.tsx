@@ -97,4 +97,51 @@ describe("useWorkspaceLayout", () => {
       expect(b).toBeCloseTo(0.8);
     }
   });
+
+  it("collapse(paneId) docks that specific pane, not the focused one", () => {
+    stubStorage();
+    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
+    const originalPaneId = result.current.layout.focusedPaneId;
+    expect(originalPaneId).not.toBeNull();
+
+    act(() => {
+      result.current.dispatch({ type: "split", axis: "row" });
+    });
+    // The split focuses the newly created pane; the original pane is now
+    // unfocused but still tiled.
+    const newPaneId = result.current.layout.focusedPaneId;
+    expect(newPaneId).not.toBe(originalPaneId);
+    expect(tiledPaneIds(result.current.layout)).toContain(originalPaneId);
+
+    act(() => {
+      if (originalPaneId !== null) result.current.collapse(originalPaneId);
+    });
+
+    expect(result.current.layout.docked).toContain(originalPaneId);
+    expect(tiledPaneIds(result.current.layout)).not.toContain(originalPaneId);
+    // The focused pane is untouched by targeting a different pane.
+    expect(tiledPaneIds(result.current.layout)).toContain(newPaneId);
+  });
+
+  it("close(paneId) removes that specific pane, not the focused one", () => {
+    stubStorage();
+    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
+    const originalPaneId = result.current.layout.focusedPaneId;
+    expect(originalPaneId).not.toBeNull();
+
+    act(() => {
+      result.current.dispatch({ type: "split", axis: "row" });
+    });
+    const newPaneId = result.current.layout.focusedPaneId;
+    expect(newPaneId).not.toBe(originalPaneId);
+
+    act(() => {
+      if (originalPaneId !== null) result.current.close(originalPaneId);
+    });
+
+    expect(tiledPaneIds(result.current.layout)).not.toContain(originalPaneId);
+    if (originalPaneId !== null)
+      expect(result.current.layout.panes[originalPaneId]).toBeUndefined();
+    expect(tiledPaneIds(result.current.layout)).toContain(newPaneId);
+  });
 });

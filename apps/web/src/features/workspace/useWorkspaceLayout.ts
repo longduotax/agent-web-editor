@@ -24,6 +24,8 @@ export interface WorkspaceLayoutController {
   restore(paneId: PaneId): void;
   bind(paneId: PaneId): void;
   resize(paneId: PaneId, sizes: [number, number]): void;
+  collapse(paneId: PaneId): void;
+  close(paneId: PaneId): void;
 }
 
 // Module-level (stable across renders) so every pane id is globally unique
@@ -115,6 +117,14 @@ export function useWorkspaceLayout(
     setLayout((current) => setPaneParentSizes(current, paneId, sizes));
   }, []);
 
+  const collapse = useCallback((paneId: PaneId) => {
+    setLayout((current) => collapsePane(current, paneId));
+  }, []);
+
+  const close = useCallback((paneId: PaneId) => {
+    setLayout((current) => closePane(current, paneId));
+  }, []);
+
   return {
     layout,
     dispatch,
@@ -123,5 +133,7 @@ export function useWorkspaceLayout(
     restore,
     bind,
     resize,
+    collapse,
+    close,
   };
 }
