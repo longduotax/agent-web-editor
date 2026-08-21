@@ -6,7 +6,7 @@
 
 **Last verified:** 2026-08-21
 
-**Related documents:** [Architecture overview](../../architecture/overview.md), [Web workspace composition](../../design/web-workspace-composition.md), [Runtime and Pi adapter](../../design/runtime-and-pi-adapter.md), [Inspector and terminal](../../design/inspector-and-terminal.md)
+**Related documents:** [Architecture overview](../architecture/overview.md), [Web workspace composition](web-workspace-composition.md), [Runtime and Pi adapter](runtime-and-pi-adapter.md), [Inspector and terminal](inspector-and-terminal.md)
 
 ## Purpose
 
@@ -145,7 +145,7 @@ right panel and future tooling can show where a worktree came from.
 ## 4. Three agent backends
 
 Codex and Claude join Pi as sibling implementations of the existing
-[`AgentRuntime`](../../../packages/agent-runtime/src/index.ts) interface, in new
+[`AgentRuntime`](../../packages/agent-runtime/src/index.ts) interface, in new
 packages `packages/codex-adapter` and `packages/claude-adapter`. The server
 selects the adapter per thread; the browser never learns backend internals.
 
@@ -155,7 +155,7 @@ Each adapter must satisfy the same obligations the Pi adapter meets today:
   root, returning `RuntimeSessionDescriptor`s and opening an
   `OpenRuntimeSession`.
 - **Live streaming** that maps the backend's native event stream onto the shared
-  `RuntimeEvent` and [`TranscriptItem`](../../../packages/contracts/src/index.ts)
+  `RuntimeEvent` and [`TranscriptItem`](../../packages/contracts/src/index.ts)
   contracts, so the browser renders all three backends through one transcript
   model.
 - **Prompt, steer, stop, recover** with the same acceptance/settlement and

@@ -22,3 +22,7 @@ The approved initial-workspace designs are:
 - [Web workspace composition](web-workspace-composition.md) — routes, browser
   state ownership, safe rendering, responsive layout, accessibility, and test
   stack.
+- [Multi-agent tiling workspace](multi-agent-tiling-workspace.md) — _Draft._
+  Tiling pane surface for all runs, Codex/Claude backends beside Pi, fork-of-
+  running-chat worktree lineage, a bound git-and-terminal right panel, and a
+  full light theme with efficiency tiers for many concurrent live runs.

@@ -10,7 +10,7 @@
 
 **Affected paths or contracts:** `apps/web/src/features/workspace/**`, `apps/web/src/App.tsx`, `apps/web/src/main.tsx`, `apps/web/src/styles.css`, `apps/web/src/api/client.ts` (consume only), focused Vitest and Playwright tests, and current web component documentation
 
-**Governing specification:** [Multi-agent tiling workspace design](../../superpowers/specs/2026-08-21-multi-agent-tiling-workspace-design.md)
+**Governing specification:** [Multi-agent tiling workspace design](../../design/multi-agent-tiling-workspace.md)
 
 **Related documents or issue:** [Web workspace composition](../../design/web-workspace-composition.md), [Architecture overview](../../architecture/overview.md), [Thread workspaces](../../product-specs/thread-workspaces.md)
 
@@ -26,7 +26,7 @@
 
 **Tech Stack:** TypeScript, React 19, React Router, TanStack Query, Zod (`@pi-web/contracts`), Vitest + React Testing Library + `@testing-library/user-event` + axe-core, Playwright.
 
-**Spec:** [Multi-agent tiling workspace design](../../superpowers/specs/2026-08-21-multi-agent-tiling-workspace-design.md) — this plan implements Sections 1, 2, and the layout portions of 7; agent backends (§4), worktree forking (§3.3), the right panel/git-log (§5), theming (§6), and the server status projection (§7) are later phases.
+**Spec:** [Multi-agent tiling workspace design](../../design/multi-agent-tiling-workspace.md) — this plan implements Sections 1, 2, and the layout portions of 7; agent backends (§4), worktree forking (§3.3), the right panel/git-log (§5), theming (§6), and the server status projection (§7) are later phases.
 
 ## Global Constraints
 
