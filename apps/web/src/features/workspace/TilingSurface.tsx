@@ -118,8 +118,9 @@ function PaneRegion({
           onClose={() => {
             onClosePane(paneId, threadId);
           }}
-          onBind={() => {
-            controller.bind(paneId);
+          onSplit={() => {
+            controller.focus(paneId);
+            controller.dispatch({ type: "split", axis: "row" });
           }}
         />
       ) : (
@@ -131,6 +132,10 @@ function PaneRegion({
           }}
           onClose={() => {
             onClosePane(paneId, null);
+          }}
+          onSplit={() => {
+            controller.focus(paneId);
+            controller.dispatch({ type: "split", axis: "row" });
           }}
           onThreadStarted={(newThreadId) => {
             onThreadStarted(paneId, newThreadId);

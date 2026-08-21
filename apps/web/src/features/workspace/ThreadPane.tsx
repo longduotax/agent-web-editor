@@ -22,6 +22,8 @@ import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
 import { Status } from "../../components/Status.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
+import { PaneHeader } from "./PaneHeader.js";
+import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
 
 export interface ThreadPaneProps {
   projectId: ProjectId;
@@ -29,7 +31,7 @@ export interface ThreadPaneProps {
   focused: boolean;
   onFocus(): void;
   onClose(): void;
-  onBind(): void;
+  onSplit(): void;
 }
 
 function useLive(
@@ -251,6 +253,23 @@ export function ThreadPane(props: ThreadPaneProps) {
     branchName: null,
     available: true,
   };
+  const status = deriveRunStatus({
+    runState: snapshot.data?.thread.runState ?? null,
+  });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== "working") return;
+    const id = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [status]);
+  const elapsed =
+    status === "working"
+      ? elapsedLabel(snapshot.data?.currentRun?.startedAt ?? null, now)
+      : null;
 
   return (
     <section
@@ -260,35 +279,19 @@ export function ThreadPane(props: ThreadPaneProps) {
         props.onFocus();
       }}
     >
-      <header className="pane-title-bar">
-        <span className="pane-title">
-          {snapshot.data?.thread.title ?? "Thread"}
-        </span>
-        <div className="pane-title-actions">
-          <button
-            type="button"
-            aria-label="Bind panel"
-            title="Bind panel"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onBind();
-            }}
-          >
-            📌
-          </button>
-          <button
-            type="button"
-            aria-label="Close"
-            title="Close"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onClose();
-            }}
-          >
-            ×
-          </button>
-        </div>
-      </header>
+      <PaneHeader
+        status={status}
+        elapsed={elapsed}
+        title={snapshot.data?.thread.title ?? "Thread"}
+        projectLabel={snapshot.data?.project.displayName ?? ""}
+        focused={focused}
+        onSplit={() => {
+          props.onSplit();
+        }}
+        onClose={() => {
+          props.onClose();
+        }}
+      />
       {snapshot.isPending ? (
         <Loading />
       ) : snapshot.error !== null ? (

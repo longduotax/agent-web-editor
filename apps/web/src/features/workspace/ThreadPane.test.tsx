@@ -68,7 +68,7 @@ function renderPane(
   overrides: {
     onFocus?: () => void;
     onClose?: () => void;
-    onBind?: () => void;
+    onSplit?: () => void;
   } = {},
 ) {
   const queryClient = new QueryClient({
@@ -76,7 +76,7 @@ function renderPane(
   });
   const onFocus = overrides.onFocus ?? vi.fn();
   const onClose = overrides.onClose ?? vi.fn();
-  const onBind = overrides.onBind ?? vi.fn();
+  const onSplit = overrides.onSplit ?? vi.fn();
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
@@ -86,12 +86,12 @@ function renderPane(
           focused
           onFocus={onFocus}
           onClose={onClose}
-          onBind={onBind}
+          onSplit={onSplit}
         />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onFocus, onClose, onBind };
+  return { onFocus, onClose, onSplit };
 }
 
 describe("ThreadPane", () => {
@@ -108,7 +108,7 @@ describe("ThreadPane", () => {
     ).toBeInTheDocument();
   });
 
-  it("invokes onClose from the title bar, without changing behavior otherwise", async () => {
+  it("invokes onClose from the pane header, without changing behavior otherwise", async () => {
     api.getSnapshot.mockResolvedValue(snapshot);
     const user = userEvent.setup();
     const { onClose } = renderPane();
@@ -117,6 +117,23 @@ describe("ThreadPane", () => {
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes onSplit from the pane header and exposes no Collapse/Bind button", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    const user = userEvent.setup();
+    const { onSplit } = renderPane();
+
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.click(screen.getByRole("button", { name: "Split" }));
+    expect(onSplit).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: "Collapse" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Bind" }),
+    ).not.toBeInTheDocument();
   });
 
   it("invokes onFocus when the pane body is clicked", async () => {

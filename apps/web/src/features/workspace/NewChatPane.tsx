@@ -11,12 +11,14 @@ import {
 } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
+import { PaneHeader } from "./PaneHeader.js";
 
 export interface NewChatPaneProps {
   projectId: ProjectId;
   focused: boolean;
   onFocus(): void;
   onClose(): void;
+  onSplit(): void;
   onThreadStarted(threadId: ThreadId): void;
 }
 
@@ -101,22 +103,19 @@ export function NewChatPane(props: NewChatPaneProps) {
         props.onFocus();
       }}
     >
-      <header className="pane-title-bar">
-        <span className="pane-title">New chat</span>
-        <div className="pane-title-actions">
-          <button
-            type="button"
-            aria-label="Close"
-            title="Close"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onClose();
-            }}
-          >
-            ×
-          </button>
-        </div>
-      </header>
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="New chat"
+        projectLabel={project?.displayName ?? ""}
+        focused={focused}
+        onSplit={() => {
+          props.onSplit();
+        }}
+        onClose={() => {
+          props.onClose();
+        }}
+      />
       <main className="center new-chat">
         <form className="new-chat-card" onSubmit={submit}>
           <div className="new-chat-toolbar" aria-label="New chat configuration">
