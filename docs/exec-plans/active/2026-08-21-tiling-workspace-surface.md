@@ -1,10 +1,10 @@
 # Tiling workspace surface implementation plan
 
-**Status:** Draft
+**Status:** Active
 
 **Plan version:** 1
 
-**Technical approval:** Pending for plan version 1
+**Technical approval:** Approved for plan version 1 on 2026-08-21 (user authorised implementation via the subagent-driven approach)
 
 **Subsystem:** Browser workspace composition — pane tiling, dock, keybindings, and device-local layout persistence
 

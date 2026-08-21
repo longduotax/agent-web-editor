@@ -9,8 +9,8 @@ superseded, or abandoned.
   version 2 revises run orchestration to permit concurrent Pi-backed threads in
   one project through a thread-scoped persisted lease, while retaining the
   broader TDD workspace, reconnection, inspector, and terminal plan.
-- [Tiling workspace surface](2026-08-21-tiling-workspace-surface.md) — Draft plan
-  version 1 has technical approval pending. Phase 1 of the multi-agent tiling
+- [Tiling workspace surface](2026-08-21-tiling-workspace-surface.md) — Active plan
+  version 1, technical approval granted 2026-08-21. Phase 1 of the multi-agent tiling
   workspace design: replaces single-thread project selection with a terminal-style
   tiling surface of panes (split, collapse-to-dock, restore, focus, close),
   device-local per-project layout persistence, approved keybindings, and a blue
