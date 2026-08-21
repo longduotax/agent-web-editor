@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,43 +36,53 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+const otherThreadId = "20000000-0000-4000-8000-000000000002" as ThreadId;
 
-const snapshot: ThreadSnapshot = {
-  version: 1,
-  project: {
-    id: projectId,
-    displayName: "Example project",
-    displayPath: "/example",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    available: true,
-    gitAvailable: true,
-    sidebarExpanded: true,
-    unreadCount: 0,
-    lastOpenedThreadId: threadId,
-  },
-  thread: {
-    id: threadId,
-    projectId,
-    title: "Example thread",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    lastActivityAt: "2026-01-01T00:00:00.000Z",
-    runState: null,
-    unread: false,
-    runtimeAvailable: true,
-    workspace: { mode: "shared", branchName: null, available: true },
-  },
-  transcript: [],
-  currentRun: null,
-  lastRun: null,
-  epoch: "40000000-0000-4000-8000-000000000001",
-  highWaterSequence: 0,
-  capabilities: { prompt: true, steer: true, stop: true },
-  diagnostics: [],
-};
+function makeSnapshot(id: ThreadId, title: string): ThreadSnapshot {
+  return {
+    version: 1,
+    project: {
+      id: projectId,
+      displayName: "Example project",
+      displayPath: "/example",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      available: true,
+      gitAvailable: true,
+      sidebarExpanded: true,
+      unreadCount: 0,
+      lastOpenedThreadId: id,
+    },
+    thread: {
+      id,
+      projectId,
+      title,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      runState: null,
+      unread: false,
+      runtimeAvailable: true,
+      workspace: { mode: "shared", branchName: null, available: true },
+    },
+    transcript: [],
+    currentRun: null,
+    lastRun: null,
+    epoch: "40000000-0000-4000-8000-000000000001",
+    highWaterSequence: 0,
+    capabilities: { prompt: true, steer: true, stop: true },
+    diagnostics: [],
+  };
+}
+
+const snapshot: ThreadSnapshot = makeSnapshot(threadId, "Example thread");
+const otherSnapshot: ThreadSnapshot = makeSnapshot(
+  otherThreadId,
+  "Other thread",
+);
 
 function stubStorage(): Map<string, string> {
   const store = new Map<string, string>();
@@ -88,7 +104,10 @@ function stubMacPlatform() {
 
 function renderWorkspace(
   initialEntry: string,
-  options?: { seedStore?: (store: Map<string, string>) => void },
+  options?: {
+    seedStore?: (store: Map<string, string>) => void;
+    snapshots?: Record<string, ThreadSnapshot>;
+  },
 ) {
   const store = stubStorage();
   options?.seedStore?.(store);
@@ -117,7 +136,11 @@ function renderWorkspace(
     headCommit: "1234567",
     changes: null,
   });
-  api.getSnapshot.mockResolvedValue(snapshot);
+  const snapshotsById = options?.snapshots ?? { [threadId]: snapshot };
+  api.getSnapshot.mockImplementation(
+    (_projectId: ProjectId, id: ThreadId) =>
+      Promise.resolve(snapshotsById[id] ?? snapshot),
+  );
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -172,25 +195,147 @@ describe("WorkspaceView", () => {
     expect(screen.getAllByLabelText("New chat")).toHaveLength(1);
   });
 
-  it("archives a threaded pane exactly once even on a double-invoke close, then removes the pane", async () => {
-    api.archiveThread.mockResolvedValue({ archived: true as const });
-    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
-
-    const region = await screen.findByRole("region", {
-      name: "Example thread",
-    });
+  function closeButtonFor(name: string): HTMLElement {
+    const region = screen.getByRole("region", { name });
     const closeButton = region
       .closest(".pane")
       ?.querySelector('[aria-label="Close"]');
     if (closeButton === null || closeButton === undefined)
       throw new Error("expected a close button");
+    return closeButton as HTMLElement;
+  }
 
-    fireEvent.click(closeButton);
+  it("closes a threaded pane immediately (no archive call yet) and shows an undo toast", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    await screen.findByRole("region", { name: "Example thread" });
+
+    fireEvent.click(closeButtonFor("Example thread"));
+
+    // The pane is gone right away — no modal, no waiting on the network.
+    await screen.findByText("No panes are open.");
+    expect(
+      screen.queryByRole("region", { name: "Example thread" }),
+    ).not.toBeInTheDocument();
+    expect(api.archiveThread).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+  });
+
+  it("archives the thread once the undo toast times out", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    await screen.findByRole("region", { name: "Example thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(closeButtonFor("Example thread"));
+    expect(api.archiveThread).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+
+    expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+    expect(
+      screen.queryByRole("button", { name: "Undo" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Undo restores the pane with no archive call, ever", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    await screen.findByRole("region", { name: "Example thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(closeButtonFor("Example thread"));
+    expect(screen.getByText("No panes are open.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(
+      screen.getByRole("region", { name: "Example thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Undo" }),
+    ).not.toBeInTheDocument();
+
+    // Undo cancelled the deferred archive outright — even letting the
+    // original timeout elapse must never call archiveThread.
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(api.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("closing a threadless (new-chat) pane shows no toast and never archives", async () => {
+    stubMacPlatform();
+    renderWorkspace(`/projects/${projectId}`);
+    await screen.findByLabelText("New chat");
+
+    const composer = screen.getByLabelText("New chat").closest(".pane");
+    const closeButton = composer?.querySelector('[aria-label="Close"]');
+    if (closeButton === null || closeButton === undefined)
+      throw new Error("expected a close button");
     fireEvent.click(closeButton);
 
     await screen.findByText("No panes are open.");
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    expect(api.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("flushes (archives now) a pending close's thread when a second pane is closed before its toast times out", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    const seededPaneA = "seeded-pane-a";
+    const seededPaneB = "seeded-pane-b";
+    renderWorkspace(`/projects/${projectId}`, {
+      snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 2,
+            root: {
+              type: "split",
+              id: "seeded-split",
+              axis: "row",
+              children: [
+                { type: "pane", id: seededPaneA },
+                { type: "pane", id: seededPaneB },
+              ],
+              sizes: [0.5, 0.5],
+            },
+            panes: {
+              [seededPaneA]: { threadId },
+              [seededPaneB]: { threadId: otherThreadId },
+            },
+            focusedPaneId: seededPaneA,
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    await screen.findByRole("region", { name: "Example thread" });
+    await screen.findByRole("region", { name: "Other thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(closeButtonFor("Example thread"));
+    expect(api.archiveThread).not.toHaveBeenCalled();
+
+    fireEvent.click(closeButtonFor("Other thread"));
+
+    // Closing the second pane while the first's toast was still pending
+    // flushes (archives) the first thread immediately...
     expect(api.archiveThread).toHaveBeenCalledTimes(1);
     expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+
+    // ...and starts a fresh deferred archive for the second.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(api.archiveThread).toHaveBeenCalledTimes(2);
+    expect(api.archiveThread).toHaveBeenCalledWith(projectId, otherThreadId);
   });
 
   it("focuses/creates a pane for the thread named in the route on mount", async () => {

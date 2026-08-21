@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, type JSX } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ThreadIdSchema,
@@ -13,10 +12,20 @@ import {
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
-import type { PaneId } from "./layoutTree.js";
+import type { PaneId, WorkspaceLayout } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
+import { UndoToast } from "./UndoToast.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
+
+// Captured at the moment a threaded pane is closed, so an in-flight undo
+// toast can either flush (archive now) or be cancelled (restore `previous`,
+// never archiving) without a server round trip either way.
+interface PendingClose {
+  paneId: PaneId;
+  threadId: ThreadId;
+  previous: WorkspaceLayout;
+}
 
 // Browser Shift variants of "=" and "-" report as "+" and "_"; the
 // keybindings map the un-shifted key alongside a shiftKey flag, so normalize
@@ -116,28 +125,67 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     };
   }, []);
 
-  const archivingPanesRef = useRef<Set<PaneId>>(new Set());
-  const archive = useMutation({
-    mutationFn: (threadId: ThreadId) => archiveThread(projectId, threadId),
-  });
+  // There is no unarchive endpoint, so undo must prevent the archive rather
+  // than reverse it: closing a threaded pane is immediate (the pane leaves
+  // the layout right away), while the actual archiveThread call is deferred
+  // until the undo toast times out. Only one close can be pending at a
+  // time — pendingCloseRef mirrors the pendingClose state so handleClose
+  // (called synchronously from a click) can read/flush the previous pending
+  // close without waiting on a render.
+  const pendingCloseRef = useRef<PendingClose | null>(null);
+  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
+
+  const clearPending = useCallback(() => {
+    pendingCloseRef.current = null;
+    setPendingClose(null);
+  }, []);
+
+  // Archives the given pending close's thread right now (either because its
+  // toast timed out, or because it's being flushed by a newer close) and
+  // clears it from pending state.
+  const archivePending = useCallback(
+    (pending: PendingClose) => {
+      clearPending();
+      void archiveThread(projectId, pending.threadId);
+    },
+    [clearPending, projectId],
+  );
 
   const handleClose = useCallback(
     (paneId: PaneId, threadId: ThreadId | null) => {
+      // Only one close may be pending its toast at a time: a second close
+      // flushes (archives now) whatever was already pending.
+      const existing = pendingCloseRef.current;
+      if (existing !== null) archivePending(existing);
+
       if (threadId === null) {
         controllerRef.current.close(paneId);
         return;
       }
-      if (archivingPanesRef.current.has(paneId)) return;
-      archivingPanesRef.current.add(paneId);
-      archive.mutate(threadId, {
-        onSettled: () => {
-          archivingPanesRef.current.delete(paneId);
-          controllerRef.current.close(paneId);
-        },
-      });
+
+      const previous = controllerRef.current.layout;
+      controllerRef.current.close(paneId);
+      const pending: PendingClose = { paneId, threadId, previous };
+      pendingCloseRef.current = pending;
+      setPendingClose(pending);
     },
-    [archive],
+    [archivePending],
   );
+
+  const handleToastDismiss = useCallback(() => {
+    const pending = pendingCloseRef.current;
+    if (pending === null) return;
+    archivePending(pending);
+  }, [archivePending]);
+
+  const handleToastUndo = useCallback(() => {
+    const pending = pendingCloseRef.current;
+    if (pending === null) return;
+    // Cancel the deferred archive outright (never fires) and restore the
+    // pane exactly as it was, splits and all — a pure client operation.
+    clearPending();
+    controllerRef.current.replaceLayout(pending.previous);
+  }, [clearPending]);
 
   const params = useParams();
   useEffect(() => {
@@ -187,6 +235,13 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
         onClosePane={handleClose}
         onThreadStarted={handleThreadStarted}
       />
+      {pendingClose !== null && (
+        <UndoToast
+          message="Archived"
+          onUndo={handleToastUndo}
+          onDismiss={handleToastDismiss}
+        />
+      )}
     </div>
   );
 }

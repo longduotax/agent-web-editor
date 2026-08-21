@@ -598,11 +598,47 @@ a:focus-visible {
   outline-offset: -2px;
 }
 .workspace-view {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+}
+.undo-toast {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  border-radius: 10px;
+  background: var(--send-bg);
+  color: var(--send-fg);
+  box-shadow: var(--pop-shadow);
+}
+.undo-toast-message {
+  font-size: 13px;
+}
+.undo-toast-button {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--send-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.undo-toast-button:hover {
+  border-color: currentColor;
+}
+.undo-toast-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .tiling-surface {
   display: flex;

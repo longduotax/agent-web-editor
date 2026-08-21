@@ -23,6 +23,11 @@ export interface WorkspaceLayoutController {
   bind(paneId: PaneId): void;
   resize(splitId: SplitId, sizes: [number, number]): void;
   close(paneId: PaneId): void;
+  // Thin setLayout wrapper: overwrites the layout wholesale, e.g. to restore
+  // a snapshot captured before a since-cancelled close (see WorkspaceView's
+  // undo-toast flow). Bypasses closePane/etc — callers are responsible for
+  // passing a valid WorkspaceLayout.
+  replaceLayout(layout: WorkspaceLayout): void;
 }
 
 // Module-level (stable across renders) so every pane id is globally unique
@@ -120,6 +125,10 @@ export function useWorkspaceLayout(
     setLayout((current) => closePane(current, paneId));
   }, []);
 
+  const replaceLayout = useCallback((next: WorkspaceLayout) => {
+    setLayout(next);
+  }, []);
+
   return {
     layout,
     dispatch,
@@ -129,5 +138,6 @@ export function useWorkspaceLayout(
     bind,
     resize,
     close,
+    replaceLayout,
   };
 }
