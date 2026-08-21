@@ -7,7 +7,9 @@ import {
   writeEnvironmentVisibility,
 } from "./environmentPreferences.js";
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  localStorage.clear();
+});
 
 describe("environmentPreferences", () => {
   it("defaults to auto when nothing is stored", () => {

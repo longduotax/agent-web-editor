@@ -33,18 +33,18 @@ describe("PaneHeader", () => {
     expect(screen.getByText("fix the merge conflict")).toBeInTheDocument();
     expect(screen.getByText("valai")).toBeInTheDocument();
 
-    expect(
-      screen.getByRole("button", { name: "Split" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Close" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Split" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(
       screen.queryByRole("button", { name: "Collapse" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dock" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Bind" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Dock" }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Split" }));
     expect(onSplit).toHaveBeenCalledTimes(1);

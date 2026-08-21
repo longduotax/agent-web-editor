@@ -1,6 +1,10 @@
 import type { JSX } from "react";
 
-import { PANE_STATUS_LABEL, PANE_STATUS_TOKEN, type PaneRunStatus } from "./runStatus.js";
+import {
+  PANE_STATUS_LABEL,
+  PANE_STATUS_TOKEN,
+  type PaneRunStatus,
+} from "./runStatus.js";
 
 export interface PaneHeaderProps {
   status: PaneRunStatus | null; // null on a new-chat/never-run pane -> no status shown

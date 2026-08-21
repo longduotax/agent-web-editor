@@ -4,7 +4,7 @@
 
 **Plan version:** 1
 
-**Technical approval:** Pending — not yet authorised by the user for plan version 1
+**Technical approval:** Approved for plan version 1 on 2026-08-22 (user authorised implementation via the subagent-driven approach, consistent with the product decisions recorded the same day in the governing spec's Open product questions)
 
 **Subsystem:** Browser workspace composition — pane visual surface, light/dark theming, the focus-bound Environment panel, dock-tier removal, and a Settings page
 
@@ -12,7 +12,7 @@
 
 **Governing specification:** [Codex-style workspace surface](../../product-specs/codex-workspace-surface.md)
 
-**Related documents:** [Tiling workspace surface](../../product-specs/tiling-workspace-surface.md) (revised here), [Tiling workspace surface implementation plan](2026-08-21-tiling-workspace-surface.md) (the baseline this revises), [Multi-agent tiling workspace design](../../design/multi-agent-tiling-workspace.md). Authoritative visual references: [`thread-surface-codex.html`](../../design/thread-surface-codex.html) and [`thread-surface-tiled.html`](../../design/thread-surface-tiled.html).
+**Related documents or issue:** [Tiling workspace surface](../../product-specs/tiling-workspace-surface.md) (revised here), [Tiling workspace surface implementation plan](2026-08-21-tiling-workspace-surface.md) (the baseline this revises), [Multi-agent tiling workspace design](../../design/multi-agent-tiling-workspace.md). Authoritative visual references: [`thread-surface-codex.html`](../../design/thread-surface-codex.html) and [`thread-surface-tiled.html`](../../design/thread-surface-tiled.html).
 
 **Last updated:** 2026-08-22
 
@@ -139,37 +139,74 @@ Structure (theme-aware, three redefinitions so both the OS default and the expli
 ```css
 :root {
   color-scheme: light;
-  --page:#ffffff; --sidebar:#ffffff; --card:#ffffff; --user-pill:#f1f1f2;
-  --hover:#f4f4f5; --active:#ececee; --hairline:#e9e9eb; --hairline-2:#e2e2e4;
-  --text:#1d1d1f; --text-2:#3a3a3e; --muted:#8a8a8f; --faint:#b3b3b8;
-  --green:#2f9e44; --red:#d1453b; --amber:#c07d16; --accent:#2f6feb;
-  --send-bg:#1d1d1f; --send-fg:#ffffff;
-  --run:#c07d16; --wait:#2f6feb; --done:#2f9e44; --fail:#d1453b;
-  --focus-ring:rgba(47,111,235,0.5);
-  --card-shadow:0 1px 2px rgba(20,20,30,0.05);
-  --pop-shadow:0 10px 30px rgba(20,25,40,0.12), 0 2px 8px rgba(20,25,40,0.06);
+  --page: #ffffff;
+  --sidebar: #ffffff;
+  --card: #ffffff;
+  --user-pill: #f1f1f2;
+  --hover: #f4f4f5;
+  --active: #ececee;
+  --hairline: #e9e9eb;
+  --hairline-2: #e2e2e4;
+  --text: #1d1d1f;
+  --text-2: #3a3a3e;
+  --muted: #8a8a8f;
+  --faint: #b3b3b8;
+  --green: #2f9e44;
+  --red: #d1453b;
+  --amber: #c07d16;
+  --accent: #2f6feb;
+  --send-bg: #1d1d1f;
+  --send-fg: #ffffff;
+  --run: #c07d16;
+  --wait: #2f6feb;
+  --done: #2f9e44;
+  --fail: #d1453b;
+  --focus-ring: rgba(47, 111, 235, 0.5);
+  --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
+  --pop-shadow:
+    0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 /* keep the repo's legacy alias names pointing at the new tokens so existing
    rules that reference --surface-0..3/--border/--blue keep working */
 :root {
-  --surface-0: var(--page); --surface-1: var(--card); --surface-2: var(--hover);
-  --surface-3: var(--active); --surface-hover: var(--hover);
-  --border: var(--hairline-2); --blue: var(--accent);
+  --surface-0: var(--page);
+  --surface-1: var(--card);
+  --surface-2: var(--hover);
+  --surface-3: var(--active);
+  --surface-hover: var(--hover);
+  --border: var(--hairline-2);
+  --blue: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page:#131417; --sidebar:#17181c; --card:#1b1d22; --user-pill:#26282e;
-    --hover:#1f2127; --active:#24262d; --hairline:rgba(255,255,255,0.08); --hairline-2:rgba(255,255,255,0.12);
-    --text:#ececee; --text-2:#c3c5cb; --muted:#8b8d95; --faint:#62646c;
-    --green:#4ec06f; --red:#e0645c; --amber:#d6a53a; --accent:#6aa0ff;
-    --send-bg:#ececee; --send-fg:#16171a;
-    --run:#d6a53a; --wait:#6aa0ff; --done:#4ec06f; --fail:#e0645c;
-    --focus-ring:rgba(106,160,255,0.55);
-    --card-shadow:0 1px 2px rgba(0,0,0,0.3);
-    --pop-shadow:0 12px 34px rgba(0,0,0,0.5);
+    --page: #131417;
+    --sidebar: #17181c;
+    --card: #1b1d22;
+    --user-pill: #26282e;
+    --hover: #1f2127;
+    --active: #24262d;
+    --hairline: rgba(255, 255, 255, 0.08);
+    --hairline-2: rgba(255, 255, 255, 0.12);
+    --text: #ececee;
+    --text-2: #c3c5cb;
+    --muted: #8b8d95;
+    --faint: #62646c;
+    --green: #4ec06f;
+    --red: #e0645c;
+    --amber: #d6a53a;
+    --accent: #6aa0ff;
+    --send-bg: #ececee;
+    --send-fg: #16171a;
+    --run: #d6a53a;
+    --wait: #6aa0ff;
+    --done: #4ec06f;
+    --fail: #e0645c;
+    --focus-ring: rgba(106, 160, 255, 0.55);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   }
 }
 :root[data-theme="dark"] {
@@ -321,9 +358,15 @@ export interface RunStatusInput {
 // needsApproval === true overrides to "needs-approval" (wired, dormant).
 export function deriveRunStatus(input: RunStatusInput): PaneRunStatus | null;
 export const PANE_STATUS_LABEL: Record<PaneRunStatus, string>; // Working / Needs approval / Done / Failed
-export const PANE_STATUS_TOKEN: Record<PaneRunStatus, "run" | "wait" | "done" | "fail">;
+export const PANE_STATUS_TOKEN: Record<
+  PaneRunStatus,
+  "run" | "wait" | "done" | "fail"
+>;
 // elapsed timer text for running work, e.g. "2m 14s"; null when no start or not running
-export function elapsedLabel(startedAtIso: string | null, nowMs: number): string | null;
+export function elapsedLabel(
+  startedAtIso: string | null,
+  nowMs: number,
+): string | null;
 ```
 
 `PANE_STATUS_LABEL = { working: "Working", "needs-approval": "Needs approval", done: "Done", failed: "Failed" }`. `PANE_STATUS_TOKEN` maps each status to the CSS colour-token suffix used by the mockups (`--run`/`--wait`/`--done`/`--fail`). `elapsedLabel` formats `(nowMs - Date.parse(startedAtIso))` as `Xm Ys` (or `Ys` under a minute); returns `null` for a null start. Keep `deriveRunStatus` and `PANE_STATUS_*` pure and clock-free; only `elapsedLabel` takes `nowMs` (injected, never read from a clock inside the module).
@@ -332,7 +375,11 @@ export function elapsedLabel(startedAtIso: string | null, nowMs: number): string
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { deriveRunStatus, elapsedLabel, PANE_STATUS_LABEL } from "./runStatus.js";
+import {
+  deriveRunStatus,
+  elapsedLabel,
+  PANE_STATUS_LABEL,
+} from "./runStatus.js";
 
 describe("deriveRunStatus", () => {
   it("maps run states to display statuses", () => {
@@ -410,7 +457,10 @@ export interface WorkspaceLayout {
 // focusPane/moveFocus/bindPane/tiledPaneIds/setSplitSizes are unchanged except
 // that closePane no longer touches a `docked` array.
 // Internal-only helper kept for migration (NOT re-exported publicly):
-export function restoreIntoTree(l: WorkspaceLayout, id: PaneId): WorkspaceLayout;
+export function restoreIntoTree(
+  l: WorkspaceLayout,
+  id: PaneId,
+): WorkspaceLayout;
 
 // keybindings.ts — WorkspaceCommand loses collapse/restore:
 export type WorkspaceCommand =
@@ -471,11 +521,11 @@ git commit -m "feat(web): remove the collapse-to-dock pane tier and migrate layo
 ```ts
 export interface PaneHeaderProps {
   status: PaneRunStatus | null; // null on a new-chat/never-run pane -> no status shown
-  elapsed: string | null;       // elapsed timer text while running, else null
-  title: string;                // thread title, or "New chat" for a threadless pane
-  projectLabel: string;         // project/worktree chip text
+  elapsed: string | null; // elapsed timer text while running, else null
+  title: string; // thread title, or "New chat" for a threadless pane
+  projectLabel: string; // project/worktree chip text
   focused: boolean;
-  onSplit(): void;              // split right (row); keyboard still offers both axes
+  onSplit(): void; // split right (row); keyboard still offers both axes
   onClose(): void;
 }
 export function PaneHeader(props: PaneHeaderProps): JSX.Element;
@@ -520,10 +570,10 @@ git commit -m "feat(web): shared pane header with run status and split/close act
 
 ```ts
 export interface UndoToastProps {
-  message: string;      // e.g. "Archived — thread name"
+  message: string; // e.g. "Archived — thread name"
   onUndo(): void;
-  onDismiss(): void;    // fired when the timeout elapses
-  timeoutMs?: number;   // default 6000
+  onDismiss(): void; // fired when the timeout elapses
+  timeoutMs?: number; // default 6000
 }
 export function UndoToast(props: UndoToastProps): JSX.Element;
 ```
@@ -617,7 +667,10 @@ export const ENVIRONMENT_PREFERENCE_KEY = "pi-workspace:environment";
 export function readEnvironmentVisibility(): EnvironmentVisibility; // "auto" on miss/malformed
 export function writeEnvironmentVisibility(v: EnvironmentVisibility): void;
 // "auto" resolves to shown while the surface has <= 1 tiled pane, hidden once it tiles.
-export function isEnvironmentOpen(v: EnvironmentVisibility, tiledPaneCount: number): boolean;
+export function isEnvironmentOpen(
+  v: EnvironmentVisibility,
+  tiledPaneCount: number,
+): boolean;
 
 // EnvironmentPanel.tsx
 export interface EnvironmentPanelProps {

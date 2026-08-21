@@ -139,11 +139,14 @@ function renderWorkspace(
     changes: null,
   });
   const snapshotsById = options?.snapshots ?? { [threadId]: snapshot };
-  api.getSnapshot.mockImplementation(
-    (_projectId: ProjectId, id: ThreadId) =>
-      Promise.resolve(snapshotsById[id] ?? snapshot),
+  api.getSnapshot.mockImplementation((_projectId: ProjectId, id: ThreadId) =>
+    Promise.resolve(snapshotsById[id] ?? snapshot),
   );
-  api.getStatus.mockResolvedValue({ available: true, files: [], message: null });
+  api.getStatus.mockResolvedValue({
+    available: true,
+    files: [],
+    message: null,
+  });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -282,7 +285,9 @@ describe("WorkspaceView", () => {
     fireEvent.click(closeButton);
 
     await screen.findByText("No panes are open.");
-    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Undo" }),
+    ).not.toBeInTheDocument();
     expect(api.archiveThread).not.toHaveBeenCalled();
   });
 
@@ -497,7 +502,11 @@ describe("WorkspaceView", () => {
     });
     let currentSnapshot = snapshot;
     api.getSnapshot.mockImplementation(() => Promise.resolve(currentSnapshot));
-    api.getStatus.mockResolvedValue({ available: true, files: [], message: null });
+    api.getStatus.mockResolvedValue({
+      available: true,
+      files: [],
+      message: null,
+    });
 
     render(
       <QueryClientProvider client={queryClient}>

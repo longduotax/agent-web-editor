@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
   AgentRuntime,
   OpenRuntimeSession,
@@ -15,7 +15,21 @@ import { parseConfig } from "../apps/server/src/config.js";
 
 // Same stub runtime shape as e2e/workspace.spec.ts: prompt() never settles,
 // which mirrors an agent run that stays "running" for the lifetime of the
-// test (there is no live external agent in this harness).
+// test (there is no live external agent in this harness), and snapshot()
+// always returns an empty transcript (the stub never calls the subscribe
+// listener, so no tool/message events are ever appended). That means this
+// harness can exercise the run-status pill (derived from the run's state,
+// which the server sets synchronously to "running" on accept — see
+// apps/server/src/domain/workspace.ts's prompt()/startThread()) but it can
+// never produce actual transcript content: no user pill, no assistant
+// flowing text, and no "Worked for" tool-activity header ever render here.
+// Those Codex-reading-model DOM shapes are covered at the unit level instead
+// (apps/web/src/features/workspace/ThreadPane.test.tsx and
+// apps/web/src/components/Activity.test.tsx), which control the transcript
+// items directly. This spec covers what the stub CAN produce end-to-end:
+// pane run-status, split (button + chord), theme persistence, the
+// focus-following Environment panel, the close/undo-toast flow, and the
+// absence of any dock chrome or horizontal page scroll.
 class BrowserSession implements OpenRuntimeSession {
   public constructor(public readonly id: string) {}
   public snapshot() {
@@ -139,6 +153,7 @@ async function chord(page: Page, primary: "Meta" | "Alt", key: string) {
 // shared tsconfig for one assertion.
 declare const document: {
   scrollingElement: { scrollWidth: number; clientWidth: number } | null;
+  documentElement: { getAttribute(name: string): string | null };
 };
 
 function inPageHasNoHorizontalScroll(): boolean {
@@ -146,7 +161,23 @@ function inPageHasNoHorizontalScroll(): boolean {
   return el !== null && el.scrollWidth <= el.clientWidth + 1;
 }
 
-test("splits, starts a thread in the new pane, collapses/restores/closes panes, no horizontal scroll", async ({
+function pageDataTheme(): string | null {
+  return document.documentElement.getAttribute("data-theme");
+}
+
+// Thread titles fall back to a deterministic derivation of the first prompt
+// (apps/server/src/domain/workspace.ts's fallbackTitle, since the stub
+// runtime never implements suggestTitle), so two panes need distinct prompt
+// text to end up with distinguishable, assertable titles.
+async function startThreadInNewChatPane(pane: Locator, message: string) {
+  await pane
+    .getByRole("combobox", { name: "Execution location" })
+    .selectOption("shared");
+  await pane.getByRole("textbox", { name: "First message" }).fill(message);
+  await pane.getByRole("button", { name: "Create chat and send" }).click();
+}
+
+test("codex workspace surface: run status, split (button + chord), environment panel, undo toast, no dock", async ({
   page,
 }) => {
   await page.goto(launchUrl);
@@ -160,73 +191,162 @@ test("splits, starts a thread in the new pane, collapses/restores/closes panes, 
     .getByRole("button", { name: `New thread in ${projectName}` })
     .click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/new$/);
-  await page
-    .getByRole("combobox", { name: "Execution location" })
-    .selectOption("shared");
-  await page
-    .getByRole("textbox", { name: "First message" })
-    .fill("Inspect this project");
-  await page.getByRole("button", { name: "Create chat and send" }).click();
-  // Starting a thread from an in-pane "New chat" form assigns the thread to
-  // that pane without changing the route (panes, not the URL, own which
-  // thread is showing) — so wait on the pane's content settling rather than
-  // a URL change.
-  await expect(
-    page.getByText(/Pi tools run with your user permissions/),
-  ).toBeVisible();
+  await startThreadInNewChatPane(page.locator("body"), "Inspect this project");
 
-  const primary = await primaryModifier(page);
+  // The pane header's run-status pill is derived from the run's state, which
+  // the server sets to "running" synchronously as part of accepting the
+  // first prompt (apps/server/src/domain/workspace.ts) — so it's visible as
+  // soon as the pane mounts, independent of the stub runtime ever settling.
+  const panes = page.getByRole("region");
+  await expect(panes.getByText("Working", { exact: true })).toBeVisible();
 
-  // Split right: one pane with the thread we just started, one fresh
-  // threadless "New chat" pane, focus moves to the new pane.
-  await chord(page, primary, "=");
+  // The trust note is demoted to a single inline line inside the pane's
+  // header region (CWS-01), never a full-width banner in the transcript
+  // flow. Assert it renders inside a <header> ancestor rather than asserting
+  // on a CSS class, so this stays a structural (not styling) check.
+  const trustNote = page.getByText(/Pi tools run with your user permissions/);
+  await expect(trustNote).toBeVisible();
+  await expect(trustNote.locator("xpath=ancestor::header[1]")).toHaveCount(1);
+
+  // Split right via the pane header's "Split" button (not the chord) — only
+  // one pane exists yet, so this is unambiguous.
+  await page.getByRole("button", { name: "Split" }).click();
   await expect(page.getByRole("region")).toHaveCount(2);
   const newPaneRegion = page.getByRole("region", { name: "New chat" });
   await expect(newPaneRegion).toBeVisible();
 
-  // Start a second thread from within the newly split pane.
-  await newPaneRegion
-    .getByRole("combobox", { name: "Execution location" })
-    .selectOption("shared");
-  await newPaneRegion
-    .getByRole("textbox", { name: "First message" })
-    .fill("Second pane prompt");
-  await newPaneRegion
-    .getByRole("button", { name: "Create chat and send" })
-    .click();
-  // Once the new pane adopts a thread it renders a ThreadPane (composer
-  // labelled "Message Pi") in place of the NewChatPane form; wait for both
-  // panes to have settled on that state.
+  // Start a second thread in the newly split pane.
+  await startThreadInNewChatPane(newPaneRegion, "Second pane prompt");
   await expect(page.getByRole("textbox", { name: "Message Pi" })).toHaveCount(
     2,
   );
   await expect(page.getByRole("region", { name: "New chat" })).toHaveCount(0);
+  // Both pane headers show a labeled run status.
+  await expect(panes.getByText("Working", { exact: true })).toHaveCount(2);
 
-  // Collapse the (still focused) second pane to the dock via the chord.
-  await chord(page, primary, "ArrowDown");
-  await expect(page.getByRole("region")).toHaveCount(1);
-  const dock = page.getByRole("group", { name: "Docked panes" });
-  await expect(dock).toBeVisible();
-  await expect(dock.getByRole("button")).toHaveCount(1);
-
-  // Restore it via the chord; back to two tiled panes, dock empty again.
-  await chord(page, primary, "ArrowUp");
-  await expect(page.getByRole("region")).toHaveCount(2);
-  await expect(page.getByRole("group", { name: "Docked panes" })).toHaveCount(
-    0,
-  );
-
-  // Split again to get a fresh threadless pane, then close it via its
-  // title-bar "Close" control (accessible name shared with ThreadPane's).
+  // Split again via the keyboard chord this time, covering both mechanisms.
+  const primary = await primaryModifier(page);
   await chord(page, primary, "=");
-  const closablePane = page.getByRole("region", { name: "New chat" });
-  await expect(closablePane).toBeVisible();
   await expect(page.getByRole("region")).toHaveCount(3);
-  await closablePane.getByRole("button", { name: "Close" }).click();
+  const chordSplitPane = page.getByRole("region", { name: "New chat" });
+  await expect(chordSplitPane).toBeVisible();
+
+  // Close the fresh threadless pane immediately via the close keybinding
+  // (it's the focused pane after the split) rather than its header button:
+  // with three tiled panes and the environment panel auto-hidden, that
+  // pane's card fills the workspace surface's full remaining width, so its
+  // header's Close button sits directly under the floating environment
+  // toggle in the top-right corner — a real click there is unreliable
+  // regardless of test tooling. Closing via keybinding both sidesteps that
+  // and covers the close chord end-to-end.
+  //
+  // The workspace deliberately ignores its keybindings while a text input
+  // holds focus (so e.g. Backspace edits text, not the workspace) — see
+  // WorkspaceView's keydown handler — and the new pane's composer textarea
+  // is autofocused. Click the header's left-hand title area first (not a
+  // button/input, away from the obstructed top-right corner) to move DOM
+  // focus off that textarea before sending the chord. No undo toast for a
+  // new-chat pane either way (nothing to archive).
+  await chordSplitPane.click({ position: { x: 12, y: 12 } });
+  await chord(page, primary, "Backspace");
   await expect(page.getByRole("region", { name: "New chat" })).toHaveCount(0);
   await expect(page.getByRole("region")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
 
-  // The tiling surface must never force the page to scroll horizontally.
+  // Environment panel: with two tiled panes the device-local "auto" default
+  // is hidden, so open it via the toggle in the workspace chrome.
+  const environmentToggle = page.getByRole("button", {
+    name: "Toggle environment panel",
+  });
+  await environmentToggle.click();
+  const environmentPanel = page.getByRole("complementary", {
+    name: "Environment",
+  });
+  await expect(environmentPanel).toBeVisible();
+  await expect(environmentToggle).toHaveAttribute("aria-pressed", "true");
+
+  // Focus-following: capture both panes' accessible titles, confirm the
+  // panel shows the currently-focused one, then click the other pane and
+  // confirm the panel's content swaps to that pane's title instead. Read
+  // attributes through Playwright's typed Locator API (not evaluateAll's
+  // in-page callback) since this spec's tsconfig has no "dom" lib, which
+  // would otherwise leave the callback's element type effectively `any`.
+  const paneCount = await panes.count();
+  expect(paneCount).toBe(2);
+  const paneTitles: (string | null)[] = [];
+  const paneFocus: (string | null)[] = [];
+  for (let index = 0; index < paneCount; index += 1) {
+    paneTitles.push(await panes.nth(index).getAttribute("aria-label"));
+    paneFocus.push(await panes.nth(index).getAttribute("aria-current"));
+  }
+  const [titleA, titleB] = paneTitles;
+  if (
+    titleA === null ||
+    titleA === undefined ||
+    titleB === null ||
+    titleB === undefined
+  )
+    throw new Error("Pane regions were not accessibly labelled");
+
+  const focusedIndex = paneFocus.findIndex((value) => value === "true");
+  expect(focusedIndex).toBeGreaterThanOrEqual(0);
+  const focusedTitle = focusedIndex === 0 ? titleA : titleB;
+  const otherTitle = focusedIndex === 0 ? titleB : titleA;
+  const otherIndex = focusedIndex === 0 ? 1 : 0;
+
+  await expect(environmentPanel.getByText(focusedTitle)).toBeVisible();
+
+  // Click the non-focused pane (not a button/input) to focus it; the
+  // environment panel must follow.
+  await panes.nth(otherIndex).click();
+  await expect(environmentPanel.getByText(otherTitle)).toBeVisible();
+  await expect(environmentPanel.getByText(focusedTitle)).toHaveCount(0);
+
+  // Hide the panel again via its own close control.
+  await environmentPanel
+    .getByRole("button", { name: "Hide environment panel" })
+    .click();
+  await expect(environmentPanel).toHaveCount(0);
+
+  // Close a threaded pane: it disappears immediately and an "Archived —
+  // Undo" toast appears; clicking Undo restores it (splits intact) with no
+  // archive ever having fired.
+  await expect(page.getByRole("region")).toHaveCount(2);
+  await panes.first().getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("region")).toHaveCount(1);
+  const undoToast = page.getByRole("status").filter({ hasText: "Archived" });
+  await expect(undoToast).toBeVisible();
+  await undoToast.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByRole("region")).toHaveCount(2);
+  await expect(page.getByRole("textbox", { name: "Message Pi" })).toHaveCount(
+    2,
+  );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Archived" }),
+  ).toHaveCount(0);
+
+  // No dock chrome anywhere (no element with "dock" in its visible text or
+  // accessible name), and no horizontal page scroll.
+  await expect(page.getByText(/dock/i)).toHaveCount(0);
   const noHorizontalScroll = await page.evaluate(inPageHasNoHorizontalScroll);
   expect(noHorizontalScroll).toBe(true);
+
+  // Settings: System is selected by default (no explicit data-theme yet).
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBeNull();
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  const themeGroup = page.getByRole("radiogroup", { name: "Theme" });
+  await expect(themeGroup).toBeVisible();
+  await expect(page.getByRole("radio", { name: "System" })).toBeChecked();
+
+  await page.getByRole("radio", { name: "Dark" }).click();
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("dark");
+
+  // Reload and confirm the choice persisted — applied by the before-paint
+  // inline script in apps/web/index.html, so it's already set by the time
+  // any post-navigation check runs (the exact before-paint guarantee is unit
+  // tested in apps/web/src/features/settings/useTheme.test.tsx).
+  await page.reload();
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("dark");
+  await expect(page.getByRole("radio", { name: "Dark" })).toBeChecked();
 });

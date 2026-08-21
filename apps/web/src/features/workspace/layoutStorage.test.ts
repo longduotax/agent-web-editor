@@ -63,7 +63,9 @@ describe("workspace layout storage", () => {
 
     writeLayout(PROJECT_ID, layout);
 
-    const stored = JSON.parse(store.get(layoutStorageKey(PROJECT_ID)) ?? "{}") as {
+    const stored = JSON.parse(
+      store.get(layoutStorageKey(PROJECT_ID)) ?? "{}",
+    ) as {
       version: number;
       docked?: unknown;
     };

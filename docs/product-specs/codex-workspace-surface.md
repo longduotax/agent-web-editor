@@ -6,7 +6,7 @@
 
 **Proposal status:** Draft
 
-**Implementation status:** Not started
+**Implementation status:** In progress
 
 **Product approval:** Pending for specification version 1
 
@@ -15,7 +15,7 @@ the focus-bound right panel
 
 **Last verified:** 2026-08-22
 
-**Related ExecPlans:** To be created.
+**Related ExecPlans:** [Codex-style workspace surface implementation plan](../exec-plans/active/2026-08-22-codex-workspace-surface.md)
 
 **Related documents:**
 [Tiling workspace surface](tiling-workspace-surface.md) (revised by this spec),

@@ -31,7 +31,6 @@ export function deriveRunStatus(input: RunStatusInput): PaneRunStatus | null {
     case "failed":
       return "failed";
     case null:
-    case undefined:
       return null;
     default:
       return null;
@@ -45,7 +44,10 @@ export const PANE_STATUS_LABEL: Record<PaneRunStatus, string> = {
   failed: "Failed",
 };
 
-export const PANE_STATUS_TOKEN: Record<PaneRunStatus, "run" | "wait" | "done" | "fail"> = {
+export const PANE_STATUS_TOKEN: Record<
+  PaneRunStatus,
+  "run" | "wait" | "done" | "fail"
+> = {
   working: "run",
   "needs-approval": "wait",
   done: "done",
@@ -57,7 +59,10 @@ export const PANE_STATUS_TOKEN: Record<PaneRunStatus, "run" | "wait" | "done" | 
  * Returns null when there is no start time. `nowMs` is injected — this
  * function never reads a clock internally.
  */
-export function elapsedLabel(startedAtIso: string | null, nowMs: number): string | null {
+export function elapsedLabel(
+  startedAtIso: string | null,
+  nowMs: number,
+): string | null {
   if (startedAtIso === null) {
     return null;
   }
@@ -67,5 +72,7 @@ export function elapsedLabel(startedAtIso: string | null, nowMs: number): string
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
 
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  return minutes > 0
+    ? `${String(minutes)}m ${String(seconds)}s`
+    : `${String(seconds)}s`;
 }

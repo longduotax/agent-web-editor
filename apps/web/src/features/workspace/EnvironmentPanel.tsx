@@ -38,7 +38,13 @@ function summarizeChanges(files: GitFileStatus[]): string {
 }
 
 export function EnvironmentPanel(props: EnvironmentPanelProps): JSX.Element {
-  const { projectId, controller, onClose } = props;
+  // `onClose` is not destructured here: EnvironmentPanelProps declares it
+  // with method shorthand (`onClose(): void`), and referencing a
+  // method-shorthand-typed member as a bare value trips
+  // @typescript-eslint/unbound-method. Calling it through `props.onClose()`
+  // inside the click handler below sidesteps that without changing the
+  // interface shape.
+  const { projectId, controller } = props;
   const { focusedPaneId } = controller.layout;
   const focusedPane =
     focusedPaneId !== null ? controller.layout.panes[focusedPaneId] : undefined;
@@ -46,14 +52,23 @@ export function EnvironmentPanel(props: EnvironmentPanelProps): JSX.Element {
 
   const snapshot = useQuery({
     queryKey: ["snapshot", projectId, threadId],
-    queryFn: () => getSnapshot(projectId, threadId as ThreadId),
+    // The query is disabled while threadId is null, so this never actually
+    // runs then; the guard below narrows the type without a cast or a
+    // non-null assertion (both forbidden by this repo's lint config).
+    queryFn: () => {
+      if (threadId === null) throw new Error("no focused thread");
+      return getSnapshot(projectId, threadId);
+    },
     enabled: threadId !== null,
   });
   // Same query key the (per-thread) Inspector uses for git status, so the
   // two share react-query's cache instead of double-fetching.
   const status = useQuery({
     queryKey: ["git", projectId, threadId],
-    queryFn: () => getStatus(projectId, threadId as ThreadId),
+    queryFn: () => {
+      if (threadId === null) throw new Error("no focused thread");
+      return getStatus(projectId, threadId);
+    },
     enabled: threadId !== null,
   });
 
@@ -76,20 +91,22 @@ export function EnvironmentPanel(props: EnvironmentPanelProps): JSX.Element {
       : null;
 
   const workspace = snapshot.data?.thread.workspace ?? null;
-  const worktreeText = workspace === null
-    ? ""
-    : workspace.mode === "worktree"
-      ? "Worktree"
-      : "Shared";
-  const branchText = workspace === null
-    ? ""
-    : workspace.mode === "worktree"
-      ? workspace.branchName
-      : (workspace.branchName ?? "shared");
+  const worktreeText =
+    workspace === null
+      ? ""
+      : workspace.mode === "worktree"
+        ? "Worktree"
+        : "Shared";
+  const branchText =
+    workspace === null
+      ? ""
+      : workspace.mode === "worktree"
+        ? workspace.branchName
+        : (workspace.branchName ?? "shared");
 
   const changesText = status.isPending
     ? "…"
-    : status.data === undefined || !status.data.available
+    : !status.data?.available
       ? "Unavailable"
       : summarizeChanges(status.data.files);
 
@@ -102,7 +119,9 @@ export function EnvironmentPanel(props: EnvironmentPanelProps): JSX.Element {
           className="icon-btn"
           aria-label="Hide environment panel"
           title="Hide environment panel"
-          onClick={onClose}
+          onClick={() => {
+            props.onClose();
+          }}
         >
           <svg
             className="ico ico-sm"
@@ -136,7 +155,9 @@ export function EnvironmentPanel(props: EnvironmentPanelProps): JSX.Element {
             </div>
             <div className="fs">
               <span className="status-label">
-                {runStatus !== null ? PANE_STATUS_LABEL[runStatus] : "No status"}
+                {runStatus !== null
+                  ? PANE_STATUS_LABEL[runStatus]
+                  : "No status"}
               </span>
               {elapsed !== null && (
                 <span className="status-elapsed">{` · ${elapsed}`}</span>

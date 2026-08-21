@@ -18,7 +18,11 @@ import {
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
-import { tiledPaneIds, type PaneId, type WorkspaceLayout } from "./layoutTree.js";
+import {
+  tiledPaneIds,
+  type PaneId,
+  type WorkspaceLayout,
+} from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
 import { UndoToast } from "./UndoToast.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";

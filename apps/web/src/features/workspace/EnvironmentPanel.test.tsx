@@ -135,8 +135,20 @@ describe("EnvironmentPanel", () => {
     api.getStatus.mockResolvedValue({
       available: true,
       files: [
-        { path: "a.ts", originalPath: null, indexStatus: "M", worktreeStatus: " ", kind: "modified" },
-        { path: "b.ts", originalPath: null, indexStatus: "M", worktreeStatus: " ", kind: "modified" },
+        {
+          path: "a.ts",
+          originalPath: null,
+          indexStatus: "M",
+          worktreeStatus: " ",
+          kind: "modified",
+        },
+        {
+          path: "b.ts",
+          originalPath: null,
+          indexStatus: "M",
+          worktreeStatus: " ",
+          kind: "modified",
+        },
       ],
       message: null,
     });
@@ -186,7 +198,11 @@ describe("EnvironmentPanel", () => {
             }),
       ),
     );
-    api.getStatus.mockResolvedValue({ available: true, files: [], message: null });
+    api.getStatus.mockResolvedValue({
+      available: true,
+      files: [],
+      message: null,
+    });
 
     const layout: WorkspaceLayoutController["layout"] = {
       root: null,
@@ -202,7 +218,10 @@ describe("EnvironmentPanel", () => {
     await screen.findByText("feature/first");
 
     const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
     });
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -263,7 +282,13 @@ describe("EnvironmentPanel", () => {
     api.getStatus.mockResolvedValue({
       available: true,
       files: [
-        { path: "a.ts", originalPath: null, indexStatus: "M", worktreeStatus: " ", kind: "modified" },
+        {
+          path: "a.ts",
+          originalPath: null,
+          indexStatus: "M",
+          worktreeStatus: " ",
+          kind: "modified",
+        },
       ],
       message: null,
     });

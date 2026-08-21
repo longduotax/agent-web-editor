@@ -5,3 +5,8 @@ pnpm-lock.yaml
 test-results
 playwright-report
 .superpowers
+# Device-local design-reference mockups (docs/product-specs/codex-workspace-surface.md's
+# visual references) — hand-authored, not shipped application code; Prettier's
+# reformatting is disruptive to these pixel/spacing-sensitive references, so
+# they're excluded rather than reformatted.
+docs/design/*.html

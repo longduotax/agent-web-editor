@@ -267,8 +267,7 @@ describe("TilingSurface", () => {
     await user.click(heading);
     expect(getController().layout.focusedPaneId).toBe(firstPaneId);
 
-    const focusedPane = screen
-      .getByRole("region", { name: "Example thread" });
+    const focusedPane = screen.getByRole("region", { name: "Example thread" });
     expect(focusedPane).toHaveClass("pane", "focused");
     expect(focusedPane).not.toHaveClass("dim");
     expect(focusedPane).toHaveAttribute("aria-current", "true");

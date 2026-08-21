@@ -6,7 +6,9 @@ import {
   THEME_PREFERENCE_KEY,
 } from "./themePreferences.js";
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  localStorage.clear();
+});
 
 describe("themePreferences", () => {
   it("defaults to system when nothing is stored", () => {

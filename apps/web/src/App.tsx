@@ -477,7 +477,10 @@ function Sidebar({
                                       </span>
                                     </span>
                                   ) : (
-                                    <Status state={null} unread={thread.unread} />
+                                    <Status
+                                      state={null}
+                                      unread={thread.unread}
+                                    />
                                   );
                                 })()}
                               </Link>

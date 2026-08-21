@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveRunStatus, elapsedLabel, PANE_STATUS_LABEL } from "./runStatus.js";
+import {
+  deriveRunStatus,
+  elapsedLabel,
+  PANE_STATUS_LABEL,
+} from "./runStatus.js";
 
 describe("deriveRunStatus", () => {
   it("maps run states to display statuses", () => {

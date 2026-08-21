@@ -39,11 +39,7 @@ export function UndoToast(props: UndoToastProps): JSX.Element {
   return (
     <div className="undo-toast" role="status">
       <span className="undo-toast-message">{message}</span>
-      <button
-        type="button"
-        className="undo-toast-button"
-        onClick={handleUndo}
-      >
+      <button type="button" className="undo-toast-button" onClick={handleUndo}>
         Undo
       </button>
     </div>

@@ -12,6 +12,7 @@ belong here.
 | [Thread management](thread-management.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
+| [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -34,12 +35,24 @@ and compact inline run-state signals.
 
 Tiling workspace surface is a Draft proposal for version 1, distilled from the
 multi-agent tiling workspace design as its first phase. It turns the project
-route into a terminal-style tiling surface of panes with a bottom dock,
-user-controlled collapse and restore, a settled-unread attention signal, the
-approved keybinding set, close-archives-thread behavior, and device-local layout.
-Later phases of that design — additional agent backends, worktree forking, the
-bound right-hand panel, theming, and the server-side efficiency projection —
-remain separate capabilities. Product approval is pending; implementation is in
+route into a terminal-style tiling surface of panes with the approved
+keybinding set, close-archives-thread behavior, and device-local layout. Its
+original collapse-to-dock pane tier and dock attention signal are superseded by
+[Codex-style workspace surface](codex-workspace-surface.md) (see that spec's
+Superseded requirements). Additional agent backends and worktree forking remain
+separate later-phase capabilities. Product approval is pending; implementation
+is in progress under the linked plan and the proposal becomes Current only after
+the user approves it and the behavior is verified.
+
+Codex-style workspace surface is a Draft proposal for version 1 that restyles
+the tiling surface to a calm, near-borderless Codex desktop aesthetic; adds
+complete light and dark themes (System default, live OS follow, before-paint
+apply) behind a new Settings page; renders a single shared, focus-following
+Environment right panel; surfaces a four-way pane-header and sidebar run status
+(working / needs-approval / done / failed); reduces pane actions to Split and
+an immediate Close with an undo toast; and removes the tiling surface's
+collapse-to-dock pane tier entirely, migrating any persisted docked panes back
+into the tiling tree. Product approval is pending; implementation is in
 progress under the linked plan and the proposal becomes Current only after the
 user approves it and the behavior is verified.
 

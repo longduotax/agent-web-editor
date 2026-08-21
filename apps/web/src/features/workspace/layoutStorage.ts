@@ -114,8 +114,7 @@ export function readLayout(
     }
     const parsedV1 = WorkspaceLayoutV1Schema.safeParse(parsedJson);
     if (parsedV1.success) {
-      const { root, panes, docked, focusedPaneId, boundPaneId } =
-        parsedV1.data;
+      const { root, panes, docked, focusedPaneId, boundPaneId } = parsedV1.data;
       let migrated: WorkspaceLayout = {
         root,
         panes,
