@@ -1269,3 +1269,53 @@ a:focus-visible {
     padding-inline: 0.7rem;
   }
 }
+.dock-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.dock-row:empty {
+  padding: 0;
+  border-top: 0;
+}
+.dock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  max-width: 14rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.dock-chip:hover,
+.dock-chip:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+.dock-chip:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.dock-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-chip-dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--blue);
+}
