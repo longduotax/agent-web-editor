@@ -42,7 +42,6 @@ import { ErrorNotice } from "./components/ErrorNotice.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
-import { NewChatPane } from "./features/workspace/NewChatPane.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
   INSPECTOR_MAX_WIDTH,
@@ -852,26 +851,11 @@ function Inspector({
 function NewChatRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
-  const navigate = useNavigate();
   if (!projectResult.success) return <NotFound />;
   const projectId = projectResult.data;
   return (
     <WorkspaceLayout selectedProjectId={projectId}>
-      <NewChatPane
-        projectId={projectId}
-        focused
-        onFocus={() => {
-          // Only one pane is rendered outside tiling mode.
-        }}
-        onClose={() => {
-          // The pane title bar is chrome for the future tiling surface
-          // (Task 9 wires this up with a real, guarded action). Until then
-          // this refactor must not introduce any new user-visible behavior.
-        }}
-        onThreadStarted={(threadId) => {
-          void navigate(`/projects/${projectId}/threads/${threadId}`);
-        }}
-      />
+      <WorkspaceView projectId={projectId} />
     </WorkspaceLayout>
   );
 }
@@ -974,10 +958,7 @@ function ProjectRoute() {
     );
   return (
     <WorkspaceLayout selectedProjectId={project.id}>
-      <main className="center project-empty">
-        <h1>{project.displayName}</h1>
-        <p>Create a thread using the + button beside the project.</p>
-      </main>
+      <WorkspaceView projectId={project.id} />
     </WorkspaceLayout>
   );
 }

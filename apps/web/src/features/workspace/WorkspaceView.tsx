@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type JSX } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import {
   ThreadIdSchema,
   type ProjectId,
@@ -50,7 +50,12 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     if (paneId === null) return;
     pendingThreadAssignmentRef.current = null;
     controller.assignThreadToPane(paneId, pendingThreadId);
-  }, [controller.layout, controller]);
+    // The dependency below is always invoked as
+    // controller.assignThreadToPane(...) above, never detached from its
+    // object; it's listed only so the effect tracks the (referentially
+    // stable) callback instead of the whole controller object identity.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+  }, [controller.layout, controller.assignThreadToPane]);
 
   const openThread = useCallback((threadId: ThreadId) => {
     const current = controllerRef.current;
@@ -77,6 +82,18 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Never hijack native text-editing shortcuts (e.g. Cmd+Shift+ArrowUp/
+      // Down select-to-start/end, Cmd+Shift+Backspace delete-to-start)
+      // while the user is typing in a composer or the sidebar's rename
+      // input — let the browser/input handle those untouched.
+      const target = event.target as HTMLElement | null;
+      if (
+        target !== null &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      )
+        return;
       const keyEventLike: KeyEventLike = {
         key: normalizeKey(event.key),
         metaKey: event.metaKey,
@@ -124,6 +141,24 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     if (!parsed.success) return;
     openThread(parsed.data);
   }, [params.threadId, openThread]);
+
+  // The "/new" route is the tiling surface's entry point for starting a
+  // fresh chat: on entering it (or switching projects while already on it),
+  // make sure a threadless new-chat pane is focused. Guarded by
+  // [isNewChatRoute, projectId] so this runs once per route entry, not on
+  // every layout change (e.g. once the pane adopts a thread and the route
+  // navigates away, isNewChatRoute flips to false and this won't refire).
+  const location = useLocation();
+  const isNewChatRoute = location.pathname.endsWith("/new");
+  useEffect(() => {
+    if (!isNewChatRoute) return;
+    const layout = controllerRef.current.layout;
+    const focusedPaneId = layout.focusedPaneId;
+    const focusedPane =
+      focusedPaneId !== null ? layout.panes[focusedPaneId] : undefined;
+    if (focusedPaneId !== null && focusedPane?.threadId === null) return;
+    controllerRef.current.newPane();
+  }, [isNewChatRoute, projectId]);
 
   return (
     <div className="workspace-view">

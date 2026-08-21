@@ -86,8 +86,12 @@ function stubMacPlatform() {
   vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
 }
 
-function renderWorkspace(initialEntry: string) {
-  stubStorage();
+function renderWorkspace(
+  initialEntry: string,
+  options?: { seedStore?: (store: Map<string, string>) => void },
+) {
+  const store = stubStorage();
+  options?.seedStore?.(store);
   api.getWorkspace.mockResolvedValue({
     projects: [
       {
@@ -128,6 +132,10 @@ function renderWorkspace(initialEntry: string) {
           />
           <Route
             path="/projects/:projectId/threads/:threadId"
+            element={<WorkspaceView projectId={projectId} />}
+          />
+          <Route
+            path="/projects/:projectId/new"
             element={<WorkspaceView projectId={projectId} />}
           />
         </Routes>
@@ -193,5 +201,58 @@ describe("WorkspaceView", () => {
     });
     const region = heading.closest("[aria-current]");
     expect(region).toHaveAttribute("aria-current", "true");
+  });
+
+  it("suppresses workspace shortcuts while a text-editing target is focused, so native text-editing shortcuts (e.g. select-to-start/end, delete-to-start) reach the input untouched", async () => {
+    stubMacPlatform();
+    renderWorkspace(`/projects/${projectId}`);
+    const composer = await screen.findByLabelText("First message");
+    composer.focus();
+
+    // Cmd+Shift+ArrowDown is the "collapse" chord; on a mac it also
+    // means select-to-end-of-field inside a text input. With a
+    // text-editing target focused, the workspace shortcut must be
+    // suppressed entirely (no preventDefault, no collapse).
+    const result = fireEvent.keyDown(composer, {
+      key: "ArrowDown",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(result).toBe(true); // default was not prevented
+
+    // Collapsing the sole pane would swap the tiling surface to its empty
+    // state and add a dock chip; neither happened.
+    expect(screen.queryByText("No panes are open.")).not.toBeInTheDocument();
+    expect(document.querySelector(".dock-chip")).toBeNull();
+    expect(screen.getByLabelText("New chat")).toBeInTheDocument();
+  });
+
+  it("mounts the tiling surface and dock on the /new route, creating a focused threadless pane even when the persisted layout's focused pane already has a thread", async () => {
+    const seededPaneId = "seeded-pane";
+    renderWorkspace(`/projects/${projectId}/new`, {
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 1,
+            root: { type: "pane", id: seededPaneId },
+            panes: { [seededPaneId]: { threadId } },
+            docked: [],
+            focusedPaneId: seededPaneId,
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    // The persisted pane still has "Example thread" tiled...
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(document.querySelector(".tiling-surface")).not.toBeNull();
+    expect(document.querySelector(".dock-row")).not.toBeNull();
+
+    // ...and landing on /new adds and focuses a fresh threadless pane
+    // alongside it, rather than reusing the already-threaded one.
+    const composer = await screen.findByLabelText("First message");
+    expect(composer.closest(".pane")).toHaveClass("pane-focused");
   });
 });
