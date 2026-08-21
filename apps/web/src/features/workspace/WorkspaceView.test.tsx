@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -16,6 +17,7 @@ import type { ProjectId, ThreadId, ThreadSnapshot } from "@pi-web/contracts";
 const api = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   getSnapshot: vi.fn(),
+  getStatus: vi.fn(),
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
   markViewed: vi.fn(),
@@ -141,6 +143,7 @@ function renderWorkspace(
     (_projectId: ProjectId, id: ThreadId) =>
       Promise.resolve(snapshotsById[id] ?? snapshot),
   );
+  api.getStatus.mockResolvedValue({ available: true, files: [], message: null });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -494,6 +497,7 @@ describe("WorkspaceView", () => {
     });
     let currentSnapshot = snapshot;
     api.getSnapshot.mockImplementation(() => Promise.resolve(currentSnapshot));
+    api.getStatus.mockResolvedValue({ available: true, files: [], message: null });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -527,7 +531,14 @@ describe("WorkspaceView", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
 
-    await screen.findByText("Failed");
+    // Both the pane header and the (single, shared) Environment panel now
+    // reflect the focused thread's status, so scope the assertion to the
+    // pane header rather than asserting a single "Failed" in the whole
+    // document.
+    const region = await screen.findByRole("region", {
+      name: "Example thread",
+    });
+    await within(region).findByText("Failed");
 
     const after = JSON.parse(store.get(layoutKey) ?? "null") as {
       focusedPaneId: string | null;

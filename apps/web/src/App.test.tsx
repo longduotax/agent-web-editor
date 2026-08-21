@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -259,7 +260,15 @@ describe("safe and accessible workspace rendering", () => {
       "worktree",
     );
     expect(screen.getByLabelText("Starting state")).toHaveValue("none");
-    expect(screen.queryByLabelText(/environment/i)).not.toBeInTheDocument();
+    // Scoped to the new-chat form itself: the workspace surface's separate,
+    // focus-following Environment panel (docked alongside the tiling
+    // surface) legitimately has "Environment"-labelled elements of its own,
+    // but the composer form must not grow an environment control.
+    const form = document.querySelector(".new-chat-card");
+    if (form === null) throw new Error("expected the new-chat form");
+    expect(
+      within(form as HTMLElement).queryByLabelText(/environment/i),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText(/Local changes are not copied/),
     ).toBeInTheDocument();

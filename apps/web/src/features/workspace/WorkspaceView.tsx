@@ -8,11 +8,17 @@ import {
 
 import { archiveThread } from "../../api/client.js";
 import {
+  isEnvironmentOpen,
+  readEnvironmentVisibility,
+  writeEnvironmentVisibility,
+} from "../settings/environmentPreferences.js";
+import { EnvironmentPanel } from "./EnvironmentPanel.js";
+import {
   detectPlatform,
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
-import type { PaneId, WorkspaceLayout } from "./layoutTree.js";
+import { tiledPaneIds, type PaneId, type WorkspaceLayout } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
 import { UndoToast } from "./UndoToast.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
@@ -227,14 +233,69 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     [isNewChatRoute, navigate, projectId],
   );
 
+  // The Environment panel is single, shared, and focus-following (CWS-06) —
+  // exactly one instance for the whole surface, docked as a right column
+  // (never a floating overlay), never one per pane. Its visibility is a
+  // device-local preference: "auto" opens it while the surface is a single
+  // pane and hides it once split; "shown"/"hidden" are an explicit,
+  // persisted override from the toggle below.
+  const [environmentVisibility, setEnvironmentVisibility] = useState(
+    readEnvironmentVisibility,
+  );
+  const tiledPaneCount = tiledPaneIds(controller.layout).length;
+  const environmentOpen = isEnvironmentOpen(
+    environmentVisibility,
+    tiledPaneCount,
+  );
+  const toggleEnvironment = useCallback(() => {
+    setEnvironmentVisibility((current) => {
+      const next = isEnvironmentOpen(current, tiledPaneCount)
+        ? "hidden"
+        : "shown";
+      writeEnvironmentVisibility(next);
+      return next;
+    });
+  }, [tiledPaneCount]);
+  const hideEnvironment = useCallback(() => {
+    setEnvironmentVisibility("hidden");
+    writeEnvironmentVisibility("hidden");
+  }, []);
+
   return (
     <div className="workspace-view">
-      <TilingSurface
-        projectId={projectId}
-        controller={controller}
-        onClosePane={handleClose}
-        onThreadStarted={handleThreadStarted}
-      />
+      <div className="workspace-main">
+        <TilingSurface
+          projectId={projectId}
+          controller={controller}
+          onClosePane={handleClose}
+          onThreadStarted={handleThreadStarted}
+        />
+        <button
+          type="button"
+          className="icon-btn environment-toggle"
+          aria-label="Toggle environment panel"
+          aria-pressed={environmentOpen}
+          title="Toggle environment panel"
+          onClick={toggleEnvironment}
+        >
+          <svg
+            className="ico"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M15 4v16" />
+          </svg>
+        </button>
+      </div>
+      {environmentOpen && (
+        <EnvironmentPanel
+          projectId={projectId}
+          controller={controller}
+          onClose={hideEnvironment}
+        />
+      )}
       {pendingClose !== null && (
         // Keyed by paneId so a flush that swaps one pending close for
         // another (see handleClose) remounts the toast instead of reusing
