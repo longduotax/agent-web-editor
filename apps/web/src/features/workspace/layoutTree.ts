@@ -22,8 +22,7 @@ export type LayoutNode = PaneNode | SplitNode;
 
 export interface WorkspaceLayout {
   root: LayoutNode | null; // null = no tiled panes
-  panes: Record<PaneId, { threadId: ThreadId | null }>; // all panes, tiled + docked
-  docked: PaneId[]; // dock order, index 0 = most recently docked
+  panes: Record<PaneId, { threadId: ThreadId | null }>; // all panes, all tiled
   focusedPaneId: PaneId | null;
   boundPaneId: PaneId | null; // right-panel binding (carried; used in a later phase)
 }
@@ -91,7 +90,6 @@ export function createInitialLayout(makeId: () => PaneId): WorkspaceLayout {
   return {
     root: { type: "pane", id },
     panes: { [id]: { threadId: null } },
-    docked: [],
     focusedPaneId: id,
     boundPaneId: null,
   };
@@ -123,55 +121,36 @@ export function splitPane(
   };
 }
 
-function removePane(
-  l: WorkspaceLayout,
-  id: PaneId,
-  keepInPanes: boolean,
-): WorkspaceLayout {
+export function closePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
   if (l.root === null) return l;
   const root = removeLeaf(l.root, id);
   const focusedPaneId = nextFocus(
     root,
     l.focusedPaneId === id ? null : l.focusedPaneId,
   );
-  const panes = keepInPanes
-    ? l.panes
-    : Object.fromEntries(
-        Object.entries(l.panes).filter(([paneId]) => paneId !== id),
-      );
-  const docked = keepInPanes ? l.docked : l.docked.filter((d) => d !== id);
+  const panes = Object.fromEntries(
+    Object.entries(l.panes).filter(([paneId]) => paneId !== id),
+  );
   const boundPaneId = l.boundPaneId === id ? null : l.boundPaneId;
-  return { ...l, root, panes, docked, focusedPaneId, boundPaneId };
+  return { ...l, root, panes, focusedPaneId, boundPaneId };
 }
 
-export function closePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
-  return removePane(l, id, false);
-}
-
-export function collapsePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
-  if (l.root === null || !nodeContains(l.root, id)) return l;
-  const collapsed = removePane(l, id, true);
-  return { ...collapsed, docked: [id, ...collapsed.docked] };
-}
-
-export function restorePane(
+// Internal helper used only to migrate v1 persisted layouts (which had a
+// `docked` tier) forward into v2's pure tiled tree: folds a pane id that
+// used to live in `docked` back into the tiled tree, splitting the focused
+// pane along "row" (or becoming the root when there is none), and focuses
+// it. Not part of the public pane-management API — application code drives
+// the tree via splitPane/closePane/moveFocus/etc.
+export function restoreIntoTree(
   l: WorkspaceLayout,
   id: PaneId,
-  makeId: () => PaneId,
 ): WorkspaceLayout {
-  if (!l.docked.includes(id)) return l;
-  const docked = l.docked.filter((d) => d !== id);
   if (l.root === null) {
-    return {
-      ...l,
-      root: { type: "pane", id },
-      docked,
-      focusedPaneId: id,
-    };
+    return { ...l, root: { type: "pane", id }, focusedPaneId: id };
   }
   const target = l.focusedPaneId ?? leafIds(l.root)[0];
   if (target === undefined) return l;
-  const splitId: SplitId = makeId();
+  const splitId: SplitId = `split-${crypto.randomUUID()}`;
   const root = replaceNode(l.root, target, (pane): LayoutNode => ({
     type: "split",
     id: splitId,
@@ -179,7 +158,7 @@ export function restorePane(
     children: [pane, { type: "pane", id }],
     sizes: [0.5, 0.5],
   }));
-  return { ...l, root, docked, focusedPaneId: id };
+  return { ...l, root, focusedPaneId: id };
 }
 
 export function assignThread(

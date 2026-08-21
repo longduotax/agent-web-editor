@@ -8,7 +8,6 @@ import {
 } from "@pi-web/contracts";
 
 import { archiveThread } from "../../api/client.js";
-import { DockRow } from "./Dock.js";
 import {
   detectPlatform,
   resolveCommand,
@@ -71,8 +70,6 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
       ([, pane]) => pane.threadId === threadId,
     )?.[0];
     if (existingPaneId !== undefined) {
-      if (layout.docked.includes(existingPaneId))
-        current.restore(existingPaneId);
       current.focus(existingPaneId);
       return;
     }
@@ -190,7 +187,6 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
         onClosePane={handleClose}
         onThreadStarted={handleThreadStarted}
       />
-      <DockRow projectId={projectId} controller={controller} />
     </div>
   );
 }

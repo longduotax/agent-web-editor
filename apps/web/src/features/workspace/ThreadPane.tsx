@@ -28,7 +28,6 @@ export interface ThreadPaneProps {
   threadId: ThreadId;
   focused: boolean;
   onFocus(): void;
-  onCollapse(): void;
   onClose(): void;
   onBind(): void;
 }
@@ -266,17 +265,6 @@ export function ThreadPane(props: ThreadPaneProps) {
           {snapshot.data?.thread.title ?? "Thread"}
         </span>
         <div className="pane-title-actions">
-          <button
-            type="button"
-            aria-label="Collapse"
-            title="Collapse"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onCollapse();
-            }}
-          >
-            ⌄
-          </button>
           <button
             type="button"
             aria-label="Bind panel"

@@ -5,10 +5,8 @@ import {
   assignThread,
   bindPane,
   closePane,
-  collapsePane,
   focusPane,
   moveFocus,
-  restorePane,
   setSplitSizes,
   splitPane,
 } from "./layoutTree.js";
@@ -22,10 +20,8 @@ export interface WorkspaceLayoutController {
   assignThreadToPane(paneId: PaneId, threadId: ThreadId): void;
   newPane(): void;
   focus(paneId: PaneId): void;
-  restore(paneId: PaneId): void;
   bind(paneId: PaneId): void;
   resize(splitId: SplitId, sizes: [number, number]): void;
-  collapse(paneId: PaneId): void;
   close(paneId: PaneId): void;
 }
 
@@ -45,11 +41,6 @@ function applyCommand(
       if (focusedPaneId === null) return layout;
       return splitPane(layout, focusedPaneId, command.axis, makePaneId);
     }
-    case "collapse": {
-      const { focusedPaneId } = layout;
-      if (focusedPaneId === null) return layout;
-      return collapsePane(layout, focusedPaneId);
-    }
     case "close": {
       const { focusedPaneId } = layout;
       if (focusedPaneId === null) return layout;
@@ -62,11 +53,6 @@ function applyCommand(
     }
     case "focus":
       return moveFocus(layout, command.direction);
-    case "restore": {
-      const mostRecentlyDocked = layout.docked[0];
-      if (mostRecentlyDocked === undefined) return layout;
-      return restorePane(layout, mostRecentlyDocked, makePaneId);
-    }
     default:
       return layout;
   }
@@ -122,20 +108,12 @@ export function useWorkspaceLayout(
     setLayout((current) => focusPane(current, paneId));
   }, []);
 
-  const restore = useCallback((paneId: PaneId) => {
-    setLayout((current) => restorePane(current, paneId, makePaneId));
-  }, []);
-
   const bind = useCallback((paneId: PaneId) => {
     setLayout((current) => bindPane(current, paneId));
   }, []);
 
   const resize = useCallback((splitId: SplitId, sizes: [number, number]) => {
     setLayout((current) => setSplitSizes(current, splitId, sizes));
-  }, []);
-
-  const collapse = useCallback((paneId: PaneId) => {
-    setLayout((current) => collapsePane(current, paneId));
   }, []);
 
   const close = useCallback((paneId: PaneId) => {
@@ -148,10 +126,8 @@ export function useWorkspaceLayout(
     assignThreadToPane,
     newPane,
     focus,
-    restore,
     bind,
     resize,
-    collapse,
     close,
   };
 }

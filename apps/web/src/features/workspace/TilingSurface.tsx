@@ -32,7 +32,7 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   const { root } = controller.layout;
 
   if (root === null) {
-    return <EmptyState controller={controller} />;
+    return <EmptyState />;
   }
 
   return (
@@ -49,23 +49,11 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   );
 }
 
-function EmptyState({ controller }: { controller: WorkspaceLayoutController }) {
-  const mostRecentlyDocked = controller.layout.docked[0];
+function EmptyState() {
   return (
     <div className="tiling-empty" role="status">
       <p>No panes are open.</p>
-      {mostRecentlyDocked !== undefined ? (
-        <button
-          type="button"
-          onClick={() => {
-            controller.restore(mostRecentlyDocked);
-          }}
-        >
-          Restore last pane
-        </button>
-      ) : (
-        <p>Start a new chat from the sidebar to open a pane here.</p>
-      )}
+      <p>Start a new chat from the sidebar to open a pane here.</p>
     </div>
   );
 }
@@ -126,9 +114,6 @@ function PaneRegion({
           focused={focused}
           onFocus={() => {
             controller.focus(paneId);
-          }}
-          onCollapse={() => {
-            controller.collapse(paneId);
           }}
           onClose={() => {
             onClosePane(paneId, threadId);

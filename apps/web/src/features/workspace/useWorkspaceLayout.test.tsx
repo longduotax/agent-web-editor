@@ -44,20 +44,6 @@ describe("useWorkspaceLayout", () => {
     expect(tiled).toContain(result.current.layout.focusedPaneId);
   });
 
-  it("moves the focused pane into the dock on collapse", () => {
-    stubStorage();
-    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
-    const focusedPaneId = result.current.layout.focusedPaneId;
-    expect(focusedPaneId).not.toBeNull();
-
-    act(() => {
-      result.current.dispatch({ type: "collapse" });
-    });
-
-    expect(result.current.layout.docked).toContain(focusedPaneId);
-    expect(tiledPaneIds(result.current.layout)).not.toContain(focusedPaneId);
-  });
-
   it("persists a split across unmount/remount for the same project", () => {
     stubStorage();
     const first = renderHook(() => useWorkspaceLayout(PROJECT_ID));
@@ -99,31 +85,6 @@ describe("useWorkspaceLayout", () => {
       expect(a).toBeCloseTo(0.2);
       expect(b).toBeCloseTo(0.8);
     }
-  });
-
-  it("collapse(paneId) docks that specific pane, not the focused one", () => {
-    stubStorage();
-    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
-    const originalPaneId = result.current.layout.focusedPaneId;
-    expect(originalPaneId).not.toBeNull();
-
-    act(() => {
-      result.current.dispatch({ type: "split", axis: "row" });
-    });
-    // The split focuses the newly created pane; the original pane is now
-    // unfocused but still tiled.
-    const newPaneId = result.current.layout.focusedPaneId;
-    expect(newPaneId).not.toBe(originalPaneId);
-    expect(tiledPaneIds(result.current.layout)).toContain(originalPaneId);
-
-    act(() => {
-      if (originalPaneId !== null) result.current.collapse(originalPaneId);
-    });
-
-    expect(result.current.layout.docked).toContain(originalPaneId);
-    expect(tiledPaneIds(result.current.layout)).not.toContain(originalPaneId);
-    // The focused pane is untouched by targeting a different pane.
-    expect(tiledPaneIds(result.current.layout)).toContain(newPaneId);
   });
 
   it("close(paneId) removes that specific pane, not the focused one", () => {

@@ -2,8 +2,6 @@ import type { FocusDirection, SplitAxis } from "./layoutTree.js";
 
 export type WorkspaceCommand =
   | { type: "split"; axis: SplitAxis }
-  | { type: "collapse" }
-  | { type: "restore" }
   | { type: "close" }
   | { type: "focus"; direction: FocusDirection }
   | { type: "bind" };
@@ -25,8 +23,7 @@ export interface Platform {
  *
  * Two disjoint modifier groups on the primary modifier (Cmd on mac, Alt
  * elsewhere):
- *  - Shift + primary (no Alt on mac / no Meta elsewhere) => split/collapse/
- *    restore/close.
+ *  - Shift + primary (no Alt on mac / no Meta elsewhere) => split/close.
  *  - primary + Alt (Meta+Alt on mac, Ctrl+Alt elsewhere), no Shift =>
  *    focus/bind.
  */
@@ -44,10 +41,6 @@ export function resolveCommand(
         return { type: "split", axis: "row" };
       case "-":
         return { type: "split", axis: "column" };
-      case "ArrowDown":
-        return { type: "collapse" };
-      case "ArrowUp":
-        return { type: "restore" };
       case "Backspace":
         return { type: "close" };
       default:

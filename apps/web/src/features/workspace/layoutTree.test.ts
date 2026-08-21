@@ -3,10 +3,9 @@ import type { ThreadId } from "@pi-web/contracts";
 import {
   assignThread,
   closePane,
-  collapsePane,
   createInitialLayout,
   moveFocus,
-  restorePane,
+  restoreIntoTree,
   setSplitSizes,
   splitPane,
   tiledPaneIds,
@@ -23,7 +22,6 @@ describe("layoutTree", () => {
     expect(tiledPaneIds(l)).toEqual(["pane-1"]);
     expect(l.focusedPaneId).toBe("pane-1");
     expect(l.panes["pane-1"]?.threadId).toBeNull();
-    expect(l.docked).toEqual([]);
   });
 
   it("splits right into a focused new pane", () => {
@@ -56,18 +54,40 @@ describe("layoutTree", () => {
     expect(Object.keys(result.panes)).toEqual(Object.keys(l.panes));
   });
 
-  it("collapses to the dock and restores back into the tree", () => {
+  it("restoreIntoTree folds a docked-style id back into the tree, preserving existing splits and focusing it", () => {
     const make = ids();
     let l = createInitialLayout(make);
-    l = splitPane(l, "pane-1", "row", make); // pane-2 focused
-    l = collapsePane(l, "pane-2");
-    expect(l.docked).toEqual(["pane-2"]);
-    expect(tiledPaneIds(l)).toEqual(["pane-1"]);
-    expect(l.panes["pane-2"]).toBeDefined();
-    l = restorePane(l, "pane-2", make);
-    expect(l.docked).toEqual([]);
-    expect(tiledPaneIds(l)).toContain("pane-2");
-    expect(l.focusedPaneId).toBe("pane-2");
+    l = splitPane(l, "pane-1", "row", make); // pane-1, pane-2; pane-2 focused
+    l = splitPane(l, "pane-1", "column", make); // pane-1 further split
+    const splitPanes = tiledPaneIds(l);
+    expect(splitPanes).toHaveLength(3);
+    // Simulate a v1-style docked pane that was removed from the tree but
+    // kept in `panes`.
+    const beforeRoot = l.root;
+    l = { ...l, panes: { ...l.panes, "pane-docked": { threadId: null } } };
+
+    l = restoreIntoTree(l, "pane-docked");
+
+    // All previously-tiled panes are still present; nothing was lost.
+    for (const id of splitPanes) expect(tiledPaneIds(l)).toContain(id);
+    expect(tiledPaneIds(l)).toContain("pane-docked");
+    expect(tiledPaneIds(l)).toHaveLength(4);
+    // The existing split structure is preserved (nested, not discarded).
+    expect(l.root).not.toEqual(beforeRoot);
+    expect(l.focusedPaneId).toBe("pane-docked");
+  });
+
+  it("restoreIntoTree becomes the root when there is no tiled pane", () => {
+    const make = ids();
+    let l = createInitialLayout(make);
+    l = closePane(l, "pane-1");
+    expect(l.root).toBeNull();
+
+    l = { ...l, panes: { ...l.panes, "pane-docked": { threadId: null } } };
+    l = restoreIntoTree(l, "pane-docked");
+
+    expect(l.root).toEqual({ type: "pane", id: "pane-docked" });
+    expect(l.focusedPaneId).toBe("pane-docked");
   });
 
   it("closing a pane collapses its parent split and forgets it", () => {

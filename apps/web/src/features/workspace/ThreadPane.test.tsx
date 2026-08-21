@@ -67,7 +67,6 @@ const snapshot: ThreadSnapshot = {
 function renderPane(
   overrides: {
     onFocus?: () => void;
-    onCollapse?: () => void;
     onClose?: () => void;
     onBind?: () => void;
   } = {},
@@ -76,7 +75,6 @@ function renderPane(
     defaultOptions: { queries: { retry: false } },
   });
   const onFocus = overrides.onFocus ?? vi.fn();
-  const onCollapse = overrides.onCollapse ?? vi.fn();
   const onClose = overrides.onClose ?? vi.fn();
   const onBind = overrides.onBind ?? vi.fn();
   render(
@@ -87,14 +85,13 @@ function renderPane(
           threadId={threadId}
           focused
           onFocus={onFocus}
-          onCollapse={onCollapse}
           onClose={onClose}
           onBind={onBind}
         />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onFocus, onCollapse, onClose, onBind };
+  return { onFocus, onClose, onBind };
 }
 
 describe("ThreadPane", () => {
@@ -111,15 +108,12 @@ describe("ThreadPane", () => {
     ).toBeInTheDocument();
   });
 
-  it("invokes onCollapse and onClose from the title bar, without changing behavior otherwise", async () => {
+  it("invokes onClose from the title bar, without changing behavior otherwise", async () => {
     api.getSnapshot.mockResolvedValue(snapshot);
     const user = userEvent.setup();
-    const { onCollapse, onClose } = renderPane();
+    const { onClose } = renderPane();
 
     await screen.findByRole("heading", { name: "Example thread" });
-
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
-    expect(onCollapse).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);

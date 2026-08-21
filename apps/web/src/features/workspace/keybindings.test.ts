@@ -20,7 +20,7 @@ function key(overrides: Partial<KeyEventLike> & { key: string }): KeyEventLike {
 }
 
 describe("resolveCommand", () => {
-  describe("split / collapse / restore / close (shift + primary)", () => {
+  describe("split / close (shift + primary)", () => {
     it("mac: shift+meta+= splits row", () => {
       expect(
         resolveCommand(key({ key: "=", shiftKey: true, metaKey: true }), mac),
@@ -45,40 +45,40 @@ describe("resolveCommand", () => {
       ).toEqual({ type: "split", axis: "column" });
     });
 
-    it("mac: shift+meta+ArrowDown collapses", () => {
+    it("mac: shift+meta+ArrowDown no longer resolves to a command", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowDown", shiftKey: true, metaKey: true }),
           mac,
         ),
-      ).toEqual({ type: "collapse" });
+      ).toBeNull();
     });
 
-    it("other: shift+alt+ArrowDown collapses", () => {
+    it("other: shift+alt+ArrowDown no longer resolves to a command", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowDown", shiftKey: true, altKey: true }),
           other,
         ),
-      ).toEqual({ type: "collapse" });
+      ).toBeNull();
     });
 
-    it("mac: shift+meta+ArrowUp restores", () => {
+    it("mac: shift+meta+ArrowUp no longer resolves to a command", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowUp", shiftKey: true, metaKey: true }),
           mac,
         ),
-      ).toEqual({ type: "restore" });
+      ).toBeNull();
     });
 
-    it("other: shift+alt+ArrowUp restores", () => {
+    it("other: shift+alt+ArrowUp no longer resolves to a command", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowUp", shiftKey: true, altKey: true }),
           other,
         ),
-      ).toEqual({ type: "restore" });
+      ).toBeNull();
     });
 
     it("mac: shift+meta+Backspace closes", () => {
@@ -156,7 +156,7 @@ describe("resolveCommand", () => {
       expect(resolveCommand(key({ key: "=", altKey: true }), other)).toBeNull();
     });
 
-    it("mac: meta+alt+ArrowDown resolves to focus:down, not collapse", () => {
+    it("mac: meta+alt+ArrowDown resolves to focus:down", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowDown", metaKey: true, altKey: true }),
@@ -165,13 +165,13 @@ describe("resolveCommand", () => {
       ).toEqual({ type: "focus", direction: "down" });
     });
 
-    it("mac: shift+meta+ArrowDown resolves to collapse, not focus", () => {
+    it("mac: shift+meta+ArrowDown no longer resolves to a command", () => {
       expect(
         resolveCommand(
           key({ key: "ArrowDown", shiftKey: true, metaKey: true }),
           mac,
         ),
-      ).toEqual({ type: "collapse" });
+      ).toBeNull();
     });
   });
 });

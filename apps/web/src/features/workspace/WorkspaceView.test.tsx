@@ -209,10 +209,10 @@ describe("WorkspaceView", () => {
     const composer = await screen.findByLabelText("First message");
     composer.focus();
 
-    // Cmd+Shift+ArrowDown is the "collapse" chord; on a mac it also
+    // Cmd+Shift+ArrowDown used to be the "collapse" chord; on a mac it also
     // means select-to-end-of-field inside a text input. With a
     // text-editing target focused, the workspace shortcut must be
-    // suppressed entirely (no preventDefault, no collapse).
+    // suppressed entirely (no preventDefault, no dispatch).
     const result = fireEvent.keyDown(composer, {
       key: "ArrowDown",
       metaKey: true,
@@ -220,24 +220,20 @@ describe("WorkspaceView", () => {
     });
     expect(result).toBe(true); // default was not prevented
 
-    // Collapsing the sole pane would swap the tiling surface to its empty
-    // state and add a dock chip; neither happened.
     expect(screen.queryByText("No panes are open.")).not.toBeInTheDocument();
-    expect(document.querySelector(".dock-chip")).toBeNull();
     expect(screen.getByLabelText("New chat")).toBeInTheDocument();
   });
 
-  it("mounts the tiling surface and dock on the /new route, creating a focused threadless pane even when the persisted layout's focused pane already has a thread", async () => {
+  it("mounts the tiling surface on the /new route, creating a focused threadless pane even when the persisted layout's focused pane already has a thread", async () => {
     const seededPaneId = "seeded-pane";
     renderWorkspace(`/projects/${projectId}/new`, {
       seedStore: (store) => {
         store.set(
           `pi-workspace:layout:${projectId}`,
           JSON.stringify({
-            version: 1,
+            version: 2,
             root: { type: "pane", id: seededPaneId },
             panes: { [seededPaneId]: { threadId } },
-            docked: [],
             focusedPaneId: seededPaneId,
             boundPaneId: null,
           }),
@@ -248,7 +244,6 @@ describe("WorkspaceView", () => {
     // The persisted pane still has "Example thread" tiled...
     await screen.findByRole("heading", { name: "Example thread" });
     expect(document.querySelector(".tiling-surface")).not.toBeNull();
-    expect(document.querySelector(".dock-row")).not.toBeNull();
 
     // ...and landing on /new adds and focuses a fresh threadless pane
     // alongside it, rather than reusing the already-threaded one.
