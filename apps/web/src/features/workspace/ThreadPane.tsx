@@ -6,6 +6,7 @@ import {
   type ProjectId,
   type ThreadId,
   type ThreadSnapshot,
+  type TranscriptItem,
 } from "@pi-web/contracts";
 
 import {
@@ -16,7 +17,7 @@ import {
   stop,
   webSocketUrl,
 } from "../../api/client.js";
-import { Activity, displayTranscript } from "../../components/Activity.js";
+import { ActivityGroup, displayTranscript } from "../../components/Activity.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
@@ -94,10 +95,38 @@ function useLive(
   ]);
 }
 
+type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
+type NonToolItem = Exclude<TranscriptItem, { kind: "tool" }>;
+type TranscriptGroup =
+  | { kind: "tool-run"; items: ToolItem[] }
+  | { kind: "single"; item: NonToolItem };
+
+// Contiguous tool items between messages/diagnostics collapse into one
+// "Worked for …" disclosure, matching the Codex reading model.
+function groupTranscriptItems(
+  items: readonly TranscriptItem[],
+): TranscriptGroup[] {
+  const groups: TranscriptGroup[] = [];
+  for (const item of items) {
+    if (item.kind === "tool") {
+      const last = groups.at(-1);
+      if (last?.kind === "tool-run") {
+        last.items.push(item);
+      } else {
+        groups.push({ kind: "tool-run", items: [item] });
+      }
+    } else {
+      groups.push({ kind: "single", item });
+    }
+  }
+  return groups;
+}
+
 function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
+  const items = displayTranscript(snapshot.transcript);
   return (
     <div className="transcript" aria-label="Conversation">
-      {snapshot.transcript.length === 0 && (
+      {items.length === 0 && (
         <div className="empty conversation-empty">
           <strong>No messages yet</strong>
           <span>
@@ -105,32 +134,47 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
           </span>
         </div>
       )}
-      {displayTranscript(snapshot.transcript).map((item) =>
-        item.kind === "message" ? (
-          <article className={`message message-${item.role}`} key={item.id}>
-            <header>
-              {item.role === "assistant"
-                ? "Pi"
-                : item.role === "user"
-                  ? "You"
-                  : "System"}
-            </header>
+      {groupTranscriptItems(items).map((group) => {
+        if (group.kind === "tool-run") {
+          return (
+            <ActivityGroup
+              items={group.items}
+              key={group.items[0]?.id}
+              projectPath={snapshot.project.displayPath}
+            />
+          );
+        }
+        const { item } = group;
+        if (item.kind === "diagnostic") {
+          return (
+            <p className={`diagnostic ${item.level}`} key={item.id}>
+              {item.text}
+            </p>
+          );
+        }
+        if (item.role === "user") {
+          return (
+            <div className="u-row" key={item.id}>
+              <div className="u-bubble">
+                <span className="sr-only">You</span>
+                <div className="markdown">
+                  <Markdown>{item.text}</Markdown>
+                </div>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div className="a-block" key={item.id}>
+            <span className="sr-only">
+              {item.role === "assistant" ? "Pi" : "System"}
+            </span>
             <div className="markdown">
               <Markdown>{item.text}</Markdown>
             </div>
-          </article>
-        ) : item.kind === "tool" ? (
-          <Activity
-            item={item}
-            key={item.id}
-            projectPath={snapshot.project.displayPath}
-          />
-        ) : (
-          <p className={`diagnostic ${item.level}`} key={item.id}>
-            {item.text}
-          </p>
-        ),
-      )}
+          </div>
+        );
+      })}
       {snapshot.diagnostics.map((diagnostic) => (
         <p className="diagnostic warning" key={diagnostic}>
           {diagnostic}
@@ -313,6 +357,11 @@ export function ThreadPane(props: ThreadPaneProps) {
                   : ` · ⑂ ${threadWorkspace.branchName}`}
               </small>
               <h1>{snapshot.data.thread.title}</h1>
+              <p className="trust-note">
+                <span className="trust-dot" aria-hidden="true" />
+                <strong>Direct execution:</strong> Pi tools run with your user
+                permissions, without application approval or an OS sandbox.
+              </p>
             </div>
             <Status
               state={
@@ -323,10 +372,6 @@ export function ThreadPane(props: ThreadPaneProps) {
               unread={snapshot.data.thread.unread}
             />
           </header>
-          <div className="trust-warning">
-            <strong>Direct execution:</strong> Pi tools run with your user
-            permissions, without application approval or an OS sandbox.
-          </div>
           <Transcript snapshot={snapshot.data} />
           <Composer
             projectId={projectId}

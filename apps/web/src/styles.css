@@ -920,37 +920,87 @@ a:focus-visible {
   margin: 0.12rem 0 0;
   font-size: 1rem;
 }
-.trust-warning {
-  padding: 0.42rem 1.25rem;
-  border-bottom: 1px solid #473e2c;
-  color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 8%, var(--card));
-  font-size: 0.74rem;
+.trust-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.trust-note strong {
+  color: var(--muted);
+  font-weight: 650;
+}
+.trust-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--amber);
 }
 .transcript {
   flex: 1;
   overflow: auto;
   padding: 1.5rem max(1rem, 8%);
 }
-.message {
+.u-row {
+  display: flex;
   max-width: 54rem;
   margin: 0 auto 1.4rem;
+  justify-content: flex-end;
 }
-.message > header {
-  margin-bottom: 0.4rem;
+.u-bubble {
+  max-width: 80%;
+  padding: 0.62rem 0.9rem;
+  border-radius: 1.05rem;
+  background: var(--user-pill);
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.a-block {
+  max-width: 54rem;
+  margin: 0 auto 1.4rem;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.worked-group {
+  max-width: 54rem;
+  margin: 0.4rem auto 1.1rem;
+}
+.worked-group summary::-webkit-details-marker {
+  display: none;
+}
+.worked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+  list-style: none;
 }
-.message-user {
-  padding: 0.8rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.7rem;
-  background: var(--surface-2);
+.worked:hover {
+  color: var(--text-2);
+}
+.worked .chev {
+  transition: transform 0.12s ease;
+}
+.worked-group[open] .worked .chev {
+  transform: rotate(90deg);
+}
+.worked-items {
+  display: grid;
+  gap: 0.08rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--hairline);
 }
 .markdown {
   color: var(--text);
-  line-height: 1.55;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .markdown > :first-child {
@@ -980,8 +1030,7 @@ a:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .activity {
-  max-width: 54rem;
-  margin: 0.08rem auto;
+  margin: 0.08rem 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
   color: #b7bdc9;
@@ -1725,8 +1774,5 @@ a:focus-visible {
   .transcript,
   .composer {
     padding-inline: 0.65rem;
-  }
-  .trust-warning {
-    padding-inline: 0.7rem;
   }
 }

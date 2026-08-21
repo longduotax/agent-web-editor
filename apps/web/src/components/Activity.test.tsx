@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
-import { Activity, displayTranscript } from "./Activity.js";
+import { Activity, ActivityGroup, displayTranscript } from "./Activity.js";
+
+afterEach(() => {
+  cleanup();
+});
 
 const runningRead: TranscriptItem = {
   id: "call",
@@ -80,5 +84,38 @@ describe("agent tool activity", () => {
 
     expect(screen.getByText("deploy preview")).toBeInTheDocument();
     expect(screen.getByText("not-json")).toBeInTheDocument();
+  });
+});
+
+describe("worked-for run grouping", () => {
+  it("collapses a contiguous run of tool items behind a single disclosure and reveals them on expand", async () => {
+    const user = userEvent.setup();
+    render(
+      <ActivityGroup
+        items={[runningRead, completedRead]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.queryByText("runtime.md")).toBeNull();
+    const summary = screen.getByText("Worked for 1s");
+    const disclosure = summary.closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+
+    await user.click(summary);
+
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getAllByText("runtime.md")).toHaveLength(2);
+  });
+
+  it("falls back to a static label when tool timestamps do not establish a duration", () => {
+    render(
+      <ActivityGroup
+        items={[{ ...completedRead, timestamp: null }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("Worked")).toBeInTheDocument();
   });
 });

@@ -136,6 +136,53 @@ describe("ThreadPane", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders the user turn as a quiet pill and the assistant turn as flowing text without a card", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcript: [
+        {
+          id: "u1",
+          kind: "message",
+          role: "user",
+          text: "Ping",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "a1",
+          kind: "message",
+          role: "assistant",
+          text: "Pong",
+          timestamp: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const userBubble = screen.getByText("Ping").closest(".u-bubble");
+    expect(userBubble).not.toBeNull();
+    expect(userBubble?.closest(".message-user")).toBeNull();
+
+    const assistantBlock = screen.getByText("Pong").closest(".a-block");
+    expect(assistantBlock).not.toBeNull();
+    expect(assistantBlock).not.toHaveClass("message");
+  });
+
+  it("demotes the trust notice to a single quiet line in the pane header, not a full-width banner", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+
+    const heading = await screen.findByRole("heading", {
+      name: "Example thread",
+    });
+    const note = screen.getByText("Direct execution:");
+    expect(note.closest(".trust-warning")).toBeNull();
+    expect(note.closest(".thread-header")).not.toBeNull();
+    expect(heading.closest(".thread-header")).toBe(
+      note.closest(".thread-header"),
+    );
+  });
+
   it("invokes onFocus when the pane body is clicked", async () => {
     api.getSnapshot.mockResolvedValue(snapshot);
     const user = userEvent.setup();

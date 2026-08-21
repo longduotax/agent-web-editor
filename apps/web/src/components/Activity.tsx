@@ -141,6 +141,27 @@ function formattedInput(input: string): string {
   }
 }
 
+function formatDuration(ms: number): string {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${String(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds === 0
+    ? `${String(minutes)}m`
+    : `${String(minutes)}m ${String(remainingSeconds)}s`;
+}
+
+function runLabel(items: readonly ToolActivity[]): string {
+  const timestamps = items
+    .map((item) => item.timestamp)
+    .filter((value): value is string => value !== null)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value));
+  if (timestamps.length < 2) return "Worked";
+  const duration = Math.max(...timestamps) - Math.min(...timestamps);
+  return duration <= 0 ? "Worked" : `Worked for ${formatDuration(duration)}`;
+}
+
 export function displayTranscript(
   items: readonly TranscriptItem[],
 ): TranscriptItem[] {
@@ -219,6 +240,40 @@ export function Activity({
               )}
             </footer>
           )}
+        </div>
+      )}
+    </details>
+  );
+}
+
+export function ActivityGroup({
+  items,
+  projectPath,
+}: {
+  items: readonly ToolActivity[];
+  projectPath: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const label = runLabel(items);
+
+  return (
+    <details
+      className="worked-group"
+      onToggle={(event) => {
+        setExpanded(event.currentTarget.open);
+      }}
+    >
+      <summary className="worked">
+        <span>{label}</span>
+        <span className="chev" aria-hidden="true">
+          ›
+        </span>
+      </summary>
+      {expanded && (
+        <div className="worked-items">
+          {items.map((item) => (
+            <Activity item={item} key={item.id} projectPath={projectPath} />
+          ))}
         </div>
       )}
     </details>
