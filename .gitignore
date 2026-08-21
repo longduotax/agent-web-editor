@@ -11,3 +11,5 @@ coverage/
 .vite/
 test-results/
 playwright-report/
+.claude/
+.superpowers/
