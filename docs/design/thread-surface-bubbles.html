@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi — Bubbles Surface (Light + Dark)</title>
+<style>
+  /* ============================================================
+     VARIANT B — "BUBBLES", with first-class light & dark themes.
+     Themes are separately tuned (light is not a mechanical invert).
+     Toggle via data-theme on <html>.
+     ============================================================ */
+
+  /* ---------- LIGHT (default) ---------- */
+  :root, :root[data-theme="light"] {
+    --app-bg:    #eceef1;   /* behind the window */
+    --bg:        #ffffff;
+    --panel:     #f7f8fa;   /* sidebar */
+    --elev-1:    #f3f4f6;   /* pi bubble / cards */
+    --elev-2:    #eceef1;
+    --hover:     #eef0f3;
+    --hairline:  rgba(15,20,30,0.09);
+    --hairline-2:rgba(15,20,30,0.14);
+    --text:      #1b1e24;
+    --text-2:    #3b414c;
+    --muted:     #6b7280;
+    --faint:     #99a0ab;
+    --accent:    #3b6fe0;
+    --green:     #1f9d57;
+    --amber:     #b7791f;
+    --user-grad: linear-gradient(165deg,#4b7bef,#3a63d8);
+    --user-fg:   #ffffff;
+    --send-bg:   #1b1e24;
+    --send-fg:   #ffffff;
+    --win-shadow: 0 22px 60px rgba(20,28,48,0.16);
+    --mark-grad: linear-gradient(160deg,#dbe6ff,#c3d6ff);
+    --mark-fg:   #2f5fd0;
+    --term-bg:   #f7f8fa;
+  }
+
+  /* ---------- DARK ---------- */
+  :root[data-theme="dark"] {
+    --app-bg:    #050608;
+    --bg:        #0d0f13;
+    --panel:     #101318;
+    --elev-1:    #16191f;
+    --elev-2:    #1b1f27;
+    --hover:     #20242d;
+    --hairline:  rgba(255,255,255,0.07);
+    --hairline-2:rgba(255,255,255,0.12);
+    --text:      #e7e9ef;
+    --text-2:    #c3c8d2;
+    --muted:     #878e9c;
+    --faint:     #616875;
+    --accent:    #6aa0ff;
+    --green:     #6fce9a;
+    --amber:     #d9bd82;
+    --user-grad: linear-gradient(165deg,#2c4c86,#274277);
+    --user-fg:   #eef2fb;
+    --send-bg:   #eef0f3;
+    --send-fg:   #0c0e12;
+    --win-shadow: 0 24px 70px rgba(0,0,0,0.55);
+    --mark-grad: linear-gradient(160deg,#2b3b57,#1a2130);
+    --mark-fg:   #a9c6ff;
+    --term-bg:   #0a0c10;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--app-bg); color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    transition: background .2s ease, color .2s ease;
+  }
+  :root { --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* ---------- top chooser ---------- */
+  .chooser {
+    position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 1rem;
+    padding: 0.65rem 1.1rem; background: color-mix(in srgb, var(--app-bg) 82%, transparent);
+    backdrop-filter: blur(10px); border-bottom: 1px solid var(--hairline);
+  }
+  .chooser h1 { margin: 0; font-size: 0.9rem; font-weight: 650; letter-spacing: -0.01em; }
+  .chooser h1 span { color: var(--muted); font-weight: 400; }
+  .theme-toggle { margin-left: auto; display: inline-flex; gap: 0.2rem; padding: 0.2rem; border-radius: 9px; background: var(--elev-1); border: 1px solid var(--hairline); }
+  .theme-toggle button {
+    appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 0.78rem; font-weight: 550;
+    padding: 0.32rem 0.7rem; border-radius: 7px; background: transparent; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 0.35rem;
+  }
+  .theme-toggle button[aria-pressed="true"] { background: var(--bg); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+
+  /* ============================================================
+     APP FRAME
+     ============================================================ */
+  .window {
+    height: min(860px, calc(100vh - 92px)); margin: 1.1rem;
+    border: 1px solid var(--hairline-2); border-radius: 14px; overflow: hidden;
+    display: grid; grid-template-columns: 248px 1fr; background: var(--bg); box-shadow: var(--win-shadow);
+    transition: background .2s ease, box-shadow .2s ease, border-color .2s ease;
+  }
+
+  /* ---- sidebar ---- */
+  .side { display: flex; flex-direction: column; min-width: 0; background: var(--panel); border-right: 1px solid var(--hairline); }
+  .side-brand { display: flex; align-items: center; gap: 0.65rem; padding: 0.95rem 1rem; }
+  .side-mark { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 9px;
+    background: var(--mark-grad); border: 1px solid var(--hairline-2); color: var(--mark-fg); font: 700 15px Georgia, serif; }
+  .side-brand strong { display: block; font-size: 0.85rem; font-weight: 600; }
+  .side-brand small { color: var(--muted); font-size: 0.7rem; }
+  .side-add { padding: 0.35rem 0.75rem 0.75rem; }
+  .side-add-label { font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 650; padding: 0.4rem 0.25rem; }
+  .side-add button { width: 100%; padding: 0.5rem; border-radius: 8px; cursor: pointer; border: 1px solid var(--hairline-2);
+    background: var(--bg); color: var(--text-2); font: inherit; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem; justify-content: center; }
+  .side-add button:hover { background: var(--hover); }
+  .side-list { flex: 1; overflow: auto; padding: 0.25rem 0.5rem; }
+  .side-proj { padding: 0.4rem 0.55rem; font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+  .side-thread { display: flex; align-items: center; gap: 0.55rem; margin: 0.1rem 0 0.1rem 0.75rem; padding: 0.42rem 0.6rem;
+    border-radius: 7px; font-size: 0.82rem; color: var(--text-2); cursor: pointer; }
+  .side-thread:hover { background: var(--hover); }
+  .side-thread.active { background: var(--elev-2); color: var(--text); }
+  .side-thread .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+  .side-thread.active .dot { background: var(--accent); }
+  .side-foot { padding: 0.6rem 0.9rem; border-top: 1px solid var(--hairline); color: var(--faint); font-size: 0.68rem; display: flex; align-items: center; gap: 0.4rem; }
+
+  /* ---- main column ---- */
+  .main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+  .icon-btn { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+  /* ---- header ---- */
+  .bb-head { display: flex; align-items: center; gap: 0.7rem; padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--hairline); }
+  .bb-head .av { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--mark-grad); color: var(--mark-fg); font: 700 13px Georgia, serif; }
+  .bb-head .title { font-size: 0.86rem; font-weight: 600; }
+  .bb-head small { display: block; color: var(--faint); font-size: 0.72rem; }
+  .bb-head .grow { flex: 1; }
+  /* trust notice = one quiet inline line, not a banner */
+  .bb-trust { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.72rem; }
+  .bb-trust .g { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
+
+  /* ---- transcript ---- */
+  .bb-scroll { flex: 1; overflow: auto; padding: 1.4rem max(1rem, 6%); }
+  .thread { max-width: 48rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1.1rem; }
+  .row { display: flex; gap: 0.7rem; }
+  .row.me { justify-content: flex-end; }
+  .avatar { width: 28px; height: 28px; flex: none; border-radius: 8px; display: grid; place-items: center; font-size: 0.72rem; font-weight: 700; align-self: flex-start; }
+  .avatar.pi { background: var(--mark-grad); color: var(--mark-fg); font-family: Georgia, serif; }
+  .bubble { max-width: 78%; padding: 0.7rem 0.95rem; border-radius: 14px; font-size: 0.9rem; line-height: 1.55; }
+  .bubble.me { background: var(--user-grad); color: var(--user-fg); border-bottom-right-radius: 5px; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 24%, transparent); }
+  .bubble.pi { background: var(--elev-1); color: var(--text-2); border: 1px solid var(--hairline); border-bottom-left-radius: 5px; }
+  .bubble.pi strong { color: var(--text); font-weight: 650; }
+  .bubble.pi ul { margin: 0.6rem 0 0.15rem; padding: 0; list-style: none; display: grid; gap: 0.25rem; }
+  .bubble.pi li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.28rem 0.5rem; border-radius: 6px; background: var(--bg); font-size: 0.84rem; }
+  .bubble.pi li .k { color: var(--muted); }
+  .bubble.pi li .val { font-family: var(--mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--text); }
+  .bubble.pi .note { color: var(--faint); font-size: 0.8rem; margin-top: 0.5rem; }
+
+  .stack { max-width: 78%; display: grid; gap: 0.5rem; }
+  .toolcard { border-radius: 12px; background: var(--elev-1); border: 1px solid var(--hairline); overflow: hidden; }
+  .toolcard summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem; font-size: 0.77rem; color: var(--muted); }
+  .toolcard summary::-webkit-details-marker { display: none; }
+  .toolcard .chk { color: var(--green); font-weight: 700; }
+  .toolcard .peek { color: var(--faint); font-family: var(--mono); font-size: 0.73rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toolcard .chev { margin-left: auto; color: var(--faint); transition: transform .15s ease; }
+  .toolcard[open] .chev { transform: rotate(90deg); }
+  .toolcard[open] .peek { display: none; }
+  .toolcard .body { border-top: 1px solid var(--hairline); background: var(--term-bg); padding: 0.5rem 0.7rem; display: grid; gap: 0.2rem; }
+  .toolcard code { font-family: var(--mono); font-size: 0.75rem; color: var(--text-2); display: flex; gap: 0.5rem; }
+  .toolcard code .p { color: var(--green); }
+
+  /* ---- composer ---- */
+  .composer { flex: none; padding: 0.85rem 1.25rem 1.15rem; }
+  .composer-inner { max-width: 46rem; margin: 0 auto; }
+  .composer-box { border-radius: 20px; background: var(--bg); border: 1px solid var(--hairline-2); transition: border-color .15s ease, box-shadow .15s ease; }
+  .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+  .composer-box textarea { width: 100%; min-height: 24px; resize: none; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 0.9rem; line-height: 1.5; padding: 0.85rem 1rem 0.2rem; outline: none; }
+  .composer-box textarea::placeholder { color: var(--faint); }
+  .composer-bar { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0.55rem 0.55rem 1rem; }
+  .composer-hint { flex: 1; color: var(--faint); font-size: 0.7rem; }
+  .send { width: 30px; height: 30px; flex: none; border-radius: 50%; border: 0; cursor: pointer; background: var(--send-bg); color: var(--send-fg); font-size: 1rem; display: grid; place-items: center; }
+</style>
+</head>
+<body>
+  <div class="chooser">
+    <h1>Pi — Bubbles surface <span>· light &amp; dark</span></h1>
+    <div class="theme-toggle" role="group" aria-label="Theme">
+      <button data-theme-set="light" aria-pressed="true">☀ Light</button>
+      <button data-theme-set="dark" aria-pressed="false">☾ Dark</button>
+    </div>
+  </div>
+
+  <div class="window">
+    <aside class="side">
+      <div class="side-brand">
+        <div class="side-mark">π</div>
+        <div><strong>Pi Workspace</strong><small>Local agent projects</small></div>
+      </div>
+      <div class="side-add">
+        <div class="side-add-label">Add local project</div>
+        <button>＋ Browse…</button>
+      </div>
+      <div class="side-list">
+        <div class="side-proj">valai</div>
+        <div class="side-thread active"><span class="dot"></span> New thread</div>
+        <div class="side-thread"><span class="dot"></span> test</div>
+        <div class="side-thread"><span class="dot"></span> refactor composer</div>
+        <div class="side-thread"><span class="dot"></span> perf audit</div>
+      </div>
+      <div class="side-foot">● Loopback-only server</div>
+    </aside>
+
+    <main class="main">
+      <div class="bb-head">
+        <div class="av">π</div>
+        <div><div class="title">New thread</div><small>valai · △ Local checkout</small></div>
+        <span class="grow"></span>
+        <span class="bb-trust"><span class="g"></span> Direct execution</span>
+        <button class="icon-btn">▥</button>
+      </div>
+
+      <div class="bb-scroll"><div class="thread" id="thread"></div></div>
+
+      <div class="composer"><div class="composer-inner"><div class="composer-box">
+        <textarea placeholder="Message Pi…" rows="1"></textarea>
+        <div class="composer-bar"><span class="composer-hint">Enter to send · Shift+Enter for a new line</span><button class="send">↑</button></div>
+      </div></div></div>
+    </main>
+  </div>
+
+<script>
+  const CMDS_1 = [
+    "cloc --vcs=git --exclude-dir=node_modules,.next,dist,build",
+    "git ls-files | wc -l && git ls-files | awk -F. '{ext=tolower($NF)}'",
+    "find . -maxdepth 2 -type f \\( -name 'package.json' -o -name 'Cargo.toml' \\)",
+  ];
+  const CMDS_2 = [
+    "git ls-files '*.py' '*.ts' '*.tsx' '*.html' '*.sql' '*.css'",
+    "git ls-files '*.html' | xargs wc -l | sort -nr | head -20",
+    "git ls-files '*.py' | xargs wc -l | sort -nr | head -20",
+  ];
+  const STATS = [
+    ["Nonblank lines","323,367"],["Python","223,388"],["TSX","76,035"],
+    ["TypeScript","38,939"],["HTML","26,479"],["Other","2,630"],
+  ];
+  const ANSWER = "The repo has approximately <strong>367,471 physical lines of source code</strong> across <strong>1,424 tracked source files.</strong>";
+  const NOTE = "Count includes comments but excludes docs, JSON/YAML config, and binary assets.";
+
+  const li = (k,v) => `<li><span class="k">${k}</span><span class="val">${v}</span></li>`;
+  const card = (cmds) => `
+    <details class="toolcard">
+      <summary><span class="chk">✓</span> Ran ${cmds.length} commands
+        <span class="peek">$ ${cmds[0]}</span><span class="chev">›</span></summary>
+      <div class="body">${cmds.map(c=>`<code><span class="p">$</span> ${c}</code>`).join("")}</div>
+    </details>`;
+
+  document.getElementById('thread').innerHTML = `
+    <div class="row me"><div class="bubble me">check how many lines of code does this repo have</div></div>
+    <div class="row">
+      <div class="avatar pi">π</div>
+      <div class="stack">
+        ${card(CMDS_1)}
+        <div class="bubble pi">${ANSWER}
+          <ul>${STATS.map(([k,v])=>li(k,v)).join("")}</ul>
+          <div class="note">${NOTE}</div>
+        </div>
+      </div>
+    </div>
+    <div class="row me"><div class="bubble me">are you sure?</div></div>
+    <div class="row">
+      <div class="avatar pi">π</div>
+      <div class="stack">
+        ${card(CMDS_2)}
+        <div class="bubble pi">Re-counted with an independent method — the totals match within 0.3%. Confident in the figure.</div>
+      </div>
+    </div>`;
+
+  const root = document.documentElement;
+  document.querySelectorAll('[data-theme-set]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.themeSet;
+      root.setAttribute('data-theme', t);
+      document.querySelectorAll('[data-theme-set]').forEach(b =>
+        b.setAttribute('aria-pressed', String(b.dataset.themeSet === t)));
+    });
+  });
+</script>
+</body>
+</html>

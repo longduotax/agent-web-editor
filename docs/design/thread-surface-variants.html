@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi — Thread Surface Redesign Variants</title>
+<style>
+  /* ============================================================
+     SHARED TOKENS
+     Kept close to the app's existing tokens so any direction here
+     is realistically adoptable, but retuned for a calmer, more
+     "native desktop" feel (softer borders, warmer neutrals,
+     restrained accent, real type scale).
+     ============================================================ */
+  :root {
+    --bg:        #0d0f13;
+    --panel:     #101318;
+    --elev-1:    #16191f;
+    --elev-2:    #1b1f27;
+    --hover:     #20242d;
+    --hairline:  rgba(255,255,255,0.06);
+    --hairline-2:rgba(255,255,255,0.10);
+    --text:      #e7e9ef;
+    --text-2:    #c3c8d2;
+    --muted:     #878e9c;
+    --faint:     #616875;
+    --accent:    #6aa0ff;
+    --accent-dim:#2f4a7a;
+    --green:     #6fce9a;
+    --amber:     #d9bd82;
+    --red:       #f0787f;
+    --radius:    12px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: #050608;
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ---------- Chooser toolbar ---------- */
+  .chooser {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: 0.7rem 1.1rem;
+    background: rgba(10,11,14,0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .chooser h1 { margin: 0; font-size: 0.9rem; font-weight: 650; letter-spacing: -0.01em; }
+  .chooser h1 span { color: var(--muted); font-weight: 400; }
+  .tabs { display: flex; gap: 0.3rem; margin-left: auto; }
+  .tab {
+    appearance: none; border: 1px solid transparent; cursor: pointer;
+    padding: 0.4rem 0.8rem; border-radius: 8px;
+    background: transparent; color: var(--muted);
+    font: inherit; font-size: 0.82rem; font-weight: 550;
+    transition: background .12s ease, color .12s ease;
+  }
+  .tab:hover { color: var(--text); background: var(--elev-1); }
+  .tab[aria-selected="true"] { color: var(--text); background: var(--elev-2); border-color: var(--hairline-2); }
+  .caption {
+    padding: 0.55rem 1.1rem; font-size: 0.78rem; color: var(--muted);
+    background: rgba(10,11,14,0.6); border-bottom: 1px solid var(--hairline);
+    line-height: 1.5;
+  }
+  .caption b { color: var(--text-2); font-weight: 600; }
+
+  /* ============================================================
+     APP FRAME  (shared shell so each variant reads as a desktop
+     app, not a floating card). Only the transcript, header and
+     composer change per variant.
+     ============================================================ */
+  .window {
+    height: min(860px, calc(100vh - 132px));
+    margin: 1.1rem;
+    border: 1px solid var(--hairline-2);
+    border-radius: 14px;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 248px 1fr;
+    background: var(--bg);
+    box-shadow: 0 24px 70px rgba(0,0,0,0.55);
+  }
+
+  /* ---- sidebar (constant across variants — it isn't the problem) ---- */
+  .side { display: flex; flex-direction: column; min-width: 0; background: var(--panel); border-right: 1px solid var(--hairline); }
+  .side-brand { display: flex; align-items: center; gap: 0.65rem; padding: 0.95rem 1rem; }
+  .side-mark {
+    width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+    border-radius: 9px; background: linear-gradient(160deg,#243247,#161b24);
+    border: 1px solid var(--hairline-2); color: #a9c6ff; font: 700 15px Georgia, serif;
+  }
+  .side-brand strong { display: block; font-size: 0.85rem; font-weight: 600; }
+  .side-brand small { color: var(--muted); font-size: 0.7rem; }
+  .side-add { padding: 0.35rem 0.75rem 0.75rem; }
+  .side-add-label { font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 650; padding: 0.4rem 0.25rem; }
+  .side-add button {
+    width: 100%; padding: 0.5rem; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--hairline-2); background: var(--elev-1); color: var(--text-2);
+    font: inherit; font-size: 0.8rem; display: flex; align-items: center; gap: 0.5rem; justify-content: center;
+  }
+  .side-add button:hover { background: var(--elev-2); }
+  .side-list { flex: 1; overflow: auto; padding: 0.25rem 0.5rem; }
+  .side-proj { padding: 0.4rem 0.55rem; font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+  .side-thread {
+    display: flex; align-items: center; gap: 0.55rem; margin: 0.1rem 0 0.1rem 0.75rem;
+    padding: 0.42rem 0.6rem; border-radius: 7px; font-size: 0.82rem; color: var(--text-2); cursor: pointer;
+  }
+  .side-thread:hover { background: var(--elev-1); }
+  .side-thread.active { background: var(--elev-2); color: var(--text); }
+  .side-thread .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+  .side-thread.active .dot { background: var(--accent); }
+  .side-foot { padding: 0.6rem 0.9rem; border-top: 1px solid var(--hairline); color: var(--faint); font-size: 0.68rem; display: flex; align-items: center; gap: 0.4rem; }
+
+  /* ---- main column ---- */
+  .main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+  .stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* small building blocks reused by variants */
+  .icon-btn {
+    width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px;
+    border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--elev-1); color: var(--text); }
+
+  /* generic composer skeleton (variants tweak color only) */
+  .composer { flex: none; padding: 0.85rem 1.25rem 1.15rem; }
+  .composer-inner { max-width: 46rem; margin: 0 auto; }
+  .composer-box {
+    border-radius: 14px; background: var(--elev-1); border: 1px solid var(--hairline-2);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .composer-box:focus-within { border-color: rgba(106,160,255,0.5); box-shadow: 0 0 0 3px rgba(106,160,255,0.12); }
+  .composer-box textarea {
+    width: 100%; min-height: 24px; resize: none; border: 0; background: transparent;
+    color: var(--text); font: inherit; font-size: 0.9rem; line-height: 1.5;
+    padding: 0.85rem 1rem 0.2rem; outline: none;
+  }
+  .composer-bar { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0.55rem 0.55rem 1rem; }
+  .composer-hint { flex: 1; color: var(--faint); font-size: 0.7rem; }
+  .send {
+    width: 30px; height: 30px; flex: none; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--text); color: #0c0e12; font-size: 1rem; display: grid; place-items: center;
+  }
+
+  .hide { display: none !important; }
+
+  /* ============================================================
+     VARIANT 0 — CURRENT  (faithful rebuild of the app today, for
+     side-by-side contrast)
+     ============================================================ */
+  .v-current .cur-head { min-height: 3.6rem; display: flex; align-items: center; justify-content: space-between;
+    padding: 0.6rem 1.25rem; border-bottom: 1px solid var(--hairline); background: rgba(17,20,26,0.94); }
+  .v-current .cur-head small { color: var(--muted); font-size: 0.72rem; display: block; }
+  .v-current .cur-head h2 { margin: 0.15rem 0 0; font-size: 1rem; font-weight: 600; }
+  .v-current .cur-warn { padding: 0.42rem 1.25rem; border-bottom: 1px solid #473e2c; color: #d4c39b; background: #211e18; font-size: 0.74rem; }
+  .v-current .cur-scroll { flex: 1; overflow: auto; padding: 1.5rem max(1rem, 8%); }
+  .v-current .cur-msg { max-width: 54rem; margin: 0 auto 1.4rem; }
+  .v-current .cur-msg > .lbl { margin-bottom: 0.4rem; color: var(--muted); font-size: 0.74rem; font-weight: 700; }
+  .v-current .cur-user { padding: 0.8rem 1rem; border: 1px solid #2a303c; border-radius: 0.7rem; background: #181c24; }
+  .v-current .cur-tool { max-width: 54rem; margin: 0.08rem auto; font-size: 0.78rem; color: #b7bdc9; }
+  .v-current .cur-tool .row { display: flex; align-items: center; gap: 0.42rem; padding: 0.36rem 0.52rem; }
+  .v-current .cur-tool .chk { color: #70bc8b; font-weight: 700; }
+  .v-current .cur-tool code { font-family: var(--mono); color: #cfd4de; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v-current .cur-tool .chev { margin-left: auto; color: #697181; }
+  .v-current .cur-body { color: #dce0e8; line-height: 1.55; }
+  .v-current .cur-body ul { margin: 0.5rem 0; padding-left: 1.2rem; }
+  .v-current .cur-body li { margin: 0.15rem 0; }
+
+  /* ============================================================
+     VARIANT A — "CODEX CALM"
+     Near-monochrome. No hard boxes: elevation via background only.
+     User turn = quiet tinted block with a 2px accent rail.
+     Tool calls = ONE collapsed group ("Ran N commands"), tidy.
+     Generous measure, real type scale. Closest to Codex desktop.
+     ============================================================ */
+  .v-codex .stage { --measure: 44rem; }
+  .v-codex .cx-head {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1.1rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .v-codex .cx-head .title { font-size: 0.86rem; font-weight: 600; }
+  .v-codex .cx-head .meta { color: var(--faint); font-size: 0.74rem; display: flex; align-items: center; gap: 0.4rem; }
+  .v-codex .cx-head .repo-chip {
+    display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.18rem 0.5rem;
+    border-radius: 999px; background: var(--elev-1); color: var(--muted); font-size: 0.72rem;
+  }
+  .v-codex .cx-head .grow { flex: 1; }
+  /* trust notice folded into a quiet inline chip, not a banner */
+  .v-codex .cx-trust {
+    max-width: var(--measure); margin: 1.1rem auto 0; padding: 0 1rem;
+    display: flex; align-items: center; gap: 0.5rem; color: var(--faint); font-size: 0.73rem;
+  }
+  .v-codex .cx-trust .g { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
+  .v-codex .cx-scroll { flex: 1; overflow: auto; padding: 0.4rem 1rem 2rem; }
+  .v-codex .turn { max-width: var(--measure); margin: 0 auto; padding: 1.15rem 1rem; }
+  .v-codex .turn + .turn { border-top: 1px solid var(--hairline); }
+  .v-codex .who { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
+  .v-codex .who .av { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 0.68rem; font-weight: 700; flex: none; }
+  .v-codex .who .av.user { background: var(--elev-2); color: var(--text-2); }
+  .v-codex .who .av.pi { background: linear-gradient(160deg,#2b3b57,#1a2130); color: #a9c6ff; font-family: Georgia, serif; }
+  .v-codex .who .nm { font-size: 0.76rem; font-weight: 600; color: var(--text-2); }
+  .v-codex .u-text {
+    position: relative; padding-left: 0.9rem; color: var(--text);
+    font-size: 0.94rem; line-height: 1.55;
+  }
+  .v-codex .u-text::before { content:""; position: absolute; left: 0; top: 0.15em; bottom: 0.15em; width: 2px; border-radius: 2px; background: var(--accent); opacity: 0.7; }
+  .v-codex .a-text { color: var(--text-2); font-size: 0.94rem; line-height: 1.62; }
+  .v-codex .a-text strong { color: var(--text); font-weight: 650; }
+  .v-codex .a-text ul { margin: 0.6rem 0; padding: 0; list-style: none; display: grid; gap: 0.28rem; }
+  .v-codex .a-text li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.3rem 0.6rem; border-radius: 7px; background: var(--elev-1); font-size: 0.86rem; }
+  .v-codex .a-text li .k { color: var(--muted); }
+  .v-codex .a-text li .val { font-variant-numeric: tabular-nums; color: var(--text); font-family: var(--mono); font-size: 0.82rem; }
+  .v-codex .a-note { color: var(--faint); font-size: 0.8rem; margin-top: 0.6rem; }
+
+  /* collapsed tool group */
+  .v-codex .tools {
+    margin: 0.35rem 0; border-radius: 10px; background: var(--elev-1);
+    border: 1px solid var(--hairline); overflow: hidden;
+  }
+  .v-codex .tools > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.55rem 0.7rem; font-size: 0.8rem; color: var(--text-2);
+  }
+  .v-codex .tools > summary::-webkit-details-marker { display: none; }
+  .v-codex .tools .chk { color: var(--green); font-size: 0.8rem; }
+  .v-codex .tools .lead { font-weight: 550; }
+  .v-codex .tools .peek { color: var(--faint); font-family: var(--mono); font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v-codex .tools .chev { margin-left: auto; color: var(--faint); transition: transform .15s ease; }
+  .v-codex .tools[open] .chev { transform: rotate(90deg); }
+  .v-codex .tools[open] .peek { display: none; }
+  .v-codex .tools .lines { border-top: 1px solid var(--hairline); padding: 0.5rem 0.7rem; display: grid; gap: 0.18rem; }
+  .v-codex .tools .lines code { font-family: var(--mono); font-size: 0.76rem; color: var(--text-2); display: flex; gap: 0.5rem; align-items: baseline; }
+  .v-codex .tools .lines code .p { color: var(--green); }
+  .v-codex .composer-box { border-radius: 16px; }
+
+  /* ============================================================
+     VARIANT B — "BUBBLES"
+     Product-chat feel: user right-aligned accent bubble,
+     assistant left with avatar, tool calls in a grouped card.
+     ============================================================ */
+  .v-bubbles .bb-head { display: flex; align-items: center; gap: 0.7rem; padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--hairline); }
+  .v-bubbles .bb-head .av { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: linear-gradient(160deg,#2b3b57,#1a2130); color: #a9c6ff; font: 700 13px Georgia, serif; }
+  .v-bubbles .bb-head .title { font-size: 0.86rem; font-weight: 600; }
+  .v-bubbles .bb-head small { display: block; color: var(--faint); font-size: 0.72rem; }
+  .v-bubbles .bb-scroll { flex: 1; overflow: auto; padding: 1.4rem max(1rem, 6%); }
+  .v-bubbles .thread { max-width: 48rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1.1rem; }
+  .v-bubbles .row { display: flex; gap: 0.7rem; }
+  .v-bubbles .row.me { justify-content: flex-end; }
+  .v-bubbles .avatar { width: 28px; height: 28px; flex: none; border-radius: 8px; display: grid; place-items: center; font-size: 0.72rem; font-weight: 700; align-self: flex-start; }
+  .v-bubbles .avatar.pi { background: linear-gradient(160deg,#2b3b57,#1a2130); color: #a9c6ff; font-family: Georgia, serif; }
+  .v-bubbles .bubble { max-width: 78%; padding: 0.7rem 0.95rem; border-radius: 14px; font-size: 0.9rem; line-height: 1.55; }
+  .v-bubbles .bubble.me { background: linear-gradient(165deg,#2c4c86,#274277); color: #eef2fb; border-bottom-right-radius: 5px; }
+  .v-bubbles .bubble.pi { background: var(--elev-1); color: var(--text-2); border: 1px solid var(--hairline); border-bottom-left-radius: 5px; }
+  .v-bubbles .bubble.pi strong { color: var(--text); }
+  .v-bubbles .bubble.pi ul { margin: 0.55rem 0 0.2rem; padding: 0; list-style: none; display: grid; gap: 0.25rem; }
+  .v-bubbles .bubble.pi li { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.84rem; }
+  .v-bubbles .bubble.pi li .k { color: var(--muted); }
+  .v-bubbles .bubble.pi li .val { font-family: var(--mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+  .v-bubbles .stack { max-width: 78%; display: grid; gap: 0.5rem; }
+  .v-bubbles .toolcard { border-radius: 12px; background: var(--elev-1); border: 1px solid var(--hairline); overflow: hidden; }
+  .v-bubbles .toolcard .cap { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.7rem; font-size: 0.76rem; color: var(--muted); border-bottom: 1px solid var(--hairline); }
+  .v-bubbles .toolcard .cap .chk { color: var(--green); }
+  .v-bubbles .toolcard .body { padding: 0.45rem 0.7rem; display: grid; gap: 0.2rem; }
+  .v-bubbles .toolcard code { font-family: var(--mono); font-size: 0.75rem; color: var(--text-2); display: flex; gap: 0.5rem; }
+  .v-bubbles .toolcard code .p { color: var(--green); }
+  .v-bubbles .composer-box { border-radius: 20px; }
+
+  /* ============================================================
+     VARIANT C — "DOCUMENT / IDE"
+     Structured transcript. Fixed left gutter with speaker glyph,
+     content flows in a column. Tool calls = compact terminal
+     block. Reads like a refined dev-tool log.
+     ============================================================ */
+  .v-doc .dc-head { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1.2rem; border-bottom: 1px solid var(--hairline); }
+  .v-doc .dc-head .title { font-size: 0.85rem; font-weight: 600; }
+  .v-doc .dc-head .branch { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.5rem; border-radius: 6px; background: var(--elev-1); }
+  .v-doc .dc-head .grow { flex: 1; }
+  .v-doc .dc-scroll { flex: 1; overflow: auto; padding: 0.5rem 0 2rem; }
+  .v-doc .entry { display: grid; grid-template-columns: 128px 1fr; gap: 0; max-width: 58rem; margin: 0 auto; padding: 0.9rem 1.5rem; }
+  .v-doc .entry + .entry { border-top: 1px solid var(--hairline); }
+  .v-doc .gutter { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.76rem; font-weight: 600; }
+  .v-doc .gutter .g { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .v-doc .gutter.user .g { background: var(--accent); }
+  .v-doc .gutter.pi .g { background: var(--green); }
+  .v-doc .gutter.sys .g { background: var(--faint); }
+  .v-doc .content { min-width: 0; font-size: 0.9rem; line-height: 1.6; color: var(--text-2); }
+  .v-doc .content.user { color: var(--text); }
+  .v-doc .content strong { color: var(--text); font-weight: 650; }
+  .v-doc .content ul { margin: 0.5rem 0; padding: 0; list-style: none; border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; }
+  .v-doc .content li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.32rem 0.7rem; font-size: 0.83rem; }
+  .v-doc .content li + li { border-top: 1px solid var(--hairline); }
+  .v-doc .content li .k { color: var(--muted); }
+  .v-doc .content li .val { font-family: var(--mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--text); }
+  .v-doc .term { margin: 0.15rem 0; border-radius: 8px; background: #0a0c10; border: 1px solid var(--hairline-2); overflow: hidden; font-family: var(--mono); }
+  .v-doc .term .bar { display: flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.65rem; border-bottom: 1px solid var(--hairline); font-size: 0.72rem; color: var(--faint); }
+  .v-doc .term .bar .chk { color: var(--green); }
+  .v-doc .term .ln { display: flex; gap: 0.55rem; padding: 0.22rem 0.7rem; font-size: 0.76rem; color: var(--text-2); }
+  .v-doc .term .ln .p { color: var(--green); }
+  .v-doc .term .ln:last-child { padding-bottom: 0.5rem; }
+  .v-doc .composer { border-top: 1px solid var(--hairline); }
+  .v-doc .composer-box { border-radius: 10px; }
+</style>
+</head>
+<body>
+  <div class="chooser">
+    <h1>Pi — Thread surface <span>· redesign directions</span></h1>
+    <div class="tabs" role="tablist" aria-label="Design variants">
+      <button class="tab" role="tab" data-v="current" aria-selected="false">Current</button>
+      <button class="tab" role="tab" data-v="codex" aria-selected="true">A · Codex Calm</button>
+      <button class="tab" role="tab" data-v="bubbles" aria-selected="false">B · Bubbles</button>
+      <button class="tab" role="tab" data-v="doc" aria-selected="false">C · Document</button>
+    </div>
+  </div>
+  <div class="caption" id="caption"></div>
+
+  <!-- The frame is rendered once; the .stage swaps per variant -->
+  <div class="window">
+    <!-- SIDEBAR (shared) -->
+    <aside class="side">
+      <div class="side-brand">
+        <div class="side-mark">π</div>
+        <div>
+          <strong>Pi Workspace</strong>
+          <small>Local agent projects</small>
+        </div>
+      </div>
+      <div class="side-add">
+        <div class="side-add-label">Add local project</div>
+        <button>＋ Browse…</button>
+      </div>
+      <div class="side-list">
+        <div class="side-proj">valai</div>
+        <div class="side-thread active"><span class="dot"></span> New thread</div>
+        <div class="side-thread"><span class="dot"></span> test</div>
+        <div class="side-thread"><span class="dot"></span> refactor composer</div>
+        <div class="side-thread"><span class="dot"></span> perf audit</div>
+      </div>
+      <div class="side-foot">● Loopback-only server</div>
+    </aside>
+
+    <!-- MAIN (variant-specific content injected here) -->
+    <main class="main"><div class="stage" id="stage"></div></main>
+  </div>
+
+<script>
+/* Shared conversation data (subset of the real thread in the screenshot) */
+const CMDS_1 = [
+  "cloc --vcs=git --exclude-dir=node_modules,.next,dist,build",
+  "git ls-files | wc -l && git ls-files | awk -F. '{ext=tolower($NF)}'",
+  "find . -maxdepth 2 -type f \\( -name 'package.json' -o -name 'Cargo.toml' \\)",
+];
+const CMDS_2 = [
+  "git ls-files '*.py' '*.ts' '*.tsx' '*.html' '*.sql' '*.css'",
+  "git ls-files '*.html' | xargs wc -l | sort -nr | head -20",
+  "git ls-files '*.py' | xargs wc -l | sort -nr | head -20",
+];
+const STATS = [
+  ["Nonblank lines", "323,367"],
+  ["Python", "223,388"],
+  ["TSX", "76,035"],
+  ["TypeScript", "38,939"],
+  ["HTML", "26,479"],
+  ["Other", "2,630"],
+];
+const ANSWER_LEAD = "The repo has approximately <strong>367,471 physical lines of source code</strong> across <strong>1,424 tracked source files.</strong>";
+const ANSWER_NOTE = "Count includes comments but excludes docs, JSON/YAML config, and binary assets.";
+
+const CAPTIONS = {
+  current: "<b>Current build</b> — rebuilt here for contrast. Note the heavy full-width outlined user cards, the loud amber banner, and the ungrouped edge-to-edge command log. That stacked-box rhythm is what reads as \"a website.\"",
+  codex:   "<b>A · Codex Calm</b> — near-monochrome, no hard boxes (elevation via background only). User turn is a quiet block with a thin accent rail; commands collapse into one tidy \"Ran N commands\" group; the trust notice becomes a single faint line. Closest to the Codex desktop feel.",
+  bubbles: "<b>B · Bubbles</b> — a product-chat direction: user messages right-aligned in an accent bubble, Pi on the left with an avatar, and tool calls contained in a labelled card. Friendlier / more consumer.",
+  doc:     "<b>C · Document</b> — a structured transcript: a fixed left gutter names each speaker, content flows in a clean column, and commands render as a compact terminal block. Reads like a refined dev tool.",
+};
+
+const li = (k,v) => `<li><span class="k">${k}</span><span class="val">${v}</span></li>`;
+
+/* ---------- renderers ---------- */
+function renderCurrent(){
+  const tool = (cmds) => `<div class="cur-tool">` + cmds.map(c =>
+    `<div class="row"><span class="chk">✓</span><code>$ ${c}</code><span class="chev">›</span></div>`).join("") + `</div>`;
+  return `
+    <div class="cur-head">
+      <div><small>valai · △ Local checkout</small><h2>New thread</h2></div>
+      <button class="icon-btn">▥</button>
+    </div>
+    <div class="cur-warn"><b>Direct execution:</b> Pi tools run with your user permissions, without application approval or an OS sandbox.</div>
+    <div class="cur-scroll">
+      <div class="cur-msg"><div class="lbl">You</div><div class="cur-user">check how many lines of code does this repo have</div></div>
+      ${tool(CMDS_1)}
+      <div class="cur-msg"><div class="lbl">Pi</div><div class="cur-body">
+        ${ANSWER_LEAD}
+        <ul>${STATS.map(([k,v])=>`<li><b>${k}:</b> ${v}</li>`).join("")}</ul>
+        ${ANSWER_NOTE}
+      </div></div>
+      <div class="cur-msg"><div class="lbl">You</div><div class="cur-user">are you sure?</div></div>
+      ${tool(CMDS_2)}
+    </div>
+    <div class="composer"><div class="composer-inner"><div class="composer-box">
+      <textarea placeholder="Ask Pi to work in this project…" rows="1"></textarea>
+      <div class="composer-bar"><span class="composer-hint">Enter to send · Shift+Enter for a new line</span><button class="send">↑</button></div>
+    </div></div></div>`;
+}
+
+function renderCodex(){
+  const tools = (n, cmds) => `
+    <details class="tools">
+      <summary><span class="chk">✓</span><span class="lead">Ran ${n} commands</span>
+        <span class="peek">$ ${cmds[0]}</span><span class="chev">›</span></summary>
+      <div class="lines">${cmds.map(c=>`<code><span class="p">$</span>${c}</code>`).join("")}</div>
+    </details>`;
+  return `
+    <div class="cx-head">
+      <span class="repo-chip">△ valai</span>
+      <div><div class="title">New thread</div></div>
+      <span class="grow"></span>
+      <button class="icon-btn">▥</button>
+    </div>
+    <div class="cx-scroll">
+      <div class="cx-trust"><span class="g"></span> Direct execution — Pi tools run with your user permissions.</div>
+      <div class="turn">
+        <div class="who"><span class="av user">Y</span><span class="nm">You</span></div>
+        <div class="u-text">check how many lines of code does this repo have</div>
+      </div>
+      <div class="turn">
+        <div class="who"><span class="av pi">π</span><span class="nm">Pi</span></div>
+        ${tools(CMDS_1.length, CMDS_1)}
+        <div class="a-text">
+          ${ANSWER_LEAD}
+          <ul>${STATS.map(([k,v])=>li(k,v)).join("")}</ul>
+          <div class="a-note">${ANSWER_NOTE}</div>
+        </div>
+      </div>
+      <div class="turn">
+        <div class="who"><span class="av user">Y</span><span class="nm">You</span></div>
+        <div class="u-text">are you sure?</div>
+      </div>
+      <div class="turn">
+        <div class="who"><span class="av pi">π</span><span class="nm">Pi</span></div>
+        ${tools(CMDS_2.length, CMDS_2)}
+        <div class="a-text">Re-counted with an independent method — the totals match within 0.3%. Confident in the figure.</div>
+      </div>
+    </div>
+    <div class="composer"><div class="composer-inner"><div class="composer-box">
+      <textarea placeholder="Ask Pi to work in this project…" rows="1"></textarea>
+      <div class="composer-bar"><span class="composer-hint">⏎ send · ⇧⏎ newline</span><button class="send">↑</button></div>
+    </div></div></div>`;
+}
+
+function renderBubbles(){
+  const card = (n, cmds) => `
+    <div class="toolcard">
+      <div class="cap"><span class="chk">✓</span> Ran ${n} commands</div>
+      <div class="body">${cmds.map(c=>`<code><span class="p">$</span> ${c}</code>`).join("")}</div>
+    </div>`;
+  return `
+    <div class="bb-head">
+      <div class="av">π</div>
+      <div><div class="title">New thread</div><small>valai · △ Local checkout</small></div>
+    </div>
+    <div class="bb-scroll"><div class="thread">
+      <div class="row me"><div class="bubble me">check how many lines of code does this repo have</div></div>
+      <div class="row">
+        <div class="avatar pi">π</div>
+        <div class="stack">
+          ${card(CMDS_1.length, CMDS_1)}
+          <div class="bubble pi">${ANSWER_LEAD}
+            <ul>${STATS.map(([k,v])=>li(k,v)).join("")}</ul>
+          </div>
+        </div>
+      </div>
+      <div class="row me"><div class="bubble me">are you sure?</div></div>
+      <div class="row">
+        <div class="avatar pi">π</div>
+        <div class="stack">
+          ${card(CMDS_2.length, CMDS_2)}
+          <div class="bubble pi">Re-counted with an independent method — the totals match within 0.3%. Confident in the figure.</div>
+        </div>
+      </div>
+    </div></div>
+    <div class="composer"><div class="composer-inner"><div class="composer-box">
+      <textarea placeholder="Message Pi…" rows="1"></textarea>
+      <div class="composer-bar"><span class="composer-hint">Enter to send · Shift+Enter for a new line</span><button class="send">↑</button></div>
+    </div></div></div>`;
+}
+
+function renderDoc(){
+  const term = (n, cmds) => `
+    <div class="term">
+      <div class="bar"><span class="chk">✓</span> ${n} commands · exit 0</div>
+      ${cmds.map(c=>`<div class="ln"><span class="p">$</span> ${c}</div>`).join("")}
+    </div>`;
+  const entry = (cls, who, body) => `
+    <div class="entry">
+      <div class="gutter ${cls}"><span class="g"></span> ${who}</div>
+      <div class="content ${cls==='user'?'user':''}">${body}</div>
+    </div>`;
+  return `
+    <div class="dc-head">
+      <div class="title">New thread</div>
+      <span class="branch">△ valai · local</span>
+      <span class="grow"></span>
+      <button class="icon-btn">▥</button>
+    </div>
+    <div class="dc-scroll">
+      ${entry('user','You','check how many lines of code does this repo have')}
+      ${entry('pi','Pi', term(CMDS_1.length, CMDS_1) +
+        `<div style="margin-top:.6rem">${ANSWER_LEAD}
+          <ul>${STATS.map(([k,v])=>li(k,v)).join("")}</ul>
+          <div style="color:var(--faint);font-size:.82rem;margin-top:.4rem">${ANSWER_NOTE}</div>
+        </div>`)}
+      ${entry('user','You','are you sure?')}
+      ${entry('pi','Pi', term(CMDS_2.length, CMDS_2) +
+        `<div style="margin-top:.6rem">Re-counted with an independent method — the totals match within 0.3%. Confident in the figure.</div>`)}
+    </div>
+    <div class="composer"><div class="composer-inner"><div class="composer-box">
+      <textarea placeholder="Ask Pi to work in this project…" rows="1"></textarea>
+      <div class="composer-bar"><span class="composer-hint">Enter to send · Shift+Enter for a new line</span><button class="send">↑</button></div>
+    </div></div></div>`;
+}
+
+const RENDER = { current: renderCurrent, codex: renderCodex, bubbles: renderBubbles, doc: renderDoc };
+const stage = document.getElementById('stage');
+const caption = document.getElementById('caption');
+const tabs = [...document.querySelectorAll('.tab')];
+
+function show(v){
+  stage.className = 'stage v-' + v;
+  stage.innerHTML = RENDER[v]();
+  caption.innerHTML = CAPTIONS[v];
+  tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.v === v)));
+}
+tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.v)));
+show('codex');
+</script>
+</body>
+</html>

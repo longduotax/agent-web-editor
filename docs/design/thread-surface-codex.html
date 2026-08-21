@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi — Codex-style Surface</title>
+<style>
+  /* ============================================================
+     Pi thread surface, styled to match the Codex desktop app
+     (light default, tuned dark toggle).
+
+     Core Codex traits reproduced:
+       • Only the USER gets a bubble (quiet gray pill, right-aligned)
+       • Assistant = plain flowing text on white, no bubble
+       • Near-borderless, airy, hairline dividers
+       • Collapsed "Worked for …" run headers
+       • White action cards w/ diff stats + "Show N more"
+       • Floating Environment card, rounded composer
+     ============================================================ */
+
+  :root, :root[data-theme="light"] {
+    --page:      #ffffff;
+    --sidebar:   #ffffff;
+    --card:      #ffffff;
+    --user-pill: #f1f1f2;
+    --hover:     #f4f4f5;
+    --active:    #ececee;
+    --hairline:  #ececec;
+    --hairline-2:#e2e2e4;
+    --text:      #1d1d1f;
+    --text-2:    #3a3a3e;
+    --muted:     #8a8a8f;
+    --faint:     #b3b3b8;
+    --green:     #2f9e44;
+    --red:       #d1453b;
+    --accent:    #2f6feb;
+    --send-bg:   #1d1d1f;
+    --send-fg:   #ffffff;
+    --card-shadow: 0 1px 2px rgba(20,20,30,0.05), 0 1px 3px rgba(20,20,30,0.04);
+    --pop-shadow:  0 10px 30px rgba(20,25,40,0.12), 0 2px 8px rgba(20,25,40,0.06);
+    --icon-fill: none;
+  }
+  :root[data-theme="dark"] {
+    --page:      #131417;
+    --sidebar:   #17181c;
+    --card:      #1b1d22;
+    --user-pill: #26282e;
+    --hover:     #1f2127;
+    --active:    #24262d;
+    --hairline:  rgba(255,255,255,0.08);
+    --hairline-2:rgba(255,255,255,0.12);
+    --text:      #ececee;
+    --text-2:    #c3c5cb;
+    --muted:     #8b8d95;
+    --faint:     #62646c;
+    --green:     #4ec06f;
+    --red:       #e0645c;
+    --accent:    #6aa0ff;
+    --send-bg:   #ececee;
+    --send-fg:   #16171a;
+    --card-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    --pop-shadow:  0 12px 34px rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    transition: background .2s ease, color .2s ease;
+  }
+  :root { --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  svg { display: block; }
+  .ico { width: 17px; height: 17px; stroke: currentColor; fill: var(--icon-fill); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .ico-sm { width: 15px; height: 15px; }
+
+  /* floating theme switch (dev affordance; not part of the app) */
+  .theme-switch { position: fixed; top: 12px; right: 16px; z-index: 100; display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--card); border: 1px solid var(--hairline-2); box-shadow: var(--card-shadow); }
+  .theme-switch button { appearance: none; border: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 550; padding: 5px 10px; border-radius: 7px; background: transparent; color: var(--muted); }
+  .theme-switch button[aria-pressed="true"] { background: var(--active); color: var(--text); }
+
+  /* ============================================================ layout */
+  .app { display: grid; grid-template-columns: 258px 1fr; height: 100vh; }
+
+  /* ---------------- sidebar ---------------- */
+  .side { display: flex; flex-direction: column; min-width: 0; background: var(--sidebar); border-right: 1px solid var(--hairline); }
+  .side-top { display: flex; align-items: center; gap: 8px; padding: 14px 14px 8px; }
+  .side-top .logo { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 5px; }
+  .side-top .logo .chev { color: var(--muted); }
+  .side-top .spacer { flex: 1; }
+  .side-top .icon-btn { color: var(--muted); }
+  .icon-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+  .nav { padding: 4px 8px; }
+  .nav a { display: flex; align-items: center; gap: 10px; padding: 8px 9px; border-radius: 8px; color: var(--text-2); text-decoration: none; font-size: 14px; cursor: pointer; }
+  .nav a:hover { background: var(--hover); }
+  .nav a .grow { flex: 1; }
+  .nav a .add { color: var(--faint); }
+
+  .side-scroll { flex: 1; overflow: auto; padding: 6px 8px 8px; }
+  .sec { padding: 12px 9px 4px; font-size: 12px; color: var(--muted); font-weight: 500; }
+  .proj { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; color: var(--text-2); font-size: 14px; cursor: pointer; }
+  .proj:hover { background: var(--hover); }
+  .proj .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chats { margin: 0 0 4px; padding: 0; list-style: none; }
+  .chats li { display: flex; align-items: center; gap: 6px; margin: 1px 0; padding: 6px 9px 6px 30px; border-radius: 8px; font-size: 13.5px; color: var(--muted); cursor: pointer; overflow: hidden; }
+  .chats li:hover { background: var(--hover); color: var(--text-2); }
+  .chats li.active { background: var(--active); color: var(--text); }
+  .chats li .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chats li .share { color: var(--faint); }
+  .chats li .blue { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .chats.empty li { color: var(--faint); padding-left: 30px; }
+  .show-more { padding: 6px 9px 6px 30px; font-size: 13.5px; color: var(--muted); cursor: pointer; }
+  .show-more:hover { color: var(--text-2); }
+
+  .side-user { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-top: 1px solid var(--hairline); }
+  .side-user .pfp { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #e35d4a; color: #fff; font-size: 11px; font-weight: 700; }
+  .side-user .nm { flex: 1; font-size: 14px; }
+
+  /* ---------------- main ---------------- */
+  .main { position: relative; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
+  .scroll { flex: 1; overflow: auto; }
+  .thread { max-width: 720px; margin: 0 auto; padding: 40px 24px 24px; }
+
+  /* user bubble */
+  .u-row { display: flex; justify-content: flex-end; margin: 26px 0; }
+  .u-bubble { max-width: 80%; padding: 10px 15px; border-radius: 18px; background: var(--user-pill); color: var(--text); font-size: 15px; line-height: 1.5; }
+
+  /* worked-for run header */
+  .worked { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 12px; color: var(--muted); font-size: 14px; cursor: pointer; }
+  .worked .chev { transition: transform .15s ease; }
+  .worked:hover { color: var(--text-2); }
+
+  /* assistant plain text */
+  .a-block { color: var(--text); font-size: 15px; line-height: 1.62; }
+  .a-block p { margin: 0 0 14px; }
+  .a-block strong { font-weight: 640; }
+  .a-block ul { margin: 4px 0 14px; padding-left: 22px; }
+  .a-block li { margin: 7px 0; }
+  .a-block li .val { font-variant-numeric: tabular-nums; }
+
+  /* action card (Codex "Edited N files" style) */
+  .card { margin: 14px 0; border: 1px solid var(--hairline-2); border-radius: 14px; background: var(--card); box-shadow: var(--card-shadow); overflow: hidden; }
+  .card-head { display: flex; align-items: center; gap: 12px; padding: 13px 15px; }
+  .card-head .ci { width: 30px; height: 30px; flex: none; border-radius: 8px; display: grid; place-items: center; background: var(--hover); color: var(--text-2); }
+  .card-head .ct { flex: 1; min-width: 0; }
+  .card-head .ct .tt { font-size: 14.5px; font-weight: 550; }
+  .card-head .ct .cs { font-size: 13px; margin-top: 1px; }
+  .card-head .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--hairline-2); background: var(--card); color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; }
+  .card-head .btn:hover { background: var(--hover); }
+  .card-head .link { color: var(--muted); font-size: 13.5px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .card-head .link:hover { color: var(--text); }
+  .rows { border-top: 1px solid var(--hairline); }
+  .frow { display: flex; align-items: center; gap: 10px; padding: 10px 15px; font-size: 13.5px; }
+  .frow + .frow { border-top: 1px solid var(--hairline); }
+  .frow .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .frow .path .dir { color: var(--muted); }
+  .frow code { font-family: var(--mono); font-size: 12.5px; }
+  .frow .stat { flex: none; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .add { color: var(--green); }
+  .del { color: var(--red); }
+  .frow .ok { flex: none; color: var(--green); }
+  .more { padding: 11px 15px; border-top: 1px solid var(--hairline); font-size: 13.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .more:hover { color: var(--text); }
+
+  /* link/website card */
+  .link-card { display: flex; align-items: center; gap: 13px; margin: 14px 0; padding: 12px 15px; border: 1px solid var(--hairline-2); border-radius: 14px; background: var(--card); box-shadow: var(--card-shadow); }
+  .link-card .li { width: 30px; height: 30px; flex: none; border-radius: 8px; display: grid; place-items: center; background: var(--hover); color: var(--accent); }
+  .link-card .lt { flex: 1; min-width: 0; }
+  .link-card .lt .tt { font-size: 14.5px; font-weight: 550; }
+  .link-card .lt .cs { font-size: 13px; color: var(--muted); }
+
+  /* message action row */
+  .actions { display: flex; align-items: center; gap: 14px; margin: 4px 0 8px; color: var(--muted); }
+  .actions .icon-btn { width: 26px; height: 26px; }
+  .actions .ts { font-size: 13px; margin-left: 2px; }
+
+  /* ---------------- environment popover ---------------- */
+  .env { position: absolute; top: 18px; right: 22px; width: 320px; border: 1px solid var(--hairline-2); border-radius: 14px; background: var(--card); box-shadow: var(--pop-shadow); padding: 6px; z-index: 10; }
+  .env-h { display: flex; align-items: center; padding: 10px 10px 6px; }
+  .env-h .t { flex: 1; font-size: 14px; color: var(--muted); }
+  .env-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; font-size: 14px; cursor: pointer; }
+  .env-row:hover { background: var(--hover); }
+  .env-row .grow { flex: 1; }
+  .env-row.muted { color: var(--faint); cursor: default; }
+  .env-row.muted:hover { background: transparent; }
+  .env-row .chev { color: var(--muted); }
+  .env-sep { height: 1px; background: var(--hairline); margin: 6px 8px; }
+
+  /* ---------------- composer ---------------- */
+  .composer { padding: 10px 24px 22px; }
+  .cbox { max-width: 720px; margin: 0 auto; border: 1px solid var(--hairline-2); border-radius: 22px; background: var(--card); box-shadow: 0 2px 10px rgba(20,25,40,0.06); padding: 6px 6px 6px; transition: border-color .15s ease, box-shadow .15s ease; }
+  .cbox:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-2)); box-shadow: 0 2px 14px rgba(20,25,40,0.10); }
+  .cbox textarea { width: 100%; border: 0; background: transparent; resize: none; color: var(--text); font: inherit; font-size: 15px; line-height: 1.5; padding: 11px 12px 4px; outline: none; }
+  .cbox textarea::placeholder { color: var(--faint); }
+  .cbar { display: flex; align-items: center; gap: 8px; padding: 2px 6px 4px; }
+  .cbar .plus { width: 30px; height: 30px; }
+  .cbar .ghost { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; border: 1px solid var(--hairline-2); background: transparent; color: var(--text-2); font: inherit; font-size: 13.5px; cursor: pointer; }
+  .cbar .ghost:hover { background: var(--hover); }
+  .cbar .spacer { flex: 1; }
+  .cbar .model { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 8px; color: var(--muted); font-size: 13.5px; cursor: pointer; }
+  .cbar .model:hover { background: var(--hover); color: var(--text); }
+  .cbar .model b { color: var(--text-2); font-weight: 600; }
+  .cbar .send { width: 32px; height: 32px; flex: none; border-radius: 50%; border: 0; background: var(--send-bg); color: var(--send-fg); cursor: pointer; display: grid; place-items: center; }
+</style>
+</head>
+<body>
+  <div class="theme-switch" role="group" aria-label="Theme">
+    <button data-theme-set="light" aria-pressed="true">☀ Light</button>
+    <button data-theme-set="dark" aria-pressed="false">☾ Dark</button>
+  </div>
+
+  <div class="app">
+    <!-- SIDEBAR -->
+    <aside class="side">
+      <div class="side-top">
+        <span class="logo">π&nbsp;Pi <svg class="ico ico-sm chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>
+        <span class="spacer"></span>
+        <button class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></button>
+        <button class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
+      </div>
+
+      <nav class="nav">
+        <a><svg class="ico" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg><span class="grow">New thread</span><svg class="ico ico-sm add" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></a>
+        <a><svg class="ico" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v1a4 4 0 01-4 4H9"/></svg><span class="grow">Pull requests</span></a>
+        <a><svg class="ico" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg><span class="grow">Sites</span></a>
+      </nav>
+
+      <div class="side-scroll">
+        <div class="sec">Projects</div>
+
+        <div class="proj"><svg class="ico" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="name">valai</span></div>
+        <ul class="chats">
+          <li><span class="t">look at the avm agent v4, at what…</span></li>
+          <li><span class="t">$avm-parity-loop use this and lo…</span></li>
+          <li><span class="t">do this in a worktree off of main…</span></li>
+          <li><span class="t">what is this error?</span></li>
+          <li class="active"><span class="t">Sequence AVM PR job merge</span><svg class="ico ico-sm share" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg></li>
+        </ul>
+        <div class="show-more">Show more</div>
+
+        <div class="proj"><svg class="ico" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="name">duo-portal-v3</span></div>
+        <ul class="chats empty"><li>No chats</li></ul>
+
+        <div class="proj"><svg class="ico" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span class="name">duo-mail</span></div>
+        <ul class="chats empty"><li>No chats</li></ul>
+
+        <div class="sec">Recents</div>
+        <ul class="chats">
+          <li><span class="t">remove the global loop review skill</span></li>
+          <li><span class="t">explain project structure of this repo</span></li>
+          <li><span class="t">install cdesktop agent teams</span></li>
+        </ul>
+      </div>
+
+      <div class="side-user">
+        <span class="pfp">BU</span><span class="nm">buster</span>
+        <button class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <!-- Environment popover -->
+      <div class="env">
+        <div class="env-h"><span class="t">Environment</span><button class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1L16.5 3h-4l-.3 2.5a7 7 0 00-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.5h4l.3-2.5a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z"/></svg></button></div>
+        <div class="env-row"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 4v16"/></svg><span class="grow">Changes</span><span class="add">+156</span> <span class="del">-530</span></div>
+        <div class="env-row"><svg class="ico" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 01-9 9"/></svg><span class="grow">Worktree</span><svg class="ico ico-sm chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="env-row"><svg class="ico" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6"/><path d="M18 6h-5a4 4 0 00-4 4"/><circle cx="18" cy="6" r="1"/></svg><span class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">feat/tiling-workspace-surface</span><svg class="ico ico-sm chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div>
+        <div class="env-row muted"><svg class="ico" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/></svg><span class="grow">Commit or push</span></div>
+        <div class="env-sep"></div>
+        <div class="env-h"><span class="t">Sources</span><button class="icon-btn"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="env-row"><svg class="ico" viewBox="0 0 24 24"><path d="M9 19c-4 1.5-4-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 00-1.3-3.2 4.3 4.3 0 00-.1-3.2s-1-.3-3.5 1.3a12 12 0 00-6.3 0C6.5 2.8 5.5 3.1 5.5 3.1a4.3 4.3 0 00-.1 3.2A4.6 4.6 0 004 9.5c0 4.6 2.7 5.7 5.5 6-.4.4-.6 1-.5 1.6V21"/></svg><span class="grow">GitHub</span></div>
+        <div class="env-row muted"><span class="grow" style="padding-left:27px">View all</span></div>
+      </div>
+
+      <div class="scroll">
+        <div class="thread" id="thread"></div>
+      </div>
+
+      <div class="composer">
+        <div class="cbox">
+          <textarea rows="1" placeholder="Do anything"></textarea>
+          <div class="cbar">
+            <button class="icon-btn plus"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button class="ghost"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Auto-approve</button>
+            <span class="spacer"></span>
+            <span class="model"><b>opus-4.8</b> High <svg class="ico ico-sm chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>
+            <button class="icon-btn"><svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0"/><path d="M12 18v3"/></svg></button>
+            <button class="send"><svg class="ico" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+  const CMDS_1 = [
+    "cloc --vcs=git --exclude-dir=node_modules,.next,dist",
+    "git ls-files | wc -l",
+    "git ls-files | awk -F. '{ext=tolower($NF)} END{...}'",
+  ];
+  const CMDS_2 = [
+    "git ls-files '*.py' '*.ts' '*.tsx' '*.html' '*.css'",
+    "git ls-files '*.html' | xargs wc -l | sort -nr",
+    "git ls-files '*.py' | xargs wc -l | sort -nr | head -20",
+  ];
+  const STATS = [
+    ["Python", "223,388"], ["TSX", "76,035"], ["TypeScript", "38,939"],
+    ["HTML", "26,479"], ["Other", "2,630"],
+  ];
+
+  const ok = `<svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>`;
+  const chev = `<svg class="ico ico-sm chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>`;
+
+  const cmdCard = (cmds, extra) => `
+    <div class="card">
+      <div class="card-head">
+        <div class="ci"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></div>
+        <div class="ct"><div class="tt">Ran ${cmds.length + (extra||0)} commands</div><div class="cs" style="color:var(--green)">exit 0</div></div>
+        <span class="link">Output ${chev}</span>
+      </div>
+      <div class="rows">
+        ${cmds.map(c => `<div class="frow"><code class="path">$ ${c}</code><span class="ok">${ok}</span></div>`).join("")}
+      </div>
+      ${extra ? `<div class="more">Show ${extra} more ${chev}</div>` : ""}
+    </div>`;
+
+  document.getElementById('thread').innerHTML = `
+    <div class="u-row"><div class="u-bubble">check how many lines of code does this repo have</div></div>
+
+    <div class="worked">Worked for 14s <span class="chev">${chev}</span></div>
+
+    ${cmdCard(CMDS_1, 2)}
+
+    <div class="a-block">
+      <p>The repo has approximately <strong>367,471 physical lines of source code</strong> across <strong>1,424 tracked source files</strong>.</p>
+      <ul>
+        <li><strong>Nonblank lines:</strong> <span class="val">323,367</span></li>
+        ${STATS.map(([k,v]) => `<li>${k}: <span class="val">${v}</span></li>`).join("")}
+      </ul>
+      <p>Count includes comments but excludes docs, JSON/YAML config, and binary assets.</p>
+    </div>
+
+    <div class="link-card">
+      <div class="li"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 010 18a15 15 0 010-18"/></svg></div>
+      <div class="lt"><div class="tt">valai — source metrics report</div><div class="cs">Report</div></div>
+      <button class="btn" style="border:1px solid var(--hairline-2);background:var(--card);color:var(--text);padding:6px 12px;border-radius:8px;font-size:13.5px;cursor:pointer">Open in ${chev}</button>
+    </div>
+
+    <div class="actions">
+      <button class="icon-btn"><svg class="ico ico-sm" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/></svg></button>
+      <button class="icon-btn"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M7 11v9"/><path d="M7 11l4-8a2 2 0 013 1v4h5a2 2 0 012 2l-2 7a2 2 0 01-2 1H7"/></svg></button>
+      <button class="icon-btn"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M17 13v7"/><path d="M17 13l-4 8a2 2 0 01-3-1v-4H5a2 2 0 01-2-2l2-7a2 2 0 012-1h10"/></svg></button>
+      <button class="icon-btn"><svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg></button>
+      <span class="ts">Thursday 22:45</span>
+    </div>
+
+    <div class="u-row"><div class="u-bubble">are you sure?</div></div>
+
+    <div class="worked">Worked for 9s <span class="chev">${chev}</span></div>
+
+    ${cmdCard(CMDS_2, 0)}
+
+    <div class="a-block">
+      <p>Re-counted with an independent method (<code>git ls-files</code> + <code>wc -l</code> per extension) — the totals match the first pass within <strong>0.3%</strong>. Confident in the figure.</p>
+    </div>
+  `;
+
+  const root = document.documentElement;
+  document.querySelectorAll('[data-theme-set]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.themeSet;
+      root.setAttribute('data-theme', t);
+      document.querySelectorAll('[data-theme-set]').forEach(b =>
+        b.setAttribute('aria-pressed', String(b.dataset.themeSet === t)));
+    });
+  });
+</script>
+</body>
+</html>
