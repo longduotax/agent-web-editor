@@ -11,6 +11,7 @@ belong here.
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
 | [Thread management](thread-management.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
+| [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -30,6 +31,17 @@ implementation remains paused until that approval is granted.
 Thread management version 2 is Current. It provides a Codex-style action menu,
 non-destructive inactive-thread archival, a direct hover/focus Archive action,
 and compact inline run-state signals.
+
+Tiling workspace surface is a Draft proposal for version 1, distilled from the
+multi-agent tiling workspace design as its first phase. It turns the project
+route into a terminal-style tiling surface of panes with a bottom dock,
+user-controlled collapse and restore, a settled-unread attention signal, the
+approved keybinding set, close-archives-thread behavior, and device-local layout.
+Later phases of that design — additional agent backends, worktree forking, the
+bound right-hand panel, theming, and the server-side efficiency projection —
+remain separate capabilities. Product approval is pending; implementation is in
+progress under the linked plan and the proposal becomes Current only after the
+user approves it and the behavior is verified.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only
