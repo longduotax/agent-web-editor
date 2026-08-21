@@ -106,7 +106,7 @@ function PaneRegion({
   const focused = paneId === controller.layout.focusedPaneId;
   const threadId = controller.layout.panes[paneId]?.threadId ?? null;
   return (
-    <div className="tiling-region" aria-current={focused ? "true" : undefined}>
+    <div className="tiling-region">
       {threadId !== null ? (
         <ThreadPane
           projectId={projectId}

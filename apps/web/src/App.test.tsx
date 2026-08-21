@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as axe from "axe-core";
 import type {
   ProjectId,
   RunId,
@@ -789,7 +790,7 @@ describe("safe and accessible workspace rendering", () => {
       }),
     ).toBeDisabled();
     fireEvent.contextMenu(
-      screen.getByRole("link", { name: /Renamed thread.*Running/ }),
+      screen.getByRole("link", { name: /Renamed thread.*Working/ }),
     );
     expect(
       screen.getByRole("menuitem", {
@@ -812,5 +813,81 @@ describe("safe and accessible workspace rendering", () => {
       expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
     });
     expect(screen.queryByText("Renamed thread")).not.toBeInTheDocument();
+  });
+});
+
+describe("sidebar run status", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+
+  function renderSidebarWithRunState(runState: "failed" | "running" | null) {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Example thread",
+          runtimeSessionId: "40000000-0000-4000-8000-000000000001",
+          runState,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("shows the derived run status as a dot plus an accessible label, matching the pane header's tokens", async () => {
+    renderSidebarWithRunState("failed");
+
+    const row = await screen.findByRole("link", {
+      name: /Example thread.*Failed/,
+    });
+    const dot = row.querySelector(".sdot.fail");
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveAttribute("aria-hidden", "true");
+    // Status is never colour-only: an accessible label backs the dot.
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+  });
+
+  it("shows no status indicator for a threadless/never-run thread", async () => {
+    renderSidebarWithRunState(null);
+
+    const row = await screen.findByRole("link", { name: "Example thread" });
+    expect(row.querySelector(".sdot")).toBeNull();
+  });
+
+  it("has no axe violations with a run status shown in the sidebar", async () => {
+    renderSidebarWithRunState("running");
+    await screen.findByRole("link", { name: /Example thread.*Working/ });
+
+    // Scoped to the sidebar landmark itself: the full page has a
+    // pre-existing (unrelated) nested-landmark structure elsewhere that
+    // isn't part of this change.
+    const sidebar = screen.getByRole("navigation", {
+      name: "Projects and threads",
+    });
+    const results = await axe.run(sidebar);
+    expect(results.violations).toEqual([]);
   });
 });

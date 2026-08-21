@@ -45,6 +45,11 @@ import { TerminalView } from "./features/TerminalView.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
+  deriveRunStatus,
+  PANE_STATUS_LABEL,
+  PANE_STATUS_TOKEN,
+} from "./features/workspace/runStatus.js";
+import {
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
   INSPECTOR_TABS,
@@ -450,10 +455,31 @@ function Sidebar({
                                 <span className="thread-title">
                                   {thread.title}
                                 </span>
-                                <Status
-                                  state={thread.runState}
-                                  unread={thread.unread}
-                                />
+                                {(() => {
+                                  // Same four-way status (and the same
+                                  // .sdot.{run|wait|done|fail} classes) as
+                                  // the pane header, so the sidebar and the
+                                  // panes read identically. A threadless or
+                                  // never-run thread (runState null) shows
+                                  // no status at all; otherwise fall back to
+                                  // the plain unread-completion indicator.
+                                  const runStatus = deriveRunStatus({
+                                    runState: thread.runState,
+                                  });
+                                  return runStatus !== null ? (
+                                    <span className="status">
+                                      <span
+                                        className={`sdot ${PANE_STATUS_TOKEN[runStatus]}`}
+                                        aria-hidden="true"
+                                      />
+                                      <span className="sr-only">
+                                        {PANE_STATUS_LABEL[runStatus]}
+                                      </span>
+                                    </span>
+                                  ) : (
+                                    <Status state={null} unread={thread.unread} />
+                                  );
+                                })()}
                               </Link>
                               <button
                                 className="thread-archive-button"

@@ -273,8 +273,9 @@ export function ThreadPane(props: ThreadPaneProps) {
 
   return (
     <section
-      className={`pane thread-pane ${focused ? "pane-focused" : ""}`}
+      className={`pane thread-pane ${focused ? "focused" : "dim"}`}
       aria-label={snapshot.data?.thread.title ?? "Thread"}
+      aria-current={focused ? "true" : undefined}
       onClick={() => {
         props.onFocus();
       }}

@@ -242,6 +242,42 @@ describe("TilingSurface", () => {
     expect(threadRegion).toHaveAttribute("aria-current", "true");
   });
 
+  it("gives the focused pane the ring treatment and dims the non-focused one, matching the pane it wraps", async () => {
+    const { getController } = renderSurface();
+    const firstPaneId = await seedTwoPanes(getController);
+
+    const user = userEvent.setup();
+    const heading = screen.getByRole("heading", { name: "Example thread" });
+    await user.click(heading);
+    expect(getController().layout.focusedPaneId).toBe(firstPaneId);
+
+    const focusedPane = screen
+      .getByRole("region", { name: "Example thread" });
+    expect(focusedPane).toHaveClass("pane", "focused");
+    expect(focusedPane).not.toHaveClass("dim");
+    expect(focusedPane).toHaveAttribute("aria-current", "true");
+
+    const dimmedPane = screen.getByLabelText("New chat");
+    expect(dimmedPane).toHaveClass("pane", "dim");
+    expect(dimmedPane).not.toHaveClass("focused");
+    expect(dimmedPane).not.toHaveAttribute("aria-current");
+  });
+
+  it("never renders a dock or dock-restore affordance", async () => {
+    const { getController } = renderSurface();
+    await seedTwoPanes(getController);
+
+    expect(
+      screen.queryByRole("button", { name: /dock/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /restore.*dock/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: /dock/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("resizes the outer split of a 2x2 grid by keyboard, even though neither of its immediate children is a pane", async () => {
     const { getController, container } = renderSurface();
 

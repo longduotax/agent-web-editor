@@ -447,6 +447,91 @@ describe("WorkspaceView", () => {
     // ...and landing on /new adds and focuses a fresh threadless pane
     // alongside it, rather than reusing the already-threaded one.
     const composer = await screen.findByLabelText("First message");
-    expect(composer.closest(".pane")).toHaveClass("pane-focused");
+    expect(composer.closest(".pane")).toHaveClass("focused");
+  });
+
+  it("renders no dock chrome: no 'Docked panes' group anywhere in the view", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    await screen.findByRole("region", { name: "Example thread" });
+
+    expect(
+      screen.queryByRole("group", { name: "Docked panes" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never moves focus when a pane's run state changes to failed (header/sidebar indicators update, focus does not)", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const store = stubStorage();
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "example",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          available: true,
+          gitAvailable: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [],
+      diagnostics: [],
+    });
+    api.getWorkspacePreflight.mockResolvedValue({
+      worktreeAvailable: true,
+      unavailableReason: null,
+      currentBranch: "main",
+      branches: ["main"],
+      headCommit: "1234567",
+      changes: null,
+    });
+    let currentSnapshot = snapshot;
+    api.getSnapshot.mockImplementation(() => Promise.resolve(currentSnapshot));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <Routes>
+            <Route
+              path="/projects/:projectId/threads/:threadId"
+              element={<WorkspaceView projectId={projectId} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("region", { name: "Example thread" });
+
+    const layoutKey = `pi-workspace:layout:${projectId}`;
+    const before = JSON.parse(store.get(layoutKey) ?? "null") as {
+      focusedPaneId: string | null;
+    };
+    expect(before.focusedPaneId).not.toBeNull();
+
+    // Simulate the run transitioning to failed: the header status must
+    // update, but nothing may call the focus setter as a side effect.
+    currentSnapshot = {
+      ...snapshot,
+      thread: { ...snapshot.thread, runState: "failed" },
+    };
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await screen.findByText("Failed");
+
+    const after = JSON.parse(store.get(layoutKey) ?? "null") as {
+      focusedPaneId: string | null;
+    };
+    expect(after.focusedPaneId).toBe(before.focusedPaneId);
   });
 });

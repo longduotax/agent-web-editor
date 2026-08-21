@@ -97,8 +97,9 @@ export function NewChatPane(props: NewChatPaneProps) {
   };
   return (
     <section
-      className={`pane new-chat-pane ${focused ? "pane-focused" : ""}`}
+      className={`pane new-chat-pane ${focused ? "focused" : "dim"}`}
       aria-label="New chat"
+      aria-current={focused ? "true" : undefined}
       onClick={() => {
         props.onFocus();
       }}
