@@ -236,7 +236,14 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
         onThreadStarted={handleThreadStarted}
       />
       {pendingClose !== null && (
+        // Keyed by paneId so a flush that swaps one pending close for
+        // another (see handleClose) remounts the toast instead of reusing
+        // its fiber — otherwise the timer effect's [timeoutMs] dependency
+        // never changes and the *first* pane's countdown keeps running,
+        // leaving the second pane with whatever time was left rather than
+        // a fresh timeoutMs window.
         <UndoToast
+          key={pendingClose.paneId}
           message="Archived"
           onUndo={handleToastUndo}
           onDismiss={handleToastDismiss}

@@ -283,36 +283,38 @@ describe("WorkspaceView", () => {
     expect(api.archiveThread).not.toHaveBeenCalled();
   });
 
-  it("flushes (archives now) a pending close's thread when a second pane is closed before its toast times out", async () => {
-    api.archiveThread.mockResolvedValue({ archived: true as const });
+  function seedTwoPaneLayout(store: Map<string, string>) {
     const seededPaneA = "seeded-pane-a";
     const seededPaneB = "seeded-pane-b";
+    store.set(
+      `pi-workspace:layout:${projectId}`,
+      JSON.stringify({
+        version: 2,
+        root: {
+          type: "split",
+          id: "seeded-split",
+          axis: "row",
+          children: [
+            { type: "pane", id: seededPaneA },
+            { type: "pane", id: seededPaneB },
+          ],
+          sizes: [0.5, 0.5],
+        },
+        panes: {
+          [seededPaneA]: { threadId },
+          [seededPaneB]: { threadId: otherThreadId },
+        },
+        focusedPaneId: seededPaneA,
+        boundPaneId: null,
+      }),
+    );
+  }
+
+  it("flushes (archives now) a pending close's thread when a second pane is closed before its toast times out, and gives the second pane a fresh full timeoutMs window (not the first's leftover time)", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
     renderWorkspace(`/projects/${projectId}`, {
       snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
-      seedStore: (store) => {
-        store.set(
-          `pi-workspace:layout:${projectId}`,
-          JSON.stringify({
-            version: 2,
-            root: {
-              type: "split",
-              id: "seeded-split",
-              axis: "row",
-              children: [
-                { type: "pane", id: seededPaneA },
-                { type: "pane", id: seededPaneB },
-              ],
-              sizes: [0.5, 0.5],
-            },
-            panes: {
-              [seededPaneA]: { threadId },
-              [seededPaneB]: { threadId: otherThreadId },
-            },
-            focusedPaneId: seededPaneA,
-            boundPaneId: null,
-          }),
-        );
-      },
+      seedStore: seedTwoPaneLayout,
     });
 
     await screen.findByRole("region", { name: "Example thread" });
@@ -322,6 +324,15 @@ describe("WorkspaceView", () => {
     fireEvent.click(closeButtonFor("Example thread"));
     expect(api.archiveThread).not.toHaveBeenCalled();
 
+    // Let most (but not all) of the first toast's window elapse before
+    // flushing it, so a stale/reused timer for the second pane would fire
+    // almost immediately — distinguishing that bug from a correctly fresh
+    // 6s window starting at B's own close.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(api.archiveThread).not.toHaveBeenCalled();
+
     fireEvent.click(closeButtonFor("Other thread"));
 
     // Closing the second pane while the first's toast was still pending
@@ -329,13 +340,56 @@ describe("WorkspaceView", () => {
     expect(api.archiveThread).toHaveBeenCalledTimes(1);
     expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
 
-    // ...and starts a fresh deferred archive for the second.
+    // ...and starts a fresh deferred archive for the second: just past
+    // where the first pane's stale timer would have fired (1000ms further,
+    // i.e. 6000ms since A's close but only 1000ms since B's), it must NOT
+    // have archived yet.
     expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
     act(() => {
-      vi.advanceTimersByTime(6000);
+      vi.advanceTimersByTime(1000);
+    });
+    expect(api.archiveThread).toHaveBeenCalledTimes(1);
+
+    // Only once a full 6000ms has elapsed since B's own close does it
+    // archive.
+    act(() => {
+      vi.advanceTimersByTime(5000);
     });
     expect(api.archiveThread).toHaveBeenCalledTimes(2);
     expect(api.archiveThread).toHaveBeenCalledWith(projectId, otherThreadId);
+  });
+
+  it("clicking Undo on the second (flushed) pane's toast still results in zero archive calls for it", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderWorkspace(`/projects/${projectId}`, {
+      snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
+      seedStore: seedTwoPaneLayout,
+    });
+
+    await screen.findByRole("region", { name: "Example thread" });
+    await screen.findByRole("region", { name: "Other thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(closeButtonFor("Example thread"));
+    fireEvent.click(closeButtonFor("Other thread"));
+    expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(
+      screen.getByRole("region", { name: "Other thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Undo" }),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    // Still just the one archive call, for the flushed first pane — never
+    // one for the second (undone) pane.
+    expect(api.archiveThread).toHaveBeenCalledTimes(1);
   });
 
   it("focuses/creates a pane for the thread named in the route on mount", async () => {
