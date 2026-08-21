@@ -5,18 +5,14 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
-  type SyntheticEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  LiveEventSchema,
-  LiveSnapshotRequiredSchema,
   ProjectIdSchema,
   ThreadIdSchema,
   type Project,
   type ProjectId,
   type ThreadId,
-  type ThreadSnapshot,
 } from "@pi-web/contracts";
 import {
   Link,
@@ -30,7 +26,6 @@ import {
 import {
   archiveThread,
   browseProject,
-  commandId,
   discoverSessions,
   getDiff,
   getFile,
@@ -38,22 +33,17 @@ import {
   getSnapshot,
   getStatus,
   getWorkspace,
-  getWorkspacePreflight,
   importThread,
-  markViewed,
-  prompt,
   removeProject,
   renameThread,
   setExpanded,
-  startThread,
-  steer,
-  stop,
-  webSocketUrl,
 } from "./api/client.js";
-import { Activity, displayTranscript } from "./components/Activity.js";
-import { Markdown } from "./components/Markdown.js";
+import { ErrorNotice } from "./components/ErrorNotice.js";
+import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
+import { NewChatPane } from "./features/workspace/NewChatPane.js";
+import { ThreadPane } from "./features/workspace/ThreadPane.js";
 import {
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
@@ -64,75 +54,7 @@ import {
   type InspectorTab,
 } from "./inspectorPreferences.js";
 
-interface DraftStorage {
-  getItem(key: string): unknown;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
-function storageMethods(value: object): DraftStorage | null {
-  if (
-    !("getItem" in value) ||
-    !("setItem" in value) ||
-    !("removeItem" in value)
-  )
-    return null;
-  const { getItem, setItem, removeItem } = value;
-  if (
-    typeof getItem !== "function" ||
-    typeof setItem !== "function" ||
-    typeof removeItem !== "function"
-  )
-    return null;
-  return {
-    getItem: getItem.bind(value) as (key: string) => unknown,
-    setItem: setItem.bind(value) as (key: string, stored: string) => void,
-    removeItem: removeItem.bind(value) as (key: string) => void,
-  };
-}
-
-function draftStorage(): DraftStorage | null {
-  const storage: unknown = globalThis.localStorage;
-  return typeof storage === "object" && storage !== null
-    ? storageMethods(storage)
-    : null;
-}
-
-function readDraft(key: string): string {
-  try {
-    const value = draftStorage()?.getItem(key);
-    return typeof value === "string" ? value : "";
-  } catch {
-    // Browser storage can be disabled or replaced by an incomplete test shim.
-  }
-  return "";
-}
-
-function writeDraft(key: string, value: string): void {
-  try {
-    draftStorage()?.setItem(key, value);
-  } catch {
-    // Draft persistence is best-effort.
-  }
-}
-
-function removeDraft(key: string): void {
-  try {
-    draftStorage()?.removeItem(key);
-  } catch {
-    // Draft persistence is best-effort.
-  }
-}
-
-function ErrorNotice({ error }: { error: unknown }) {
-  const message =
-    error instanceof Error ? error.message : "An unexpected error occurred.";
-  return (
-    <div className="error-notice" role="alert">
-      {message}
-    </div>
-  );
-}
+export { Composer } from "./features/workspace/ThreadPane.js";
 
 function Sidebar({
   selectedProjectId,
@@ -628,202 +550,6 @@ function Sidebar({
   );
 }
 
-function useLive(
-  projectId: ProjectId,
-  threadId: ThreadId,
-  snapshot: ThreadSnapshot | undefined,
-): void {
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    if (snapshot === undefined) return;
-    let closed = false;
-    let retry: number | undefined;
-    let socket: WebSocket | undefined;
-    const connect = () => {
-      socket = new WebSocket(webSocketUrl("/api/live"));
-      socket.addEventListener("open", () =>
-        socket?.send(
-          JSON.stringify({
-            version: 1,
-            type: "subscribe",
-            threadId,
-            epoch: snapshot.epoch,
-            cursor: snapshot.highWaterSequence,
-          }),
-        ),
-      );
-      socket.addEventListener("message", (event) => {
-        let value: unknown;
-        try {
-          value = JSON.parse(String(event.data));
-        } catch {
-          return;
-        }
-        if (
-          LiveEventSchema.safeParse(value).success ||
-          LiveSnapshotRequiredSchema.safeParse(value).success
-        ) {
-          void queryClient.invalidateQueries({
-            queryKey: ["snapshot", projectId, threadId],
-          });
-          void queryClient.invalidateQueries({ queryKey: ["workspace"] });
-        }
-      });
-      socket.addEventListener("close", () => {
-        if (!closed) retry = window.setTimeout(connect, 1_000);
-      });
-    };
-    connect();
-    return () => {
-      closed = true;
-      if (retry !== undefined) clearTimeout(retry);
-      socket?.close();
-    };
-  }, [
-    projectId,
-    queryClient,
-    snapshot?.epoch,
-    snapshot?.highWaterSequence,
-    threadId,
-  ]);
-}
-
-function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
-  return (
-    <div className="transcript" aria-label="Conversation">
-      {snapshot.transcript.length === 0 && (
-        <div className="empty conversation-empty">
-          <strong>No messages yet</strong>
-          <span>
-            Ask Pi to inspect, implement, or review something in this project.
-          </span>
-        </div>
-      )}
-      {displayTranscript(snapshot.transcript).map((item) =>
-        item.kind === "message" ? (
-          <article className={`message message-${item.role}`} key={item.id}>
-            <header>
-              {item.role === "assistant"
-                ? "Pi"
-                : item.role === "user"
-                  ? "You"
-                  : "System"}
-            </header>
-            <div className="markdown">
-              <Markdown>{item.text}</Markdown>
-            </div>
-          </article>
-        ) : item.kind === "tool" ? (
-          <Activity
-            item={item}
-            key={item.id}
-            projectPath={snapshot.project.displayPath}
-          />
-        ) : (
-          <p className={`diagnostic ${item.level}`} key={item.id}>
-            {item.text}
-          </p>
-        ),
-      )}
-      {snapshot.diagnostics.map((diagnostic) => (
-        <p className="diagnostic warning" key={diagnostic}>
-          {diagnostic}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-export function Composer({
-  projectId,
-  threadId,
-  snapshot,
-}: {
-  projectId: ProjectId;
-  threadId: ThreadId;
-  snapshot: ThreadSnapshot;
-}) {
-  const queryClient = useQueryClient();
-  const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
-  const active = snapshot.currentRun?.state === "running";
-  const mutation = useMutation({
-    mutationFn: async () =>
-      active
-        ? await steer(projectId, threadId, text)
-        : await prompt(projectId, threadId, text),
-    onSuccess: async () => {
-      setText("");
-      removeDraft(`pi-draft:${threadId}`);
-      await queryClient.invalidateQueries({
-        queryKey: ["snapshot", projectId, threadId],
-      });
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    },
-  });
-  useEffect(() => {
-    writeDraft(`pi-draft:${threadId}`, text);
-  }, [text, threadId]);
-
-  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (text.trim() === "") return;
-    mutation.mutate();
-  };
-  return (
-    <form className="composer" onSubmit={submit}>
-      <div className="composer-input">
-        <textarea
-          aria-label="Message Pi"
-          placeholder="Ask Pi to work in this project…"
-          rows={3}
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key !== "Enter" ||
-              event.shiftKey ||
-              event.nativeEvent.isComposing
-            )
-              return;
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }}
-        />
-        <div className="composer-actions">
-          <span>Enter to send · Shift + Enter for a new line</span>
-          {active && (
-            <button
-              type="button"
-              className="stop"
-              onClick={() =>
-                void stop(projectId, threadId).then(() =>
-                  queryClient.invalidateQueries({
-                    queryKey: ["snapshot", projectId, threadId],
-                  }),
-                )
-              }
-            >
-              ■ Stop
-            </button>
-          )}
-          <button
-            type="submit"
-            className="send"
-            aria-label={active ? "Steer current run" : "Send message"}
-            title={active ? "Steer current run" : "Send message"}
-            disabled={mutation.isPending || text.trim() === ""}
-          >
-            <span aria-hidden="true">↑</span>
-          </button>
-        </div>
-      </div>
-      {mutation.error !== null && <ErrorNotice error={mutation.error} />}
-    </form>
-  );
-}
-
 const DESKTOP_SIDEBAR_WIDTH = 272;
 const MIN_THREAD_WIDTH = 360;
 const INSPECTOR_RESIZE_STEP = 24;
@@ -1126,264 +852,24 @@ function Inspector({
 function NewChatRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
-  const projectId = projectResult.success ? projectResult.data : undefined;
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const workspace = useQuery({
-    queryKey: ["workspace"],
-    queryFn: getWorkspace,
-  });
-  const preflight = useQuery({
-    queryKey: ["workspace-preflight", projectId],
-    queryFn: async () => {
-      if (projectId === undefined) throw new Error("Project is unavailable.");
-      return await getWorkspacePreflight(projectId);
-    },
-    enabled: projectId !== undefined,
-  });
-  const [mode, setMode] = useState<"worktree" | "shared">("worktree");
-  const [sourceChanges, setSourceChanges] = useState<
-    "none" | "tracked_and_untracked"
-  >("none");
-  const [baseBranch, setBaseBranch] = useState("");
-  const [creationKey, setCreationKey] = useState(commandId);
-  const [text, setText] = useState(() =>
-    projectId === undefined ? "" : readDraft(`pi-new-draft:${projectId}`),
-  );
-  useEffect(() => {
-    setMode("worktree");
-    setSourceChanges("none");
-    setBaseBranch("");
-    setCreationKey(commandId());
-    setText(
-      projectId === undefined ? "" : readDraft(`pi-new-draft:${projectId}`),
-    );
-  }, [projectId]);
-  useEffect(() => {
-    if (preflight.data?.currentBranch !== null && baseBranch === "")
-      setBaseBranch(preflight.data?.currentBranch ?? "");
-  }, [baseBranch, preflight.data?.currentBranch]);
-  useEffect(() => {
-    if (projectId !== undefined) writeDraft(`pi-new-draft:${projectId}`, text);
-  }, [projectId, text]);
-  const create = useMutation({
-    mutationFn: async () => {
-      if (projectId === undefined) throw new Error("Project is unavailable.");
-      return await startThread(
-        projectId,
-        text,
-        mode === "shared"
-          ? { mode: "shared" }
-          : {
-              mode: "worktree",
-              baseBranch,
-              sourceChanges,
-              ...(sourceChanges === "tracked_and_untracked" &&
-              preflight.data?.changes !== null &&
-              preflight.data?.changes !== undefined
-                ? { sourceStateToken: preflight.data.changes.token }
-                : {}),
-            },
-        creationKey,
-      );
-    },
-    onSuccess: async (result) => {
-      if (projectId !== undefined) removeDraft(`pi-new-draft:${projectId}`);
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-      void navigate(
-        `/projects/${result.thread.projectId}/threads/${result.thread.id}`,
-      );
-    },
-  });
   if (!projectResult.success) return <NotFound />;
-  const project = workspace.data?.projects.find(
-    (candidate) => candidate.id === projectResult.data,
-  );
-  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (
-      text.trim() === "" ||
-      (mode === "worktree" &&
-        (!preflight.data?.worktreeAvailable || baseBranch === ""))
-    )
-      return;
-    create.mutate();
-  };
+  const projectId = projectResult.data;
   return (
-    <WorkspaceLayout selectedProjectId={projectResult.data}>
-      <main className="center new-chat">
-        <form className="new-chat-card" onSubmit={submit}>
-          <div className="new-chat-toolbar" aria-label="New chat configuration">
-            <label>
-              <span className="sr-only">Project</span>
-              <select
-                aria-label="Project"
-                value={projectResult.data}
-                onChange={(event) => {
-                  void navigate(`/projects/${event.target.value}/new`);
-                }}
-              >
-                {workspace.data?.projects.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Execution location</span>
-              <select
-                aria-label="Execution location"
-                value={mode}
-                onChange={(event) => {
-                  setMode(
-                    event.target.value === "shared" ? "shared" : "worktree",
-                  );
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                <option
-                  value="worktree"
-                  disabled={preflight.data?.worktreeAvailable === false}
-                >
-                  New worktree
-                </option>
-                <option value="shared">Local checkout</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Starting state</span>
-              <select
-                aria-label="Starting state"
-                value={mode === "shared" ? "current" : sourceChanges}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setSourceChanges(
-                    event.target.value === "tracked_and_untracked"
-                      ? "tracked_and_untracked"
-                      : "none",
-                  );
-                  setCreationKey(commandId());
-                }}
-              >
-                {mode === "shared" && (
-                  <option value="current">Current local files</option>
-                )}
-                {mode === "worktree" && (
-                  <>
-                    <option value="none">Clean start</option>
-                    <option
-                      value="tracked_and_untracked"
-                      disabled={
-                        baseBranch !==
-                          (preflight.data === undefined
-                            ? null
-                            : preflight.data.currentBranch) ||
-                        (preflight.data?.changes?.files.length ?? 0) === 0
-                      }
-                    >
-                      Include local changes
-                    </option>
-                  </>
-                )}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Base branch</span>
-              <select
-                aria-label="Base branch"
-                value={baseBranch}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setBaseBranch(event.target.value);
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                {(preflight.data?.branches ?? []).map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {mode === "worktree" &&
-            preflight.data?.worktreeAvailable === false && (
-              <p className="new-chat-note" role="alert">
-                {preflight.data.unavailableReason}
-              </p>
-            )}
-          {mode === "worktree" && sourceChanges === "none" && (
-            <p className="new-chat-note">
-              Starts from committed {baseBranch || "HEAD"}. Local changes are
-              not copied.
-            </p>
-          )}
-          {mode === "worktree" && sourceChanges === "tracked_and_untracked" && (
-            <div className="new-chat-note warning">
-              <p>
-                Including {String(preflight.data?.changes?.files.length ?? 0)}{" "}
-                local changes. Ignored files are excluded.
-              </p>
-              <details>
-                <summary>Review files</summary>
-                <ul>
-                  {preflight.data?.changes?.files.map((path) => (
-                    <li key={path}>{path}</li>
-                  ))}
-                </ul>
-              </details>
-            </div>
-          )}
-          {mode === "shared" && (
-            <p className="new-chat-note warning">
-              Pi will work directly in the existing checkout and see its current
-              files.
-            </p>
-          )}
-          <div className="composer-input new-chat-input">
-            <textarea
-              aria-label="First message"
-              placeholder={`Ask Pi to work in ${project?.displayName ?? "this project"}…`}
-              rows={6}
-              autoFocus
-              value={text}
-              onChange={(event) => {
-                setText(event.target.value);
-                setCreationKey(commandId());
-              }}
-              onKeyDown={(event) => {
-                if (
-                  event.key !== "Enter" ||
-                  event.shiftKey ||
-                  event.nativeEvent.isComposing
-                )
-                  return;
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }}
-            />
-            <div className="composer-actions">
-              <span>
-                {create.isPending
-                  ? "Naming and preparing workspace…"
-                  : "Enter to send · Shift + Enter for a new line"}
-              </span>
-              <button
-                type="submit"
-                className="send"
-                aria-label="Create chat and send"
-                disabled={create.isPending || text.trim() === ""}
-              >
-                <span aria-hidden="true">↑</span>
-              </button>
-            </div>
-          </div>
-          {create.error !== null && <ErrorNotice error={create.error} />}
-        </form>
-      </main>
+    <WorkspaceLayout selectedProjectId={projectId}>
+      <NewChatPane
+        projectId={projectId}
+        focused
+        onFocus={() => {
+          // Only one pane is rendered outside tiling mode.
+        }}
+        onClose={() => {
+          void navigate(`/projects/${projectId}`);
+        }}
+        onThreadStarted={(threadId) => {
+          void navigate(`/projects/${projectId}/threads/${threadId}`);
+        }}
+      />
     </WorkspaceLayout>
   );
 }
@@ -1392,6 +878,8 @@ function ThreadRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [inspectorPreferences, setInspectorPreferences] =
     useState<InspectorPreferences>(readInspectorPreferences);
   useEffect(() => {
@@ -1405,27 +893,22 @@ function ThreadRoute() {
   ) => {
     setInspectorPreferences((current) => ({ ...current, ...update }));
   };
+  // Kept only for the Inspector, which needs the project record and to know
+  // whether a snapshot is available; ThreadPane owns its own copy of this
+  // query (and the live-update subscription that keeps it fresh) so it stays
+  // self-contained.
   const snapshot = useQuery({
     queryKey: ["snapshot", projectId, threadId],
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
   });
-  useLive(projectId, threadId, snapshot.data);
-  useEffect(() => {
-    const lastRun = snapshot.data?.lastRun;
-    if (snapshot.data?.thread.unread === true && lastRun?.state === "completed")
-      void markViewed(projectId, threadId, lastRun.id);
-  }, [
-    projectId,
-    snapshot.data?.lastRun,
-    snapshot.data?.thread.unread,
-    threadId,
-  ]);
-  const threadWorkspace = snapshot.data?.thread.workspace ?? {
-    mode: "shared" as const,
-    branchName: null,
-    available: true,
-  };
+  const archive = useMutation({
+    mutationFn: async () => await archiveThread(projectId, threadId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      void navigate(`/projects/${projectId}`);
+    },
+  });
   return (
     <WorkspaceLayout
       selectedProjectId={projectId}
@@ -1460,50 +943,23 @@ function ThreadRoute() {
         ) : undefined
       }
     >
-      {snapshot.isPending ? (
-        <Loading />
-      ) : snapshot.error !== null ? (
-        <main className="center">
-          <ErrorNotice error={snapshot.error} />
-        </main>
-      ) : (
-        <>
-          <main className="center">
-            <header className="thread-header">
-              <div>
-                <small>
-                  {snapshot.data.project.displayName} ·{" "}
-                  {threadWorkspace.mode === "worktree"
-                    ? "↗ Worktree"
-                    : "⌂ Local checkout"}
-                  {threadWorkspace.branchName === null
-                    ? ""
-                    : ` · ⑂ ${threadWorkspace.branchName}`}
-                </small>
-                <h1>{snapshot.data.thread.title}</h1>
-              </div>
-              <Status
-                state={
-                  snapshot.data.currentRun?.state ??
-                  snapshot.data.lastRun?.state ??
-                  null
-                }
-                unread={snapshot.data.thread.unread}
-              />
-            </header>
-            <div className="trust-warning">
-              <strong>Direct execution:</strong> Pi tools run with your user
-              permissions, without application approval or an OS sandbox.
-            </div>
-            <Transcript snapshot={snapshot.data} />
-            <Composer
-              projectId={projectId}
-              threadId={threadId}
-              snapshot={snapshot.data}
-            />
-          </main>
-        </>
-      )}
+      <ThreadPane
+        projectId={projectId}
+        threadId={threadId}
+        focused
+        onFocus={() => {
+          // Only one pane is rendered outside tiling mode.
+        }}
+        onCollapse={() => {
+          // No-op until the tiling workspace surface is wired in.
+        }}
+        onClose={() => {
+          archive.mutate();
+        }}
+        onBind={() => {
+          // No-op until the tiling workspace surface is wired in.
+        }}
+      />
     </WorkspaceLayout>
   );
 }
@@ -1658,13 +1114,6 @@ function WorkspaceLayout({
         />
       )}
     </div>
-  );
-}
-function Loading() {
-  return (
-    <main className="center loading" aria-live="polite">
-      Loading workspace…
-    </main>
   );
 }
 function NotFound() {

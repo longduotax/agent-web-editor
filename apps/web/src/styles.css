@@ -353,6 +353,54 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.7rem;
 }
+.pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.pane > .center {
+  flex: 1;
+  min-height: 0;
+}
+.pane-title-bar {
+  display: flex;
+  min-height: 2.1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(17, 20, 26, 0.94);
+}
+.pane-title {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-title-actions {
+  display: flex;
+  flex: none;
+  gap: 0.2rem;
+}
+.pane-title-actions button {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0.3rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.pane-title-actions button:hover {
+  color: white;
+  background: var(--surface-3);
+}
 .center {
   position: relative;
   display: flex;
