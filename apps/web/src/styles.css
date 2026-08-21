@@ -26,8 +26,7 @@
   --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
   --pop-shadow:
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
-  --mono:
-    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 /* keep the repo's legacy alias names pointing at the new tokens so existing
    rules that reference --surface-0..3/--border/--blue keep working */
@@ -437,10 +436,31 @@ a:focus-visible {
   color: var(--blue);
 }
 .local-only {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
   padding: 0.65rem 1rem;
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.7rem;
+}
+.local-only-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-link {
+  flex: none;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--text-2);
+  text-decoration: none;
+}
+.settings-link:hover {
+  color: var(--text);
+  background: var(--hover);
 }
 .pane {
   display: flex;
@@ -1202,6 +1222,66 @@ a:focus-visible {
   font:
     5rem Georgia,
     serif;
+}
+.settings-page {
+  overflow-y: auto;
+  background: var(--page);
+}
+.settings-body {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 3rem;
+}
+.settings-body h1 {
+  margin: 0 0 1.5rem;
+  color: var(--text);
+  font-size: 1.4rem;
+}
+.settings-section {
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--hairline-2);
+}
+.settings-section:first-of-type {
+  border-top: none;
+}
+.settings-section h2 {
+  margin: 0 0 0.3rem;
+  color: var(--text);
+  font-size: 1rem;
+}
+.settings-section-description {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.theme-control {
+  display: flex;
+  gap: 0.6rem;
+}
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.5rem;
+  color: var(--text-2);
+  background: var(--card);
+  cursor: pointer;
+}
+.theme-option:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--hover);
+}
+.theme-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-option input {
+  margin: 0;
 }
 .drawer-backdrop {
   display: none;

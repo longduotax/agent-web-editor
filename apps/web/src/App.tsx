@@ -42,6 +42,7 @@ import { ErrorNotice } from "./components/ErrorNotice.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
+import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
   INSPECTOR_MAX_WIDTH,
@@ -543,7 +544,12 @@ function Sidebar({
         </p>
       ))}
       <footer className="local-only">
-        <span aria-hidden="true">⌂</span> Loopback-only server
+        <span className="local-only-note">
+          <span aria-hidden="true">⌂</span> Loopback-only server
+        </span>
+        <Link to="/settings" className="settings-link">
+          Settings
+        </Link>
       </footer>
     </nav>
   );
@@ -1087,6 +1093,13 @@ function NotFound() {
     </WorkspaceLayout>
   );
 }
+function SettingsRoute() {
+  return (
+    <WorkspaceLayout>
+      <SettingsPage />
+    </WorkspaceLayout>
+  );
+}
 function EmptyRoot() {
   return (
     <WorkspaceLayout>
@@ -1112,6 +1125,7 @@ export function App() {
         path="/projects/:projectId/threads/:threadId"
         element={<ThreadRoute />}
       />
+      <Route path="/settings" element={<SettingsRoute />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
