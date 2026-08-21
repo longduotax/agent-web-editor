@@ -35,6 +35,16 @@ describe("layoutTree", () => {
     expect(l.focusedPaneId).toBe("pane-2");
   });
 
+  it("splitting a nonexistent target leaves the layout unchanged", () => {
+    const make = ids();
+    const l = createInitialLayout(make);
+    const result = splitPane(l, "pane-does-not-exist", "row", make);
+    expect(result).toEqual(l);
+    expect(tiledPaneIds(result)).toEqual(tiledPaneIds(l));
+    expect(result.focusedPaneId).toBe(l.focusedPaneId);
+    expect(Object.keys(result.panes)).toEqual(Object.keys(l.panes));
+  });
+
   it("collapses to the dock and restores back into the tree", () => {
     const make = ids();
     let l = createInitialLayout(make);

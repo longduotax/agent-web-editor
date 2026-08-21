@@ -99,7 +99,7 @@ export function splitPane(
   axis: SplitAxis,
   makeId: () => PaneId,
 ): WorkspaceLayout {
-  if (l.root === null) return l;
+  if (l.root === null || !nodeContains(l.root, target)) return l;
   const newId = makeId();
   const root = replaceNode(l.root, target, (pane): LayoutNode => ({
     type: "split",
