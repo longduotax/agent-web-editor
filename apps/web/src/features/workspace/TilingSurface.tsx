@@ -7,9 +7,14 @@ import {
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
+import { tiledPaneIds } from "./layoutTree.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 import { ThreadPane } from "./ThreadPane.js";
 import { NewChatPane } from "./NewChatPane.js";
+
+// Smallest usable pane width before the surface scrolls horizontally
+// instead of shrinking panes further. Panes never shrink below this.
+export const MIN_PANE_WIDTH_PX = 360;
 
 export interface TilingSurfaceProps {
   projectId: ProjectId;
@@ -35,16 +40,23 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
     return <EmptyState />;
   }
 
+  const paneCount = tiledPaneIds(controller.layout).length;
+
   return (
-    <div className="tiling-surface">
-      <LayoutNodeView
-        key={root.id}
-        node={root}
-        controller={controller}
-        projectId={projectId}
-        onClosePane={onClosePane}
-        onThreadStarted={onThreadStarted}
-      />
+    <div className="tiling-surface" style={{ overflowX: "auto" }}>
+      <div
+        className="tiling-tiles"
+        style={{ minWidth: paneCount * MIN_PANE_WIDTH_PX }}
+      >
+        <LayoutNodeView
+          key={root.id}
+          node={root}
+          controller={controller}
+          projectId={projectId}
+          onClosePane={onClosePane}
+          onThreadStarted={onThreadStarted}
+        />
+      </div>
     </div>
   );
 }

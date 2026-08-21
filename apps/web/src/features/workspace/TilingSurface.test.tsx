@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
 
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -34,7 +38,19 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 import { tiledPaneIds } from "./layoutTree.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
-import { TilingSurface } from "./TilingSurface.js";
+import { MIN_PANE_WIDTH_PX, TilingSurface } from "./TilingSurface.js";
+
+// Extracts the declaration body of a standalone top-level CSS rule (e.g.
+// ".transcript {") from the stylesheet source. Used to assert on the actual
+// shipped CSS properties (not just a class name) since jsdom does not apply
+// external stylesheets, so computed styles in tests can't reflect them.
+function ruleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`\\n${escaped}\\s*\\{([^}]*)\\}`).exec(css);
+  if (match === null)
+    throw new Error(`no top-level rule found for selector "${selector}"`);
+  return match[1] ?? "";
+}
 
 afterEach(() => {
   cleanup();
@@ -320,7 +336,7 @@ describe("TilingSurface", () => {
     // container; the two inner dividers sit one level deeper, inside each
     // side's own split container.
     const outerDivider = container.querySelector(
-      ":scope > .tiling-surface > .tiling-split > .tiling-divider",
+      ":scope > .tiling-surface > .tiling-tiles > .tiling-split > .tiling-divider",
     );
     if (outerDivider === null) throw new Error("outer divider not found");
     expect(outerDivider).toHaveAttribute("role", "separator");
@@ -427,5 +443,87 @@ describe("TilingSurface", () => {
     });
     expect(composerC).toHaveValue("");
     expect(store.get(`pi-draft:${threadC}`) ?? "").not.toBe("draft typed in B");
+  });
+
+  describe("full-width transcript and minimum pane width (Task 12)", () => {
+    it("never pins a fixed centered reading measure on pane transcript content, so it tracks the pane's own width", async () => {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const cssPath = resolve(here, "../../styles.css");
+      const css = await readFile(cssPath, "utf8");
+
+      for (const selector of [
+        ".transcript",
+        ".u-row",
+        ".a-block",
+        ".worked-group",
+        ".diagnostic",
+      ]) {
+        const body = ruleBody(css, selector);
+        const pinsFixedWidth = /max-width:\s*[\d.]+(rem|px|em)/.test(body);
+        const centersWithAutoMargin =
+          /margin(-left|-right)?:\s*[^;]*\bauto\b/.test(body);
+        expect(
+          pinsFixedWidth && centersWithAutoMargin,
+          `${selector} should not pin a centered fixed reading measure`,
+        ).toBe(false);
+      }
+
+      // The scroll container's own padding must be a comfortable, fixed
+      // amount -- not the old viewport-relative max(1rem, 8%) formula that
+      // produced large side gutters to fake a centered column.
+      const transcriptBody = ruleBody(css, ".transcript");
+      expect(transcriptBody).not.toMatch(/max\(/);
+    });
+
+    it("exports MIN_PANE_WIDTH_PX as the surface's enforced minimum pane width", () => {
+      expect(MIN_PANE_WIDTH_PX).toBe(360);
+    });
+
+    it("gives the surface a horizontal scroll container whose content never shrinks panes below MIN_PANE_WIDTH_PX", () => {
+      const { getController, container } = renderSurface();
+
+      // Split repeatedly to build up more panes than would comfortably fit
+      // at the minimum pane width in a typical viewport.
+      for (let i = 0; i < 4; i += 1) {
+        act(() => {
+          getController().dispatch({ type: "split", axis: "row" });
+        });
+      }
+
+      const paneCount = tiledPaneIds(getController().layout).length;
+      expect(paneCount).toBeGreaterThan(2);
+
+      const surface = container.querySelector(":scope > .tiling-surface");
+      if (surface === null) throw new Error("surface container not found");
+      expect(getComputedStyle(surface).overflowX).toBe("auto");
+
+      const tiles = surface.querySelector(":scope > .tiling-tiles");
+      if (tiles === null) throw new Error("tiles container not found");
+      expect(getComputedStyle(tiles).minWidth).toBe(
+        `${String(paneCount * MIN_PANE_WIDTH_PX)}px`,
+      );
+    });
+
+    it("keeps the surface's min-width at exactly one pane's worth when only one pane is open", async () => {
+      const { getController, container } = renderSurface();
+      await seedTwoPanes(getController);
+      // seedTwoPanes leaves two panes open; close one back down to one.
+      const [firstPaneId] = tiledPaneIds(getController().layout);
+      if (firstPaneId === undefined) throw new Error("missing pane");
+      act(() => {
+        getController().close(firstPaneId);
+      });
+
+      const paneCount = tiledPaneIds(getController().layout).length;
+      expect(paneCount).toBe(1);
+
+      const tiles = container.querySelector(
+        ":scope > .tiling-surface > .tiling-tiles",
+      );
+      if (tiles === null) throw new Error("tiles container not found");
+      expect(getComputedStyle(tiles).minWidth).toBe(
+        `${String(MIN_PANE_WIDTH_PX)}px`,
+      );
+    });
   });
 });

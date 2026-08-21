@@ -811,10 +811,16 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
-.tiling-surface > .tiling-region,
-.tiling-surface > .tiling-split-child {
+.tiling-tiles {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.tiling-tiles > .tiling-region,
+.tiling-tiles > .tiling-split-child {
   flex: 1;
 }
 .tiling-region {
@@ -942,12 +948,11 @@ a:focus-visible {
 .transcript {
   flex: 1;
   overflow: auto;
-  padding: 1.5rem max(1rem, 8%);
+  padding: 0.875rem 1rem;
 }
 .u-row {
   display: flex;
-  max-width: 54rem;
-  margin: 0 auto 1.4rem;
+  margin: 0 0 1.4rem;
   justify-content: flex-end;
 }
 .u-bubble {
@@ -960,15 +965,13 @@ a:focus-visible {
   line-height: 1.5;
 }
 .a-block {
-  max-width: 54rem;
-  margin: 0 auto 1.4rem;
+  margin: 0 0 1.4rem;
   color: var(--text);
   font-size: 0.9rem;
   line-height: 1.6;
 }
 .worked-group {
-  max-width: 54rem;
-  margin: 0.4rem auto 1.1rem;
+  margin: 0.4rem 0 1.1rem;
 }
 .worked-group summary::-webkit-details-marker {
   display: none;
@@ -1149,8 +1152,7 @@ a:focus-visible {
   font-size: 0.7rem;
 }
 .diagnostic {
-  max-width: 54rem;
-  margin: 0.6rem auto;
+  margin: 0.6rem 0;
   padding: 0.6rem;
   border-radius: 0.4rem;
   font-size: 0.78rem;
