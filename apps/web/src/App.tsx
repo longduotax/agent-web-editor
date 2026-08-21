@@ -864,7 +864,9 @@ function NewChatRoute() {
           // Only one pane is rendered outside tiling mode.
         }}
         onClose={() => {
-          void navigate(`/projects/${projectId}`);
+          // The pane title bar is chrome for the future tiling surface
+          // (Task 9 wires this up with a real, guarded action). Until then
+          // this refactor must not introduce any new user-visible behavior.
         }}
         onThreadStarted={(threadId) => {
           void navigate(`/projects/${projectId}/threads/${threadId}`);
@@ -878,8 +880,6 @@ function ThreadRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [inspectorPreferences, setInspectorPreferences] =
     useState<InspectorPreferences>(readInspectorPreferences);
   useEffect(() => {
@@ -901,13 +901,6 @@ function ThreadRoute() {
     queryKey: ["snapshot", projectId, threadId],
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
-  });
-  const archive = useMutation({
-    mutationFn: async () => await archiveThread(projectId, threadId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-      void navigate(`/projects/${projectId}`);
-    },
   });
   return (
     <WorkspaceLayout
@@ -954,7 +947,10 @@ function ThreadRoute() {
           // No-op until the tiling workspace surface is wired in.
         }}
         onClose={() => {
-          archive.mutate();
+          // The pane title bar is chrome for the future tiling surface
+          // (Task 9 wires this up with a real, guarded archive action).
+          // Until then this refactor must not introduce any new
+          // user-visible, destructive behavior.
         }}
         onBind={() => {
           // No-op until the tiling workspace surface is wired in.
