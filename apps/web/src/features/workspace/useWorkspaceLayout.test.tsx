@@ -74,18 +74,21 @@ describe("useWorkspaceLayout", () => {
     expect(tiledPaneIds(second.result.current.layout)).toHaveLength(2);
   });
 
-  it("resizes the parent split of a pane, normalizing the sizes to sum to 1", () => {
+  it("resizes a split addressed by its own id, normalizing the sizes to sum to 1", () => {
     stubStorage();
     const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
 
     act(() => {
       result.current.dispatch({ type: "split", axis: "row" });
     });
-    const paneId = result.current.layout.focusedPaneId;
-    expect(paneId).not.toBeNull();
+    const splitId =
+      result.current.layout.root?.type === "split"
+        ? result.current.layout.root.id
+        : undefined;
+    expect(splitId).not.toBeUndefined();
 
     act(() => {
-      if (paneId !== null) result.current.resize(paneId, [0.2, 0.8]);
+      if (splitId !== undefined) result.current.resize(splitId, [0.2, 0.8]);
     });
 
     const { root } = result.current.layout;

@@ -15,6 +15,7 @@ const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
     }),
     z.object({
       type: z.literal("split"),
+      id: z.string(),
       axis: z.enum(["row", "column"]),
       children: z.tuple([LayoutNodeSchema, LayoutNodeSchema]),
       sizes: z.tuple([z.number(), z.number()]),

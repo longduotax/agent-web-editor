@@ -9,10 +9,10 @@ import {
   focusPane,
   moveFocus,
   restorePane,
-  setPaneParentSizes,
+  setSplitSizes,
   splitPane,
 } from "./layoutTree.js";
-import type { PaneId, WorkspaceLayout } from "./layoutTree.js";
+import type { PaneId, SplitId, WorkspaceLayout } from "./layoutTree.js";
 import { readLayout, writeLayout } from "./layoutStorage.js";
 import type { WorkspaceCommand } from "./keybindings.js";
 
@@ -23,7 +23,7 @@ export interface WorkspaceLayoutController {
   focus(paneId: PaneId): void;
   restore(paneId: PaneId): void;
   bind(paneId: PaneId): void;
-  resize(paneId: PaneId, sizes: [number, number]): void;
+  resize(splitId: SplitId, sizes: [number, number]): void;
   collapse(paneId: PaneId): void;
   close(paneId: PaneId): void;
 }
@@ -64,7 +64,7 @@ function applyCommand(
     case "restore": {
       const mostRecentlyDocked = layout.docked[0];
       if (mostRecentlyDocked === undefined) return layout;
-      return restorePane(layout, mostRecentlyDocked);
+      return restorePane(layout, mostRecentlyDocked, makePaneId);
     }
     default:
       return layout;
@@ -106,15 +106,15 @@ export function useWorkspaceLayout(
   }, []);
 
   const restore = useCallback((paneId: PaneId) => {
-    setLayout((current) => restorePane(current, paneId));
+    setLayout((current) => restorePane(current, paneId, makePaneId));
   }, []);
 
   const bind = useCallback((paneId: PaneId) => {
     setLayout((current) => bindPane(current, paneId));
   }, []);
 
-  const resize = useCallback((paneId: PaneId, sizes: [number, number]) => {
-    setLayout((current) => setPaneParentSizes(current, paneId, sizes));
+  const resize = useCallback((splitId: SplitId, sizes: [number, number]) => {
+    setLayout((current) => setSplitSizes(current, splitId, sizes));
   }, []);
 
   const collapse = useCallback((paneId: PaneId) => {

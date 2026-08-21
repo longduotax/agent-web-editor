@@ -1,6 +1,7 @@
 import type { ThreadId } from "@pi-web/contracts";
 
 export type PaneId = string;
+export type SplitId = string;
 export type SplitAxis = "row" | "column"; // row = split right; column = split down
 export type FocusDirection = "left" | "right" | "up" | "down";
 
@@ -10,6 +11,9 @@ export interface PaneNode {
 }
 export interface SplitNode {
   type: "split";
+  id: SplitId; // stable identity, independent of position in the tree — used
+  // for React keys and as the resize handle, so a split survives a sibling
+  // being promoted/removed around it instead of being reused positionally.
   axis: SplitAxis;
   children: [LayoutNode, LayoutNode];
   sizes: [number, number]; // fractions in (0,1) summing to 1
@@ -101,8 +105,12 @@ export function splitPane(
 ): WorkspaceLayout {
   if (l.root === null || !nodeContains(l.root, target)) return l;
   const newId = makeId();
+  // Same generator as pane ids; only the field it's stored in (and thus its
+  // uniqueness within the tree) matters, not which pool it came from.
+  const splitId: SplitId = makeId();
   const root = replaceNode(l.root, target, (pane): LayoutNode => ({
     type: "split",
+    id: splitId,
     axis,
     children: [pane, { type: "pane", id: newId }],
     sizes: [0.5, 0.5],
@@ -146,7 +154,11 @@ export function collapsePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
   return { ...collapsed, docked: [id, ...collapsed.docked] };
 }
 
-export function restorePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
+export function restorePane(
+  l: WorkspaceLayout,
+  id: PaneId,
+  makeId: () => PaneId,
+): WorkspaceLayout {
   if (!l.docked.includes(id)) return l;
   const docked = l.docked.filter((d) => d !== id);
   if (l.root === null) {
@@ -159,8 +171,10 @@ export function restorePane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
   }
   const target = l.focusedPaneId ?? leafIds(l.root)[0];
   if (target === undefined) return l;
+  const splitId: SplitId = makeId();
   const root = replaceNode(l.root, target, (pane): LayoutNode => ({
     type: "split",
+    id: splitId,
     axis: "row",
     children: [pane, { type: "pane", id }],
     sizes: [0.5, 0.5],
@@ -212,39 +226,32 @@ export function tiledPaneIds(l: WorkspaceLayout): PaneId[] {
   return leafIds(l.root);
 }
 
-// Sets the sizes of the SplitNode that is the direct parent of `paneId`.
-// No-op (returns the layout unchanged) when paneId is the root pane or
-// unknown.
-export function setPaneParentSizes(
+// Sets the sizes of the SplitNode identified by `splitId`, wherever it sits
+// in the tree. No-op (returns the layout unchanged) when the split isn't
+// found — including when there is no root at all.
+export function setSplitSizes(
   l: WorkspaceLayout,
-  paneId: PaneId,
+  splitId: SplitId,
   sizes: [number, number],
 ): WorkspaceLayout {
-  if (l.root === null || !isParentedPane(l.root, paneId)) return l;
+  if (l.root === null) return l;
 
-  function updateParent(node: LayoutNode): LayoutNode {
-    if (node.type === "pane") return node;
+  function update(node: LayoutNode): { node: LayoutNode; found: boolean } {
+    if (node.type === "pane") return { node, found: false };
+    if (node.id === splitId)
+      return {
+        node: { ...node, sizes: normalizeSizes(sizes) },
+        found: true,
+      };
     const [a, b] = node.children;
-    if (
-      (a.type === "pane" && a.id === paneId) ||
-      (b.type === "pane" && b.id === paneId)
-    ) {
-      return { ...node, sizes: normalizeSizes(sizes) };
-    }
-    return { ...node, children: [updateParent(a), updateParent(b)] };
+    const ua = update(a);
+    const ub = update(b);
+    if (!ua.found && !ub.found) return { node, found: false };
+    return { node: { ...node, children: [ua.node, ub.node] }, found: true };
   }
 
-  return { ...l, root: updateParent(l.root) };
-}
-
-// True when `id` names a leaf pane that has a parent split (i.e. is not the
-// sole root pane and does exist in the tree).
-function isParentedPane(node: LayoutNode, id: PaneId): boolean {
-  if (node.type === "pane") return false;
-  const [a, b] = node.children;
-  if ((a.type === "pane" && a.id === id) || (b.type === "pane" && b.id === id))
-    return true;
-  return isParentedPane(a, id) || isParentedPane(b, id);
+  const result = update(l.root);
+  return result.found ? { ...l, root: result.node } : l;
 }
 
 function normalizeSizes(sizes: [number, number]): [number, number] {

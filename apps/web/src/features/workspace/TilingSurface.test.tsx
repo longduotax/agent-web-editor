@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -71,7 +78,7 @@ const snapshot: ThreadSnapshot = {
   diagnostics: [],
 };
 
-function stubStorage(): void {
+function stubStorage(): Map<string, string> {
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => store.get(key) ?? null,
@@ -82,6 +89,14 @@ function stubStorage(): void {
       store.delete(key);
     },
   });
+  return store;
+}
+
+function snapshotFor(id: ThreadId, title: string): ThreadSnapshot {
+  return {
+    ...snapshot,
+    thread: { ...snapshot.thread, id, title },
+  };
 }
 
 function Harness({
@@ -101,7 +116,7 @@ function Harness({
 }
 
 function renderSurface() {
-  stubStorage();
+  const store = stubStorage();
   api.getWorkspace.mockResolvedValue({
     projects: [
       {
@@ -133,7 +148,7 @@ function renderSurface() {
     defaultOptions: { queries: { retry: false } },
   });
   let latest: WorkspaceLayoutController | undefined;
-  render(
+  const { container } = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <Harness
@@ -149,6 +164,8 @@ function renderSurface() {
       if (latest === undefined) throw new Error("controller not ready");
       return latest;
     },
+    store,
+    container,
   };
 }
 
@@ -220,5 +237,156 @@ describe("TilingSurface", () => {
     });
     const threadRegion = threadHeading.closest("[aria-current]");
     expect(threadRegion).toHaveAttribute("aria-current", "true");
+  });
+
+  it("resizes the outer split of a 2x2 grid by keyboard, even though neither of its immediate children is a pane", async () => {
+    const { getController, container } = renderSurface();
+
+    // Build a 2x2 grid: split right, then split each side down. The outer
+    // split's two children end up being splits themselves (not panes) —
+    // this is the case a pane-id-based resize handle could never reach.
+    act(() => {
+      getController().dispatch({ type: "split", axis: "row" });
+    });
+    const outerSplit = getController().layout.root;
+    if (outerSplit?.type !== "split") throw new Error("expected split root");
+    const outerSplitId = outerSplit.id;
+    const [leftPaneId, rightPaneId] = outerSplit.children.map((child) =>
+      child.type === "pane" ? child.id : undefined,
+    );
+    if (leftPaneId === undefined || rightPaneId === undefined)
+      throw new Error("expected two pane children");
+
+    act(() => {
+      getController().focus(leftPaneId);
+    });
+    act(() => {
+      getController().dispatch({ type: "split", axis: "column" });
+    });
+    act(() => {
+      getController().focus(rightPaneId);
+    });
+    act(() => {
+      getController().dispatch({ type: "split", axis: "column" });
+    });
+
+    const grid = getController().layout.root;
+    if (grid?.type !== "split") throw new Error("expected split root");
+    expect(grid.id).toBe(outerSplitId);
+    expect(grid.children[0].type).toBe("split");
+    expect(grid.children[1].type).toBe("split");
+    const before = grid.sizes[0];
+
+    // The outer divider is the one directly under the top-level split
+    // container; the two inner dividers sit one level deeper, inside each
+    // side's own split container.
+    const outerDivider = container.querySelector(
+      ":scope > .tiling-surface > .tiling-split > .tiling-divider",
+    );
+    if (outerDivider === null) throw new Error("outer divider not found");
+    expect(outerDivider).toHaveAttribute("role", "separator");
+
+    (outerDivider as HTMLElement).focus();
+    const user = userEvent.setup();
+    await user.keyboard("{ArrowRight}");
+
+    const after = getController().layout.root;
+    if (after?.type !== "split") throw new Error("expected split root");
+    expect(after.id).toBe(outerSplitId);
+    expect(after.sizes[0]).toBeGreaterThan(before);
+    expect(after.sizes[0] + after.sizes[1]).toBeCloseTo(1);
+  });
+
+  it("does not leak a draft from a closed pane into the pane promoted into its position (regression: split ids as React keys)", async () => {
+    const threadA = "20000000-0000-4000-8000-00000000000a" as ThreadId;
+    const threadB = "20000000-0000-4000-8000-00000000000b" as ThreadId;
+    const threadC = "20000000-0000-4000-8000-00000000000c" as ThreadId;
+    const threadD = "20000000-0000-4000-8000-00000000000d" as ThreadId;
+    const snapshots = new Map<ThreadId, ThreadSnapshot>([
+      [threadA, snapshotFor(threadA, "Thread A")],
+      [threadB, snapshotFor(threadB, "Thread B")],
+      [threadC, snapshotFor(threadC, "Thread C")],
+      [threadD, snapshotFor(threadD, "Thread D")],
+    ]);
+
+    const { getController, store } = renderSurface();
+    // Override the single-thread default stub with per-thread routing; the
+    // queries this test triggers all happen after this point.
+    api.getSnapshot.mockImplementation((_projectId: ProjectId, tid: ThreadId) =>
+      Promise.resolve(snapshots.get(tid)),
+    );
+
+    // A is the initial pane. Split A right -> B (focused). Split B right ->
+    // C (focused). Split C right -> D (focused). Assign each thread as its
+    // pane appears.
+    const paneA = getController().layout.focusedPaneId;
+    if (paneA === null) throw new Error("missing pane A");
+    act(() => {
+      getController().assignThreadToPane(paneA, threadA);
+    });
+
+    act(() => {
+      getController().dispatch({ type: "split", axis: "row" });
+    });
+    const paneB = getController().layout.focusedPaneId;
+    if (paneB === null) throw new Error("missing pane B");
+    act(() => {
+      getController().assignThreadToPane(paneB, threadB);
+    });
+
+    act(() => {
+      getController().dispatch({ type: "split", axis: "row" });
+    });
+    const paneC = getController().layout.focusedPaneId;
+    if (paneC === null) throw new Error("missing pane C");
+    act(() => {
+      getController().assignThreadToPane(paneC, threadC);
+    });
+
+    act(() => {
+      getController().dispatch({ type: "split", axis: "row" });
+    });
+    const paneD = getController().layout.focusedPaneId;
+    if (paneD === null) throw new Error("missing pane D");
+    act(() => {
+      getController().assignThreadToPane(paneD, threadD);
+    });
+
+    await screen.findByRole("heading", { name: "Thread D" });
+
+    // Type a draft into B's composer specifically (there are four
+    // identically-labeled composers, one per pane — scope by B's region).
+    const regionB = screen.getByRole("region", { name: "Thread B" });
+    const composerB = within(regionB).getByRole("textbox", {
+      name: "Message Pi",
+    });
+    const user = userEvent.setup();
+    await user.type(composerB, "draft typed in B");
+    await waitFor(() => {
+      expect(store.get(`pi-draft:${threadB}`)).toBe("draft typed in B");
+    });
+
+    // Close B. Its parent split is replaced by the surviving sibling
+    // subtree (the split containing C and D), which gets promoted into B's
+    // former position in the tree.
+    act(() => {
+      getController().close(paneB);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Thread B" }),
+      ).not.toBeInTheDocument();
+    });
+
+    // C's composer must be freshly mounted (empty), not reusing B's
+    // composer instance and its leftover draft text — and C's own
+    // persisted draft must be untouched by B's draft.
+    const regionC = screen.getByRole("region", { name: "Thread C" });
+    const composerC = within(regionC).getByRole("textbox", {
+      name: "Message Pi",
+    });
+    expect(composerC).toHaveValue("");
+    expect(store.get(`pi-draft:${threadC}`) ?? "").not.toBe("draft typed in B");
   });
 });

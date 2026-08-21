@@ -7,7 +7,7 @@ import {
   createInitialLayout,
   moveFocus,
   restorePane,
-  setPaneParentSizes,
+  setSplitSizes,
   splitPane,
   tiledPaneIds,
 } from "./layoutTree.js";
@@ -35,6 +35,17 @@ describe("layoutTree", () => {
     expect(l.focusedPaneId).toBe("pane-2");
   });
 
+  it("gives every new split a stable id, distinct from pane ids", () => {
+    const make = ids();
+    let l = createInitialLayout(make);
+    l = splitPane(l, "pane-1", "row", make);
+    if (l.root?.type !== "split") throw new Error("expected split root");
+    expect(typeof l.root.id).toBe("string");
+    expect(l.root.id.length).toBeGreaterThan(0);
+    expect(l.root.id).not.toBe("pane-1");
+    expect(l.root.id).not.toBe("pane-2");
+  });
+
   it("splitting a nonexistent target leaves the layout unchanged", () => {
     const make = ids();
     const l = createInitialLayout(make);
@@ -53,7 +64,7 @@ describe("layoutTree", () => {
     expect(l.docked).toEqual(["pane-2"]);
     expect(tiledPaneIds(l)).toEqual(["pane-1"]);
     expect(l.panes["pane-2"]).toBeDefined();
-    l = restorePane(l, "pane-2");
+    l = restorePane(l, "pane-2", make);
     expect(l.docked).toEqual([]);
     expect(tiledPaneIds(l)).toContain("pane-2");
     expect(l.focusedPaneId).toBe("pane-2");
@@ -88,14 +99,17 @@ describe("layoutTree", () => {
     expect(l.focusedPaneId).toBe("pane-2");
   });
 
-  describe("setPaneParentSizes", () => {
-    it("updates the sizes of the parent split of a pane", () => {
+  describe("setSplitSizes", () => {
+    it("updates the sizes of the split addressed by its own id", () => {
       const make = ids();
       let l = createInitialLayout(make);
       l = splitPane(l, "pane-1", "row", make); // pane-1, pane-2
-      l = setPaneParentSizes(l, "pane-2", [0.3, 0.7]);
+      if (l.root?.type !== "split") throw new Error("expected split root");
+      const splitId = l.root.id;
+      l = setSplitSizes(l, splitId, [0.3, 0.7]);
       expect(l.root).toEqual({
         type: "split",
+        id: splitId,
         axis: "row",
         children: [
           { type: "pane", id: "pane-1" },
@@ -105,17 +119,17 @@ describe("layoutTree", () => {
       });
     });
 
-    it("is a no-op when the pane is the root pane", () => {
+    it("is a no-op when there is no root", () => {
       const l = createInitialLayout(ids());
-      const result = setPaneParentSizes(l, "pane-1", [0.2, 0.8]);
+      const result = setSplitSizes(l, "split-does-not-exist", [0.2, 0.8]);
       expect(result).toEqual(l);
     });
 
-    it("is a no-op when the pane id is unknown", () => {
+    it("is a no-op when the split id is unknown", () => {
       const make = ids();
       let l = createInitialLayout(make);
       l = splitPane(l, "pane-1", "row", make);
-      const result = setPaneParentSizes(l, "pane-does-not-exist", [0.2, 0.8]);
+      const result = setSplitSizes(l, "split-does-not-exist", [0.2, 0.8]);
       expect(result).toEqual(l);
     });
 
@@ -123,7 +137,8 @@ describe("layoutTree", () => {
       const make = ids();
       let l = createInitialLayout(make);
       l = splitPane(l, "pane-1", "row", make);
-      l = setPaneParentSizes(l, "pane-2", [0.001, 0.2]);
+      if (l.root?.type !== "split") throw new Error("expected split root");
+      l = setSplitSizes(l, l.root.id, [0.001, 0.2]);
       const root = l.root;
       if (root?.type !== "split") throw new Error("expected split root");
       const [a, b] = root.sizes;
@@ -132,6 +147,31 @@ describe("layoutTree", () => {
       expect(a).toBeCloseTo(0.2, 5);
       expect(b).toBeCloseTo(0.8, 5);
       expect(a + b).toBeCloseTo(1, 10);
+    });
+
+    it("finds and updates a split even when both of its children are themselves splits (2x2 grid)", () => {
+      const make = ids();
+      let l = createInitialLayout(make); // pane-1
+      l = splitPane(l, "pane-1", "row", make); // outer split; pane-1, pane-2
+      if (l.root?.type !== "split") throw new Error("expected split root");
+      const outerSplitId = l.root.id;
+      l = splitPane(l, "pane-1", "column", make); // pane-1's side split down
+      l = splitPane(l, "pane-2", "column", make); // pane-2's side split down
+      // Neither of the outer split's immediate children is a pane anymore,
+      // but the outer split can still be addressed and resized by its own
+      // id (this is the case a pane-id-based resize handle can't reach).
+      const grid = l.root;
+      if (grid?.type !== "split") throw new Error("expected split root");
+      expect(grid.children[0].type).toBe("split");
+      expect(grid.children[1].type).toBe("split");
+
+      l = setSplitSizes(l, outerSplitId, [0.3, 0.7]);
+
+      const root = l.root;
+      if (root?.type !== "split") throw new Error("expected split root");
+      expect(root.id).toBe(outerSplitId);
+      expect(root.sizes[0]).toBeCloseTo(0.3, 5);
+      expect(root.sizes[1]).toBeCloseTo(0.7, 5);
     });
   });
 });

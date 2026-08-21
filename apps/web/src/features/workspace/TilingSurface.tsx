@@ -6,7 +6,7 @@ import {
 } from "react";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
-import type { LayoutNode, PaneId, SplitNode } from "./layoutTree.js";
+import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 import { ThreadPane } from "./ThreadPane.js";
 import { NewChatPane } from "./NewChatPane.js";
@@ -24,16 +24,6 @@ export interface TilingSurfaceProps {
 const MIN_FRACTION = 0.1;
 const RESIZE_STEP = 0.05;
 
-// A split's immediate children can themselves be splits once either side is
-// divided again. `setPaneParentSizes` only knows how to locate a split via a
-// *direct* pane child, so the divider for a given split can only drive
-// resizing when at least one of its two immediate children is still a leaf
-// pane. That holds for every split created by `splitPane` until its side is
-// further subdivided; deeper splits still resize via their own dividers.
-function directPaneId(node: LayoutNode): PaneId | null {
-  return node.type === "pane" ? node.id : null;
-}
-
 export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   const { controller, projectId, onClosePane } = props;
   const { root } = controller.layout;
@@ -45,6 +35,7 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   return (
     <div className="tiling-surface">
       <LayoutNodeView
+        key={root.id}
         node={root}
         controller={controller}
         projectId={projectId}
@@ -172,18 +163,15 @@ function SplitRegion({
   const [resizing, setResizing] = useState(false);
   const [first, second] = node.children;
   const [firstSize, secondSize] = node.sizes;
-  // Prefer the first child's id (per the resize contract), falling back to
-  // the second when the first child is itself a nested split.
-  const targetPaneId = directPaneId(first) ?? directPaneId(second);
+  const splitId: SplitId = node.id;
   const vertical = node.axis === "row"; // divider is a vertical line when panes sit side by side
 
   const applyFraction = (fraction: number) => {
-    if (targetPaneId === null) return;
     const clamped = Math.min(
       1 - MIN_FRACTION,
       Math.max(MIN_FRACTION, fraction),
     );
-    controller.resize(targetPaneId, [clamped, 1 - clamped]);
+    controller.resize(splitId, [clamped, 1 - clamped]);
   };
 
   const resizeFromPointer = (clientX: number, clientY: number) => {
@@ -230,6 +218,7 @@ function SplitRegion({
         style={{ flexGrow: firstSize, flexBasis: 0 }}
       >
         <LayoutNodeView
+          key={first.id}
           node={first}
           controller={controller}
           projectId={projectId}
@@ -269,6 +258,7 @@ function SplitRegion({
         style={{ flexGrow: secondSize, flexBasis: 0 }}
       >
         <LayoutNodeView
+          key={second.id}
           node={second}
           controller={controller}
           projectId={projectId}
