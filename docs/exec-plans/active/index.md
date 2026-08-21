@@ -14,9 +14,10 @@ superseded, or abandoned.
   workspace design: replaces single-thread project selection with a terminal-style
   tiling surface of panes (split, collapse-to-dock, restore, focus, close),
   device-local per-project layout persistence, approved keybindings, and a blue
-  attention dot on docked panes with settled unread work. Agent backends,
-  worktree forking, the right panel, theming, and the server status projection
-  are later phases.
+  attention dot on docked panes with settled unread work. Phase 1 implementation
+  is complete and verified (unit coverage plus an end-to-end Playwright spec);
+  kept Active pending merge. Agent backends, worktree forking, the right panel,
+  theming, and the server status projection are later phases.
 - [Scalable conversation history](2026-08-16-scalable-conversation-history.md) —
   Draft plan version 3 has technical approval pending. Product specification v1
   remains approved, but implementation is paused pending plan-v3 approval. The

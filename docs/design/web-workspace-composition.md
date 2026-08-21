@@ -64,6 +64,8 @@ Feature components receive DTOs/actions rather than importing transport details 
 
 Desktop uses CSS grid with project/thread sidebar, selected-thread center, and inspector. Sidebar/inspector widths are pointer- and keyboard-resizable within documented min/max values. The inspector is collapsed initially unless an inspector target is selected.
 
+As of the [tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md) Phase 1, the project route's center renders a terminal-style tiling surface of thread panes (split/resize/focus/close, keyboard chords) with a bottom dock for collapsed panes, in place of the single selected-thread center described above. The project/thread sidebar described in this document is retained as-is in this phase — it was not reduced to a project switcher; that reduction is deferred to a later phase of the same plan.
+
 Below the approved narrow breakpoint, the center remains primary and sidebar/inspector become modal drawers with focus trapping, Escape close, focus restoration, backdrop semantics, and no hidden focusable content. Composer remains near the viewport bottom without covering transcript content.
 
 The visual baseline is dark, compact, restrained, and honors `prefers-reduced-motion`. Color tokens are CSS custom properties and status is never conveyed by color alone.
