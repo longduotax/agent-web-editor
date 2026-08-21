@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type JSX } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ThreadIdSchema,
   type ProjectId,
@@ -31,11 +31,18 @@ function normalizeKey(key: string): string {
 export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
   const { projectId } = props;
   const controller = useWorkspaceLayout(projectId);
+  const navigate = useNavigate();
 
   // Always-fresh reference so effects/callbacks with stable identities never
   // dispatch against a stale controller from an earlier render.
   const controllerRef = useRef<WorkspaceLayoutController>(controller);
   controllerRef.current = controller;
+
+  // Whether the current route is the tiling surface's new-chat entry point;
+  // computed early because both the entry-pane effect below and
+  // handleThreadStarted need it.
+  const location = useLocation();
+  const isNewChatRoute = location.pathname.endsWith("/new");
 
   // Set by openThread when it has to create a fresh pane for a thread; the
   // pane id doesn't exist yet at call time (newPane() is async, functional
@@ -148,8 +155,6 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
   // [isNewChatRoute, projectId] so this runs once per route entry, not on
   // every layout change (e.g. once the pane adopts a thread and the route
   // navigates away, isNewChatRoute flips to false and this won't refire).
-  const location = useLocation();
-  const isNewChatRoute = location.pathname.endsWith("/new");
   useEffect(() => {
     if (!isNewChatRoute) return;
     const layout = controllerRef.current.layout;
@@ -160,12 +165,30 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     controllerRef.current.newPane();
   }, [isNewChatRoute, projectId]);
 
+  // A pane's "New chat" form starting a thread always assigns the thread to
+  // that pane. It also navigates to the thread's route, but only when that
+  // pane was the new-chat route's entry pane — starting a thread in an
+  // arbitrary split pane must not clobber whatever route/thread is
+  // currently addressed. Once navigated, the params.threadId effect above
+  // finds the pane already carrying that thread and just focuses it, so
+  // this never creates a second pane or loops.
+  const handleThreadStarted = useCallback(
+    (paneId: PaneId, threadId: ThreadId) => {
+      controllerRef.current.assignThreadToPane(paneId, threadId);
+      if (isNewChatRoute) {
+        void navigate(`/projects/${projectId}/threads/${threadId}`);
+      }
+    },
+    [isNewChatRoute, navigate, projectId],
+  );
+
   return (
     <div className="workspace-view">
       <TilingSurface
         projectId={projectId}
         controller={controller}
         onClosePane={handleClose}
+        onThreadStarted={handleThreadStarted}
       />
       <DockRow projectId={projectId} controller={controller} />
     </div>

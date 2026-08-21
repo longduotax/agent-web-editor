@@ -16,6 +16,9 @@ export interface TilingSurfaceProps {
   controller: WorkspaceLayoutController;
   // caller archives if threadId set, then removes the pane
   onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  // caller assigns the thread to the pane and decides whether to navigate
+  // (e.g. only when the pane started as the new-chat route's entry pane)
+  onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }
 
 // Smallest fraction either side of a split is allowed to shrink to in the
@@ -25,7 +28,7 @@ const MIN_FRACTION = 0.1;
 const RESIZE_STEP = 0.05;
 
 export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
-  const { controller, projectId, onClosePane } = props;
+  const { controller, projectId, onClosePane, onThreadStarted } = props;
   const { root } = controller.layout;
 
   if (root === null) {
@@ -40,6 +43,7 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
         controller={controller}
         projectId={projectId}
         onClosePane={onClosePane}
+        onThreadStarted={onThreadStarted}
       />
     </div>
   );
@@ -71,10 +75,11 @@ interface LayoutNodeViewProps {
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
   onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }
 
 function LayoutNodeView(props: LayoutNodeViewProps): JSX.Element {
-  const { node, controller, projectId, onClosePane } = props;
+  const { node, controller, projectId, onClosePane, onThreadStarted } = props;
   if (node.type === "pane") {
     return (
       <PaneRegion
@@ -82,6 +87,7 @@ function LayoutNodeView(props: LayoutNodeViewProps): JSX.Element {
         controller={controller}
         projectId={projectId}
         onClosePane={onClosePane}
+        onThreadStarted={onThreadStarted}
       />
     );
   }
@@ -91,6 +97,7 @@ function LayoutNodeView(props: LayoutNodeViewProps): JSX.Element {
       controller={controller}
       projectId={projectId}
       onClosePane={onClosePane}
+      onThreadStarted={onThreadStarted}
     />
   );
 }
@@ -100,11 +107,13 @@ function PaneRegion({
   controller,
   projectId,
   onClosePane,
+  onThreadStarted,
 }: {
   paneId: PaneId;
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
   onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }) {
   const focused = paneId === controller.layout.focusedPaneId;
   const threadId = controller.layout.panes[paneId]?.threadId ?? null;
@@ -139,7 +148,7 @@ function PaneRegion({
             onClosePane(paneId, null);
           }}
           onThreadStarted={(newThreadId) => {
-            controller.assignThreadToPane(paneId, newThreadId);
+            onThreadStarted(paneId, newThreadId);
           }}
         />
       )}
@@ -152,11 +161,13 @@ function SplitRegion({
   controller,
   projectId,
   onClosePane,
+  onThreadStarted,
 }: {
   node: SplitNode;
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
   onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const resizingPointer = useRef<number | null>(null);
@@ -223,6 +234,7 @@ function SplitRegion({
           controller={controller}
           projectId={projectId}
           onClosePane={onClosePane}
+          onThreadStarted={onThreadStarted}
         />
       </div>
       <div
@@ -263,6 +275,7 @@ function SplitRegion({
           controller={controller}
           projectId={projectId}
           onClosePane={onClosePane}
+          onThreadStarted={onThreadStarted}
         />
       </div>
     </div>

@@ -111,6 +111,9 @@ function Harness({
       projectId={projectId}
       controller={controller}
       onClosePane={vi.fn()}
+      onThreadStarted={(paneId, startedThreadId) => {
+        controller.assignThreadToPane(paneId, startedThreadId);
+      }}
     />
   );
 }
