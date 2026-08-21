@@ -77,6 +77,34 @@ describe("layoutTree", () => {
     expect(l.focusedPaneId).toBe("pane-docked");
   });
 
+  it("restoreIntoTree falls back to the first leaf when focusedPaneId is corrupt (not an actual leaf of root)", () => {
+    const make = ids();
+    let l = createInitialLayout(make);
+    l = splitPane(l, "pane-1", "row", make); // pane-1, pane-2; pane-2 focused
+    const splitPanes = tiledPaneIds(l);
+    expect(splitPanes).toHaveLength(2);
+    const splitId = l.root?.type === "split" ? l.root.id : null;
+    expect(splitId).not.toBeNull();
+
+    // Simulate a corrupt v1 payload: focusedPaneId points at a non-leaf id
+    // (here, the split node's own id) rather than a tiled pane. A naive
+    // `l.focusedPaneId ?? leafIds(l.root)[0]` would trust this bogus id,
+    // replaceNode would find no matching leaf and no-op, and the docked
+    // pane would be silently dropped instead of folded into the tree.
+    l = {
+      ...l,
+      focusedPaneId: splitId,
+      panes: { ...l.panes, "pane-docked": { threadId: null } },
+    };
+
+    l = restoreIntoTree(l, "pane-docked");
+
+    for (const id of splitPanes) expect(tiledPaneIds(l)).toContain(id);
+    expect(tiledPaneIds(l)).toContain("pane-docked");
+    expect(tiledPaneIds(l)).toHaveLength(3);
+    expect(l.focusedPaneId).toBe("pane-docked");
+  });
+
   it("restoreIntoTree becomes the root when there is no tiled pane", () => {
     const make = ids();
     let l = createInitialLayout(make);

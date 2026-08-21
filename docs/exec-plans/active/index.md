@@ -21,7 +21,7 @@ superseded, or abandoned.
   Playwright spec); kept Active pending merge. Agent backends and worktree
   forking are later phases.
 - [Codex-style workspace surface](2026-08-22-codex-workspace-surface.md) — Active
-  plan version 1, technical approval pending. Restyles the tiling workspace to a
+  plan version 1, technical approval granted 2026-08-22. Restyles the tiling workspace to a
   calm, near-borderless Codex desktop aesthetic; ships complete light and dark
   themes (System default, live OS follow, before-paint apply) behind a new
   Settings page; renders a single shared, focus-following Environment right

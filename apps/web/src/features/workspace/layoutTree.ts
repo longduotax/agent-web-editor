@@ -148,7 +148,16 @@ export function restoreIntoTree(
   if (l.root === null) {
     return { ...l, root: { type: "pane", id }, focusedPaneId: id };
   }
-  const target = l.focusedPaneId ?? leafIds(l.root)[0];
+  // `focusedPaneId` from a corrupt/stale persisted payload can point at an
+  // id that isn't actually a leaf of `root` (e.g. a split id, or a pane that
+  // no longer exists). replaceNode no-ops when its target isn't found, which
+  // would silently drop the docked pane being folded in here — so only trust
+  // focusedPaneId when it really is a leaf; otherwise fall back to the first
+  // leaf, same as when focusedPaneId is absent.
+  const target =
+    l.focusedPaneId !== null && nodeContains(l.root, l.focusedPaneId)
+      ? l.focusedPaneId
+      : leafIds(l.root)[0];
   if (target === undefined) return l;
   const splitId: SplitId = `split-${crypto.randomUUID()}`;
   const root = replaceNode(l.root, target, (pane): LayoutNode => ({

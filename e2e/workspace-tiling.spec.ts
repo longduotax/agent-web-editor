@@ -154,6 +154,10 @@ async function chord(page: Page, primary: "Meta" | "Alt", key: string) {
 declare const document: {
   scrollingElement: { scrollWidth: number; clientWidth: number } | null;
   documentElement: { getAttribute(name: string): string | null };
+  querySelector(selector: string): unknown;
+};
+declare function getComputedStyle(element: unknown): {
+  backgroundColor: string;
 };
 
 function inPageHasNoHorizontalScroll(): boolean {
@@ -163,6 +167,18 @@ function inPageHasNoHorizontalScroll(): boolean {
 
 function pageDataTheme(): string | null {
   return document.documentElement.getAttribute("data-theme");
+}
+
+// C1 regression guard: the composer surface (styles.css's .composer-input)
+// used to have a dark-only hardcoded background (#171b22) that never
+// tokenized to the light theme's --card, so it stayed near-black even under
+// the default (untouched, "System"/light) theme. Read its *rendered*
+// background so a reintroduced hardcoded literal fails this instead of
+// silently shipping a broken light theme again.
+function composerInputBackground(): string | null {
+  const el = document.querySelector(".composer-input");
+  if (el === null) return null;
+  return getComputedStyle(el).backgroundColor;
 }
 
 // Thread titles fall back to a deterministic derivation of the first prompt
@@ -200,6 +216,15 @@ test("codex workspace surface: run status, split (button + chord), environment p
   const panes = page.getByRole("region");
   await expect(panes.getByText("Working", { exact: true })).toBeVisible();
 
+  // Light theme (the default here — Playwright's default colorScheme is
+  // "light" and this test never touches the theme setting before this
+  // point): the composer surface must render with --card's light value
+  // (#ffffff), not the dark-only hardcoded literal it used to carry
+  // regardless of theme. See C1 in the codex-workspace-surface fix wave.
+  await expect
+    .poll(() => page.evaluate(composerInputBackground))
+    .toBe("rgb(255, 255, 255)");
+
   // The trust note is demoted to a single inline line inside the pane's
   // header region (CWS-01), never a full-width banner in the transcript
   // flow. Assert it renders inside a <header> ancestor rather than asserting
@@ -231,24 +256,16 @@ test("codex workspace surface: run status, split (button + chord), environment p
   const chordSplitPane = page.getByRole("region", { name: "New chat" });
   await expect(chordSplitPane).toBeVisible();
 
-  // Close the fresh threadless pane immediately via the close keybinding
-  // (it's the focused pane after the split) rather than its header button:
-  // with three tiled panes and the environment panel auto-hidden, that
-  // pane's card fills the workspace surface's full remaining width, so its
-  // header's Close button sits directly under the floating environment
-  // toggle in the top-right corner — a real click there is unreliable
-  // regardless of test tooling. Closing via keybinding both sidesteps that
-  // and covers the close chord end-to-end.
-  //
-  // The workspace deliberately ignores its keybindings while a text input
-  // holds focus (so e.g. Backspace edits text, not the workspace) — see
-  // WorkspaceView's keydown handler — and the new pane's composer textarea
-  // is autofocused. Click the header's left-hand title area first (not a
-  // button/input, away from the obstructed top-right corner) to move DOM
-  // focus off that textarea before sending the chord. No undo toast for a
-  // new-chat pane either way (nothing to archive).
-  await chordSplitPane.click({ position: { x: 12, y: 12 } });
-  await chord(page, primary, "Backspace");
+  // Close the fresh threadless pane immediately via its header's Close
+  // button. With three tiled panes and the environment panel auto-hidden,
+  // that pane's card fills the workspace surface's full remaining width, so
+  // its header sits at the surface's top-right corner, right where the
+  // floating .environment-toggle floats — `.tiling-region`'s reserved
+  // right-hand gutter (styles.css) keeps the header's actions clear of it,
+  // so a real click here both closes the pane and doubles as a regression
+  // guard for that overlap. No undo toast for a new-chat pane either way
+  // (nothing to archive).
+  await chordSplitPane.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("region", { name: "New chat" })).toHaveCount(0);
   await expect(page.getByRole("region")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);

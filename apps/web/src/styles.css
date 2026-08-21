@@ -178,9 +178,9 @@ a:focus-visible {
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border: 1px solid #3b4658;
+  border: 1px solid var(--hairline-2);
   border-radius: 0.5rem;
-  color: #a7c9ff;
+  color: var(--accent);
   font:
     1.3rem Georgia,
     serif;
@@ -215,15 +215,16 @@ a:focus-visible {
   padding: 0.5rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: 0.4rem 0 0 0.4rem;
-  color: #e7eaf1;
-  background: #0f1217;
+  color: var(--text);
+  background: var(--page);
 }
 .add-project button {
   width: 100%;
   padding: 0.5rem 0.6rem;
-  border: 1px solid #3c66a2;
+  border: 1px solid var(--accent);
   border-radius: 0.4rem;
-  background: #244c82;
+  color: var(--send-fg);
+  background: var(--accent);
 }
 .project-list {
   flex: 1;
@@ -235,7 +236,7 @@ a:focus-visible {
   border-radius: 0.4rem;
 }
 .selected-project {
-  background: #171c24;
+  background: var(--active);
 }
 .project-row {
   display: flex;
@@ -265,7 +266,7 @@ a:focus-visible {
   visibility: visible;
 }
 .icon-button:hover {
-  color: white;
+  color: var(--text);
   background: var(--surface-3);
 }
 .icon-button.danger:hover {
@@ -353,11 +354,11 @@ a:focus-visible {
 }
 .thread-archive-button:hover:not(:disabled),
 .thread-archive-button:focus-visible {
-  color: white;
-  background: #343b47;
+  color: var(--text);
+  background: var(--active);
 }
 .thread-archive-button:disabled {
-  color: #626975;
+  color: var(--muted);
   cursor: not-allowed;
 }
 .thread-archive-button svg {
@@ -386,7 +387,7 @@ a:focus-visible {
   padding: 0.3rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: #232832;
+  background: var(--card);
   box-shadow: 0 0.65rem 1.8rem #0008;
 }
 .thread-context-menu button {
@@ -400,14 +401,14 @@ a:focus-visible {
 }
 .thread-context-menu button:hover:not(:disabled),
 .thread-context-menu button:focus-visible {
-  background: #343b47;
+  background: var(--hover);
   outline: none;
 }
 .thread-context-menu button:last-child:not(:disabled) {
-  color: #efb1a9;
+  color: var(--fail);
 }
 .thread-context-menu button:disabled {
-  color: #717784;
+  color: var(--muted);
   cursor: not-allowed;
 }
 .status {
@@ -828,6 +829,10 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex: 1;
+  /* Reserve a gutter matching the floating .environment-toggle's footprint
+     (top: .5rem; right: .5rem; width: 1.75rem) so the rightmost pane's
+     header actions (Split/Close) never sit underneath it. */
+  padding-right: 2.25rem;
 }
 .tiling-region > .pane {
   flex: 1;
@@ -908,7 +913,7 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  background: #101318;
+  background: var(--page);
 }
 .thread-header {
   display: flex;
@@ -917,7 +922,7 @@ a:focus-visible {
   justify-content: space-between;
   padding: 0.6rem 1.25rem;
   border-bottom: 1px solid var(--border);
-  background: rgba(17, 20, 26, 0.94);
+  background: var(--card);
 }
 .thread-header small {
   color: var(--muted);
@@ -1020,8 +1025,8 @@ a:focus-visible {
   padding: 0.8rem;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
-  background: #0b0d11;
-  color: #d9deea;
+  background: var(--hover);
+  color: var(--text-2);
   font:
     0.78rem/1.5 ui-monospace,
     SFMono-Regular,
@@ -1036,7 +1041,7 @@ a:focus-visible {
   margin: 0.08rem 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
-  color: #b7bdc9;
+  color: var(--muted);
   background: transparent;
   font-size: 0.78rem;
 }
@@ -1055,13 +1060,13 @@ a:focus-visible {
   display: none;
 }
 .activity summary:hover {
-  color: #dfe3eb;
-  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  background: var(--hover);
 }
 .activity[open] {
   margin-block: 0.4rem 0.65rem;
   border-color: var(--border);
-  background: #12161c;
+  background: var(--card);
 }
 .activity[open] summary {
   border-bottom: 1px solid var(--border);
@@ -1072,11 +1077,11 @@ a:focus-visible {
   flex: none;
   width: 1rem;
   place-items: center;
-  color: #70bc8b;
+  color: var(--done);
   font-weight: 700;
 }
 .activity-running .activity-state {
-  color: #d4b971;
+  color: var(--run);
 }
 .activity-running .activity-state > span {
   animation: spin 1.2s linear infinite;
@@ -1086,20 +1091,20 @@ a:focus-visible {
 }
 .activity-action {
   flex: none;
-  color: #d9dee8;
+  color: var(--text-2);
   font-weight: 650;
 }
 .activity-path-prefix {
   min-width: 0;
   overflow: hidden;
-  color: #7f8796;
+  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .activity-target {
   min-width: 0;
   overflow: hidden;
-  color: #a9c9fb;
+  color: var(--accent);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1107,13 +1112,13 @@ a:focus-visible {
 .activity-meta {
   flex: none;
   margin-left: auto;
-  color: #737c8c;
+  color: var(--muted);
   font-size: 0.72rem;
   white-space: nowrap;
 }
 .activity-chevron {
   flex: none;
-  color: #697181;
+  color: var(--muted);
   font-size: 1rem;
   transition: transform 0.12s ease;
 }
@@ -1130,7 +1135,7 @@ a:focus-visible {
 }
 .activity-details h3 {
   margin: 0 0 0.3rem;
-  color: #7f8796;
+  color: var(--muted);
   font-size: 0.68rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1139,7 +1144,7 @@ a:focus-visible {
   max-height: min(26rem, 55vh);
   margin: 0;
   padding: 0.65rem 0.75rem;
-  border-color: #242b36;
+  border-color: var(--hairline-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1147,7 +1152,7 @@ a:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem 1rem;
-  color: #737c8c;
+  color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.7rem;
 }
@@ -1158,35 +1163,35 @@ a:focus-visible {
   font-size: 0.78rem;
 }
 .diagnostic.warning {
-  color: #d8c392;
-  background: #231f17;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
 .diagnostic.error {
-  color: #f4a4a9;
-  background: #28191c;
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 .composer {
   flex: none;
   padding: 0.7rem max(1rem, 8%) 1rem;
   border-top: 1px solid var(--border);
-  background: #101318;
+  background: var(--page);
 }
 .composer-input {
   width: min(100%, 54rem);
   margin: 0 auto;
   overflow: hidden;
-  border: 1px solid #3a414d;
+  border: 1px solid var(--hairline-2);
   border-radius: 0.85rem;
-  background: #171b22;
+  background: var(--card);
   box-shadow: 0 0.35rem 1.2rem rgba(0, 0, 0, 0.18);
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 .composer-input:focus-within {
-  border-color: #657080;
+  border-color: var(--accent);
   box-shadow:
-    0 0 0 1px rgba(91, 156, 255, 0.2),
+    0 0 0 1px var(--focus-ring),
     0 0.35rem 1.2rem rgba(0, 0, 0, 0.24);
 }
 .composer-input textarea {
@@ -1195,7 +1200,7 @@ a:focus-visible {
   resize: none;
   padding: 0.9rem 1rem 0.45rem;
   border: 0;
-  color: #ecedf1;
+  color: var(--text);
   background: transparent;
   line-height: 1.45;
 }
@@ -1216,15 +1221,16 @@ a:focus-visible {
 }
 .composer-actions button {
   padding: 0.38rem 0.7rem;
-  border: 1px solid #3d6499;
+  border: 1px solid var(--accent);
   border-radius: 0.35rem;
-  background: #285487;
+  color: var(--send-fg);
+  background: var(--accent);
   cursor: pointer;
 }
 .composer-actions .stop {
-  border-color: #734149;
-  color: #ffb5b9;
-  background: #351e22;
+  border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 18%, var(--card));
 }
 .composer-actions .send {
   display: grid;
@@ -1233,17 +1239,17 @@ a:focus-visible {
   flex: none;
   place-items: center;
   padding: 0;
-  border-color: #eef0f3;
+  border-color: var(--send-bg);
   border-radius: 50%;
-  color: #14171c;
-  background: #eef0f3;
+  color: var(--send-fg);
+  background: var(--send-bg);
   font-size: 1.05rem;
   font-weight: 700;
 }
 .composer-actions .send:disabled {
-  border-color: #343a45;
-  color: #777f8c;
-  background: #292e37;
+  border-color: var(--hairline-2);
+  color: var(--muted);
+  background: var(--hover);
   cursor: not-allowed;
 }
 .inspector {
@@ -1320,7 +1326,7 @@ a:focus-visible {
 }
 .inspector-tab-options button[aria-selected="true"] {
   border-bottom-color: var(--blue);
-  color: #e8ebf3;
+  color: var(--text);
 }
 .inspector-close {
   width: 2rem;
@@ -1412,7 +1418,7 @@ a:focus-visible {
   padding: 0.4rem 0.5rem;
   border: 0;
   border-radius: 0.3rem;
-  color: #cbd0da;
+  color: var(--text-2);
   background: transparent;
   text-align: left;
   font-size: 0.76rem;
@@ -1434,19 +1440,19 @@ a:focus-visible {
   flex: none;
   place-items: center;
   border-radius: 0.2rem;
-  color: #b4c9e7;
-  background: #263548;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--card));
   font-size: 0.64rem;
 }
 .change-kind.deleted,
 .change-kind.conflicted {
-  color: #ffb8bc;
-  background: #47252a;
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 20%, var(--card));
 }
 .change-kind.added,
 .change-kind.untracked {
-  color: #afdfba;
-  background: #24402c;
+  color: var(--done);
+  background: color-mix(in srgb, var(--done) 20%, var(--card));
 }
 .diff-view,
 .file-preview {
@@ -1507,14 +1513,14 @@ a:focus-visible {
   background: var(--surface-3);
 }
 .terminal-warning {
-  color: #dccb9e;
-  background: #211e17;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
 .terminal-surface {
   flex: 1;
   min-height: 12rem;
   padding: 0.4rem;
-  background: #0d0f13;
+  background: var(--page);
 }
 .empty,
 .error-notice {
@@ -1527,9 +1533,9 @@ a:focus-visible {
 }
 .error-notice {
   border-style: solid;
-  border-color: #5c3036;
-  color: #f0a6aa;
-  background: #28181b;
+  border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
+  color: var(--fail);
+  background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 .conversation-empty {
   display: grid;
@@ -1550,11 +1556,11 @@ a:focus-visible {
 .project-empty h1,
 .welcome h1 {
   margin: 0.5rem 0;
-  color: #e9ebf1;
+  color: var(--text);
   font-size: 1.6rem;
 }
 .hero-mark {
-  color: #93bfff;
+  color: var(--accent);
   font:
     5rem Georgia,
     serif;
@@ -1719,9 +1725,9 @@ a:focus-visible {
 .new-chat-card {
   width: min(700px, 100%);
   overflow: hidden;
-  border: 1px solid #303641;
+  border: 1px solid var(--hairline-2);
   border-radius: 14px;
-  background: #171a20;
+  background: var(--card);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
 }
 .new-chat-toolbar {
@@ -1751,14 +1757,14 @@ a:focus-visible {
 }
 .new-chat-input {
   border: 0;
-  border-top: 1px solid #252b34;
+  border-top: 1px solid var(--hairline);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .new-chat-input:focus-within {
-  border-color: #343c48;
-  box-shadow: inset 0 1px rgba(91, 156, 255, 0.12);
+  border-color: var(--accent);
+  box-shadow: inset 0 1px var(--focus-ring);
 }
 .new-chat-input textarea {
   min-height: 132px;
@@ -1770,7 +1776,7 @@ a:focus-visible {
   font-size: 0.76rem;
 }
 .new-chat-note.warning {
-  color: #d8b26d;
+  color: var(--amber);
 }
 @media (max-width: 480px) {
   .transcript,
