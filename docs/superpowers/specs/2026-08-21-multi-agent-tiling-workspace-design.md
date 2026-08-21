@@ -100,21 +100,20 @@ dot pairs with an accessible label and is distinguishable for colour-vision
 differences (shape/position, not hue alone), consistent with the existing
 "status is never conveyed by colour alone" rule.
 
-### Derived keybindings (pending approval)
+### Keybindings
 
-The user specified the two split shortcuts; the following siblings are proposed
-for a consistent set and require explicit approval before implementation. macOS
-uses `Cmd`; Windows/Linux replace `Cmd` with `Alt`, matching the split rule.
+The full set below is approved (2026-08-21). macOS uses `Cmd`; Windows/Linux
+replace `Cmd` with `Alt`, matching the split rule.
 
-| Action                           | macOS                 | Windows/Linux         | Notes                                                        |
-| -------------------------------- | --------------------- | --------------------- | ------------------------------------------------------------ |
-| Split right                      | `Shift+Cmd+=`         | `Shift+Alt+=`         | Specified by user                                            |
-| Split down                       | `Shift+Cmd+-`         | `Shift+Alt+-`         | Specified by user                                            |
-| Collapse focused pane to dock    | `Shift+Cmd+Down`      | `Shift+Alt+Down`      | Proposed                                                     |
-| Restore last-docked / cycle dock | `Shift+Cmd+Up`        | `Shift+Alt+Up`        | Proposed; click a dock chip to restore a specific pane       |
-| Move focus between panes         | `Cmd+Alt+Arrow`       | `Ctrl+Alt+Arrow`      | Proposed                                                     |
-| Close focused pane               | `Shift+Cmd+Backspace` | `Shift+Alt+Backspace` | Proposed; closing a pane archives, never deletes, its thread |
-| Bind right panel to focused pane | `Cmd+Alt+Enter`       | `Ctrl+Alt+Enter`      | Proposed                                                     |
+| Action                           | macOS                 | Windows/Linux         | Notes                                              |
+| -------------------------------- | --------------------- | --------------------- | -------------------------------------------------- |
+| Split right                      | `Shift+Cmd+=`         | `Shift+Alt+=`         | —                                                  |
+| Split down                       | `Shift+Cmd+-`         | `Shift+Alt+-`         | —                                                  |
+| Collapse focused pane to dock    | `Shift+Cmd+Down`      | `Shift+Alt+Down`      | —                                                  |
+| Restore last-docked / cycle dock | `Shift+Cmd+Up`        | `Shift+Alt+Up`        | Click a dock chip to restore a specific pane       |
+| Move focus between panes         | `Cmd+Alt+Arrow`       | `Ctrl+Alt+Arrow`      | —                                                  |
+| Close focused pane               | `Shift+Cmd+Backspace` | `Shift+Alt+Backspace` | Closing a pane archives, never deletes, its thread |
+| Bind right panel to focused pane | `Cmd+Alt+Enter`       | `Ctrl+Alt+Enter`      | —                                                  |
 
 **Browser-shortcut caveat:** because this stays a browser app, some `Cmd`/`Alt`
 combinations overlap browser defaults (zoom on `Cmd+=`/`Cmd+-`, tab and window
@@ -298,8 +297,8 @@ boundary):
 
 ## Open items resolved during the implementation plan
 
-- Final keybinding set (pending user approval above) and any browser-reserved
-  conflicts.
+- Any browser-reserved conflicts for the approved keybinding set, resolved when
+  verified against Chrome's reserved combinations.
 - Per-backend Codex and Claude session translation and persistence specifics.
 - The concrete N for the "smooth with N running panes" acceptance target.
 - Dock restore re-insertion rule.
