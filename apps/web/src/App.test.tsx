@@ -639,25 +639,41 @@ describe("safe and accessible workspace rendering", () => {
         unread: false,
       },
     });
-    api.getSnapshot.mockResolvedValue({
-      version: 1,
-      project: workspace.projects[0],
-      thread: {
-        id: importedThreadId,
-        projectId,
-        title: "Existing session",
-        runtimeSessionId: "50000000-0000-4000-8000-000000000001",
-        runState: null,
-        unread: false,
-      },
-      transcript: [],
-      currentRun: null,
-      lastRun: null,
-      epoch: "60000000-0000-4000-8000-000000000001",
-      highWaterSequence: 0,
-      capabilities: { prompt: true, steer: true, stop: true },
-      diagnostics: [],
-    });
+    // The tiling workspace can render more than one thread pane at once
+    // (e.g. the original thread's pane stays tiled alongside a
+    // newly-opened one), so the snapshot returned must vary by the
+    // requested thread id rather than being a single fixed value.
+    api.getSnapshot.mockImplementation((_projectId: string, tid: string) =>
+      Promise.resolve({
+        version: 1,
+        project: workspace.projects[0],
+        thread:
+          tid === importedThreadId
+            ? {
+                id: importedThreadId,
+                projectId,
+                title: "Existing session",
+                runtimeSessionId: "50000000-0000-4000-8000-000000000001",
+                runState: null,
+                unread: false,
+              }
+            : {
+                id: threadId,
+                projectId,
+                title: "Original thread",
+                runtimeSessionId: "40000000-0000-4000-8000-000000000001",
+                runState: null,
+                unread: false,
+              },
+        transcript: [],
+        currentRun: null,
+        lastRun: null,
+        epoch: "60000000-0000-4000-8000-000000000001",
+        highWaterSequence: 0,
+        capabilities: { prompt: true, steer: true, stop: true },
+        diagnostics: [],
+      }),
+    );
     api.archiveThread.mockImplementation(
       (_projectId: ProjectId, archivedThreadId: ThreadId) => {
         workspace = {

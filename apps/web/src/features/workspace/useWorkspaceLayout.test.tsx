@@ -147,4 +147,26 @@ describe("useWorkspaceLayout", () => {
       expect(result.current.layout.panes[originalPaneId]).toBeUndefined();
     expect(tiledPaneIds(result.current.layout)).toContain(newPaneId);
   });
+
+  it("newPane() on an empty layout (after closing the only pane) creates one focused tiled pane", () => {
+    stubStorage();
+    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
+    const onlyPaneId = result.current.layout.focusedPaneId;
+    expect(onlyPaneId).not.toBeNull();
+
+    act(() => {
+      if (onlyPaneId !== null) result.current.close(onlyPaneId);
+    });
+    expect(result.current.layout.root).toBeNull();
+    expect(tiledPaneIds(result.current.layout)).toHaveLength(0);
+
+    act(() => {
+      result.current.newPane();
+    });
+
+    const tiled = tiledPaneIds(result.current.layout);
+    expect(tiled).toHaveLength(1);
+    expect(result.current.layout.focusedPaneId).not.toBeNull();
+    expect(tiled).toContain(result.current.layout.focusedPaneId);
+  });
 });

@@ -43,7 +43,7 @@ import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
 import { NewChatPane } from "./features/workspace/NewChatPane.js";
-import { ThreadPane } from "./features/workspace/ThreadPane.js";
+import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
   INSPECTOR_MAX_WIDTH,
   INSPECTOR_MIN_WIDTH,
@@ -936,26 +936,7 @@ function ThreadRoute() {
         ) : undefined
       }
     >
-      <ThreadPane
-        projectId={projectId}
-        threadId={threadId}
-        focused
-        onFocus={() => {
-          // Only one pane is rendered outside tiling mode.
-        }}
-        onCollapse={() => {
-          // No-op until the tiling workspace surface is wired in.
-        }}
-        onClose={() => {
-          // The pane title bar is chrome for the future tiling surface
-          // (Task 9 wires this up with a real, guarded archive action).
-          // Until then this refactor must not introduce any new
-          // user-visible, destructive behavior.
-        }}
-        onBind={() => {
-          // No-op until the tiling workspace surface is wired in.
-        }}
-      />
+      <WorkspaceView projectId={projectId} />
     </WorkspaceLayout>
   );
 }

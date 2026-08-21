@@ -20,6 +20,7 @@ export interface WorkspaceLayoutController {
   layout: WorkspaceLayout;
   dispatch(command: WorkspaceCommand): void;
   assignThreadToPane(paneId: PaneId, threadId: ThreadId): void;
+  newPane(): void;
   focus(paneId: PaneId): void;
   restore(paneId: PaneId): void;
   bind(paneId: PaneId): void;
@@ -101,6 +102,22 @@ export function useWorkspaceLayout(
     [],
   );
 
+  const newPane = useCallback(() => {
+    setLayout((current) => {
+      if (current.root === null) {
+        const id = makePaneId();
+        return {
+          ...current,
+          root: { type: "pane", id },
+          panes: { ...current.panes, [id]: { threadId: null } },
+          focusedPaneId: id,
+        };
+      }
+      if (current.focusedPaneId === null) return current;
+      return splitPane(current, current.focusedPaneId, "row", makePaneId);
+    });
+  }, []);
+
   const focus = useCallback((paneId: PaneId) => {
     setLayout((current) => focusPane(current, paneId));
   }, []);
@@ -129,6 +146,7 @@ export function useWorkspaceLayout(
     layout,
     dispatch,
     assignThreadToPane,
+    newPane,
     focus,
     restore,
     bind,
