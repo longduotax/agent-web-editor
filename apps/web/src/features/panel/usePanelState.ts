@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   asPanelCommand,
@@ -57,6 +57,13 @@ export interface PanelActions {
 
 export interface PanelController {
   state: PanelState;
+  /**
+   * What the last chord could not do, or null. Rendered into the panel's
+   * live region and its status line so a refused command is announced
+   * rather than silently inert (WSP-10, D8). It clears itself: an
+   * announcement is an event, not a state the panel stays in.
+   */
+  announcement: string | null;
   /** Stable across renders: tab bodies are memoised on it. */
   actions: PanelActions;
   /**
@@ -71,53 +78,94 @@ function makeId(): string {
   return crypto.randomUUID();
 }
 
+/** How long a refused chord's message stays on screen. */
+const ANNOUNCEMENT_MS = 5_000;
+
+/**
+ * The panel plus whatever the last chord had to say about itself.
+ *
+ * They are ONE piece of state on purpose. The chord listener is installed
+ * once and cannot close over the panel, so it has to update functionally —
+ * and a functional update has no way to hand anything back to the caller.
+ * Keeping the announcement in the same state means the updater that decides
+ * a command was refused is also the one that records it, with no ref
+ * standing in for the current state and no chance of reading a stale one.
+ */
+interface PanelSession {
+  panel: PanelState;
+  announcement: {
+    text: string;
+    // Two identical refusals in a row are two events, and a live region only
+    // re-announces text it sees change. The counter is what makes the second
+    // one a change.
+    id: number;
+  } | null;
+}
+
 export function usePanelState(): PanelController {
-  const [state, setState] = useState<PanelState>(() => readPanelState());
+  const [session, setSession] = useState<PanelSession>(() => ({
+    panel: readPanelState(),
+    announcement: null,
+  }));
   const [focusRequest, setFocusRequest] = useState(0);
+  const state = session.panel;
 
   useEffect(() => {
     writePanelState(state);
   }, [state]);
 
+  // Every non-chord action is a plain state transform that has nothing to
+  // announce, so it leaves the current announcement alone (its own timer
+  // clears it).
+  const transform = useCallback(
+    (change: (current: PanelState) => PanelState) => {
+      setSession((current) => {
+        const panel = change(current.panel);
+        return panel === current.panel ? current : { ...current, panel };
+      });
+    },
+    [],
+  );
+
   const actions = useMemo<PanelActions>(
     () => ({
       openTab: (tab, options) => {
-        setState((current) => openTab(current, tab, makeId, options));
+        transform((current) => openTab(current, tab, makeId, options));
       },
       closeTab: (tabId) => {
-        setState((current) => closeTab(current, tabId));
+        transform((current) => closeTab(current, tabId));
       },
       activateTab: (tabId) => {
-        setState((current) => activateTab(current, tabId));
+        transform((current) => activateTab(current, tabId));
       },
       moveTab: (tabId, groupId, index) => {
-        setState((current) => moveTab(current, tabId, groupId, index));
+        transform((current) => moveTab(current, tabId, groupId, index));
       },
       splitWithTab: (tabId, groupId, edge) => {
-        setState((current) =>
+        transform((current) =>
           splitGroupWithTab(current, tabId, groupId, edge, makeId),
         );
       },
       closeGroup: (groupId) => {
-        setState((current) => closeGroup(current, groupId));
+        transform((current) => closeGroup(current, groupId));
       },
       focusGroup: (groupId) => {
-        setState((current) => focusGroup(current, groupId));
+        transform((current) => focusGroup(current, groupId));
       },
       resizeGroups: (splitId, sizes) => {
-        setState((current) => setGroupSizes(current, splitId, sizes));
+        transform((current) => setGroupSizes(current, splitId, sizes));
       },
       setWidth: (width) => {
-        setState((current) => setPanelWidth(current, width));
+        transform((current) => setPanelWidth(current, width));
       },
       setOpen: (open) => {
-        setState((current) => setPanelOpen(current, open));
+        transform((current) => setPanelOpen(current, open));
       },
       updateTab: (tabId, patch) => {
-        setState((current) => updateTab(current, tabId, patch));
+        transform((current) => updateTab(current, tabId, patch));
       },
       bindPendingContexts: (context) => {
-        setState((current) => bindPendingContexts(current, context));
+        transform((current) => bindPendingContexts(current, context));
       },
     }),
     [],
@@ -144,7 +192,20 @@ export function usePanelState(): PanelController {
       event.preventDefault();
       if (command.type === "panel-focus")
         setFocusRequest((current) => current + 1);
-      setState((current) => applyPanelCommand(current, command, makeId));
+      setSession((current) => {
+        const result = applyPanelCommand(current.panel, command, makeId);
+        if (result.announcement === null)
+          return result.state === current.panel
+            ? current
+            : { ...current, panel: result.state };
+        return {
+          panel: result.state,
+          announcement: {
+            text: result.announcement,
+            id: (current.announcement?.id ?? 0) + 1,
+          },
+        };
+      });
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -152,7 +213,27 @@ export function usePanelState(): PanelController {
     };
   }, []);
 
-  return { state, actions, focusRequest };
+  const announcement = session.announcement;
+  useEffect(() => {
+    if (announcement === null) return;
+    const timer = window.setTimeout(() => {
+      setSession((current) =>
+        current.announcement === announcement
+          ? { ...current, announcement: null }
+          : current,
+      );
+    }, ANNOUNCEMENT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [announcement]);
+
+  return {
+    state,
+    actions,
+    focusRequest,
+    announcement: announcement?.text ?? null,
+  };
 }
 
 /**

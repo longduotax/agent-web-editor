@@ -263,6 +263,32 @@ describe("WorkspacePanel", () => {
     expect(divider).toHaveAttribute("aria-valuenow", "55");
   });
 
+  // D8. The model refuses to split a group holding one tab — the default
+  // state of a fresh panel and the state after every migration — so all four
+  // split chords did nothing, silently, in the most common case there is.
+  it("says why a split chord could not split, instead of doing nothing", async () => {
+    const user = userEvent.setup();
+    stubStorage();
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    renderPanel();
+    await openPanel(user);
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+
+    panelChord("ArrowRight");
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(
+      "Nothing to split — this group has one tab.",
+    );
+    // Still one group: the message replaces a silent no-op, it does not
+    // paper over a change.
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+  });
+
   it("leaves the reopen rail when its last tab is closed", async () => {
     const user = userEvent.setup();
     stubStorage();

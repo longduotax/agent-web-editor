@@ -1681,6 +1681,18 @@ a:focus-visible {
 .panel-tabpanel[hidden] {
   display: none;
 }
+/* A chord that could not do what it names says so here, and in the live
+   region this element is. Takes no room while it has nothing to say. */
+.panel-announcement {
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.panel-announcement:empty {
+  display: none;
+}
 /* The panel's own tiling tree (WSP-01), with the chat surface's divider
    affordance: a hairline at rest that turns blue when it is grabbed. */
 .panel-split {

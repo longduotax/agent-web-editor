@@ -29,7 +29,7 @@ export function WorkspacePanel({
   /** The focused chat pane's execution scope, or null when none owns one. */
   focusedContext: TabContext | null;
 }): JSX.Element {
-  const { state, actions, focusRequest } = controller;
+  const { state, actions, focusRequest, announcement } = controller;
   const [resizing, setResizing] = useState(false);
   const resizingPointer = useRef<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -150,6 +150,12 @@ export function WorkspacePanel({
             the group that currently owns its tab, so regrouping moves a body
             instead of tearing it down (WSP-09). */}
         <PanelBodies state={state} actions={actions} panelVisible={open} />
+        {/* Always rendered, never conditionally mounted: a live region has
+            to exist before its text arrives to be announced at all. It is
+            how a chord that refused says so (WSP-10, D8). */}
+        <p className="panel-announcement" role="status">
+          {announcement}
+        </p>
       </aside>
       {!open && (
         <div className="panel-rail">
