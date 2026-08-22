@@ -1414,10 +1414,23 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 
 ## Progress
 
-- [ ] Milestone 1 — generic binary tree, tab model, panel model, storage
-- [ ] Milestone 2 — panel shell, ported tabs, inspector deleted
-- [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
-      verification, close-control question confirmed
+- [x] Milestone 1 — generic binary tree, tab model, panel model, storage.
+      Reviewed 2026-08-22; six defects found and fixed, three of them at the
+      persistence boundary (unclamped width and split fractions, a tree deep
+      enough to poison storage on every read, and `updateTab` walking through
+      the dedupe that `openTab` enforces).
+- [x] Milestone 2 — panel shell, ported tabs, inspector deleted. Reviewed
+      2026-08-22; fourteen defects found and fixed, the worst being that any
+      change of tree shape unmounted the tab bodies in a group and killed
+      running terminals.
+- [x] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
+      verification, close-control question confirmed. Its standing hands-on UI
+      pass was performed on 2026-08-22 and found six defects, all fixed: scroll
+      offsets lost on a switch and a drag (a regression from F2 moving the
+      scrolling element inward), a drag ghost drawn off-screen by a transformed
+      ancestor, a fast flick dropping the gesture before pointer capture, a
+      refused drop announcing success, four narration gaps, and a 9x16px close
+      target.
 - [x] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
       search. Its standing hands-on UI pass was performed on 2026-08-23 and
       found seven defects, all fixed and pinned: a tracked file hidden by an

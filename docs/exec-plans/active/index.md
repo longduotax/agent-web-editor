@@ -34,8 +34,9 @@ superseded, or abandoned.
   pending merge.
 - [Workspace panel](2026-08-22-workspace-panel.md) — Draft plan version 2,
   technical approval pending; plan version 1 was approved on 2026-08-22 and its
-  milestones are carried forward, with milestones 1 and 2 implemented and
-  milestone 4 shipped on 2026-08-23.
+  milestones are carried forward, with milestones 1 through 4 implemented,
+  reviewed, and their hands-on UI passes performed; milestone 4 shipped on
+  2026-08-23. Milestones 5 through 9 are specified and not started.
   Product approval for
   [Workspace panel](../../product-specs/workspace-panel.md) v1 was granted from
   the design as presented in session, not from a reading of the document;
