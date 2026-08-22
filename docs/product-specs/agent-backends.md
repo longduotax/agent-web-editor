@@ -2,20 +2,23 @@
 
 **Current version:** None
 
-**Proposed version:** 1
+**Proposed version:** 2
 
-**Proposal status:** Approved
+**Proposal status:** Draft
 
-**Implementation status:** Not started
+**Implementation status:** In progress
 
-**Product approval:** Approved for specification version 1 on 2026-08-22 by the user (longduotax), after resolving both open product questions in conversation: the default backend gains a Settings control (AGB-02) and an unusable backend is shown disabled with a reason (AGB-03). Approved together with plan version 1.
+**Product approval:** Pending for specification version 2. Version 1 was approved on 2026-08-22 by the user (longduotax), after resolving both open product questions in conversation: the default backend gains a Settings control (AGB-02) and an unusable backend is shown disabled with a reason (AGB-03). That approval covered plan version 1 and is unaffected by this proposal.
 
 **Subsystem:** Agent execution — which coding agent runs a chat, how that choice
 is made and shown, and how a chat behaves when its agent is unavailable
 
-**Last verified:** 2026-08-22
+**Last verified:** 2026-08-23
 
 **Related ExecPlans:** [Codex agent runtime implementation plan](../exec-plans/active/2026-08-22-codex-agent-runtime.md)
+(version 1) and
+[Codex tool-call replay implementation plan](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)
+(version 2)
 
 **Related documents:**
 [Multi-agent tiling workspace design](../design/multi-agent-tiling-workspace.md)
@@ -278,3 +281,122 @@ and are folded into the requirements above:
   preference pattern, rather than an operator-only setting.
 - **How is an unusable backend presented?** Shown, disabled, with the reason
   stated at the point of choice (AGB-03), rather than hidden.
+
+## Proposed revision v2
+
+Version 1 is approved and implemented, and remains the baseline: every
+requirement above is unchanged. This revision is a bounded addition of three
+requirements — AGB-10, AGB-11, and AGB-12 — that close one gap version 1 left
+open against [AGB-05](#agb-05--a-codex-chat-behaves-like-any-other-chat).
+
+**The gap.** A Codex chat shows its shell commands and file edits while they
+run, and loses them the moment the chat is reopened: a reloaded Codex
+transcript is messages only. A Pi chat keeps its full history. AGB-05 promises
+that a Codex chat behaves like any other chat, and today it does not.
+
+### AGB-10 — A reopened Codex chat shows the tool calls it showed live
+
+When a Codex chat is reopened — a page reload, a reconnect after a server
+restart, a pane closed and opened again, or an archived chat restored — its
+transcript contains the **tool entries it displayed while running**: shell
+commands with their command line, working directory, output, and success or
+failure, and file changes with what they changed. Each appears in its original
+position relative to the messages of the turn it belongs to.
+
+This holds for a chat this workspace created and, equally, for a chat imported
+under [AGB-09](#agb-09--existing-codex-sessions-in-a-folder-can-be-imported),
+whichever Codex client originally wrote that chat's history.
+
+**Only what a person wrote or an agent produced is shown.** Material injected
+into the model's context — standing instructions, tool and plugin catalogues,
+environment descriptions — is never rendered as conversation, whatever role it
+is stored under. A transcript that gained thousands of words no human typed
+would be a worse outcome than the gap this requirement closes.
+
+No new surface, panel, or control is introduced. The replayed entries are the
+ordinary tool entries the workspace already renders.
+
+### AGB-11 — Replay is bounded, and says where its bound falls
+
+Reopening a Codex chat is not slower because the chat is long. Tool history is
+restored for the most recent part of the conversation under a fixed budget,
+working backwards from the latest activity, so the cost of opening a chat does
+not track its total size.
+
+When that budget stops the replay before the start of the history on display,
+the transcript **states so once, at the point where replay stops**, rather than
+presenting a partial history as if it were complete. A user who sees messages
+without their commands must be able to tell whether nothing happened or whether
+the workspace stopped looking.
+
+The bound applies to this capability alone. It does not change which messages a
+chat displays, and it composes with
+[Scalable conversation history](scalable-conversation-history.md): where that
+capability pages through history, a page of conversation carries the tool calls
+belonging to that page.
+
+### AGB-12 — Unreadable tool history degrades to messages, never to failure
+
+Codex stores a chat's history in a private format this workspace does not
+control. It can change with a Codex upgrade, and it can be absent.
+
+When that history cannot be read or cannot be understood:
+
+- The chat opens normally and shows its messages — exactly the history it shows
+  today. Prompting, steering, stopping, and live streaming are unaffected.
+- The transcript carries **one quiet line** stating that earlier tool activity
+  could not be restored for this chat. It names no file, path, or internal
+  format; the detail belongs in the server's logs, not in a user's
+  conversation.
+- Nothing is deleted, hidden, emptied, or invented. A chat is never marked
+  broken for this reason, and creating a chat never fails for it.
+
+Pi chats are entirely unaffected, as are Codex chats whose history reads
+cleanly.
+
+### Acceptance criteria
+
+Version 1's criteria 1–14 stand unchanged. This revision adds:
+
+15. A Codex chat runs a shell command; after a full page reload the transcript
+    shows that command with its output and its success or failure, in the same
+    position relative to the surrounding messages as it held during the run.
+    (AGB-10)
+16. The same holds for a file change made by a Codex chat. (AGB-10)
+17. A Codex session created outside this workspace — by the Codex desktop app or
+    the Codex terminal client — and imported under AGB-09 replays its tool calls
+    when reopened. (AGB-10)
+18. A reopened Codex transcript contains no entry that no human wrote and no
+    agent produced. Specifically, injected instruction and catalogue material
+    that Codex stores under a user role does not appear. (AGB-10)
+19. Opening a Codex chat with thousands of turns is not materially slower than
+    opening a short one, and its transcript states once where tool replay stops.
+    (AGB-11)
+20. With the stored history absent, truncated, or in a format this workspace
+    does not recognise, the chat still opens with its messages, still prompts and
+    streams, and shows exactly one line saying earlier tool activity could not be
+    restored. (AGB-12)
+21. A Pi chat's reopened transcript is byte-for-byte unchanged by this revision.
+    (AGB-05)
+
+### Non-goals
+
+Version 1's non-goals stand. This revision adds:
+
+- **Replaying reasoning.** A Codex chat shows reasoning summaries live, as
+  assistant text, and they still do not survive a reload. Version 1 recorded
+  that the transcript contract has no reasoning kind of its own; giving
+  reasoning a durable home is a separate change to that contract, and this
+  revision does not make it.
+- **A rule that live and reopened transcripts are identical.** This revision
+  closes the tool-call gap specifically. Stating identity as a standing
+  requirement would silently pull in reasoning, token accounting, and every
+  future Codex item type.
+- **Surfacing Codex's stored sessions.** No browser, exporter, or file picker
+  over Codex's session storage, and nothing in this workspace writes to it.
+- **Token usage, rate limits, plan updates, or compaction notices**, which
+  Codex's own clients show and this workspace does not.
+
+### Open product questions
+
+None.
