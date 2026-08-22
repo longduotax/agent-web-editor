@@ -5,14 +5,16 @@
 **Plan version:** 2
 
 **Technical approval:** Pending for plan version 2 — the added file-tree and
-ignore-rule milestone (new milestone 4), which brings a new server listing mode,
+ignore-rule milestone (milestone 4), which brings a new server listing mode,
 ignore-rule parsing at the file boundary, and a persisted-shape change to the
-`files` tab. Plan version 1 was approved by the user on 2026-08-22 and every
-milestone it covered is carried forward unchanged; that approval is not
-retracted, and milestones already implemented stay implemented. What is pending
-is approval of the new milestone and of the accessibility and overflow fix items
-folded into milestones 3 and 5. Product approval for the governing revision
-(specification version 2) is pending as well.
+`files` tab, and the added tab-body positioning milestone (milestone 8), which
+replaces the body-moving strategy with a positioned layer. Plan version 1 was
+approved by the user on 2026-08-22 and every milestone it covered is carried
+forward unchanged; that approval is not retracted, and milestones already
+implemented stay implemented. What is pending is approval of those two
+milestones and of the accessibility and overflow fix items folded into
+milestones 3 and 5. Product approval for the governing revision (specification
+version 2) was **granted by the user on 2026-08-23**.
 
 **Subsystem:** Browser workspace composition — the docked right-hand panel, its
 tab groups and durable tabs, and the server multi-terminal, terminal-cwd, and
@@ -34,8 +36,9 @@ URL-probe boundaries those tabs require
 `packages/contracts/src/index.ts` (terminal client and
 server frames, a terminals-listing response, a browser-probe request and
 response, a directory-scoped file-listing query and response),
-`apps/web/package.json` (Shiki), and the design and architecture
-documents named below. No database, migration, agent-runtime, or Pi-adapter
+`apps/web/package.json` (Shiki), `e2e/workspace-panel.spec.ts` (milestone 8's
+evidence is end-to-end, because jsdom computes no layout), and the design and
+architecture documents named below. No database, migration, agent-runtime, or Pi-adapter
 change.
 
 **Governing specification:** [Workspace panel](../../product-specs/workspace-panel.md)
@@ -70,19 +73,32 @@ and invalidates this plan's technical approval. No question in its Open product
 questions section remains open. This plan implements WSP-01 through WSP-10 and
 performs the CWS-06 supersession bookkeeping the spec requires.
 
+**Specification version 2 is approved.** The user approved it on 2026-08-23,
+under the same qualification as version 1: the approval is of **the behaviour as
+described in session** — the 2026-08-22 report that the Files tab was flooded by
+`node_modules` and flat where it should be hierarchical, and the instruction
+that followed it — and not of a reading of the specification document. A
+discrepancy between that document and that discussion resolves in favour of the
+discussion, returns the proposal to Draft, and invalidates this plan's approval
+of the milestone that implements it.
+
 **Plan version 2 and specification version 2.** On 2026-08-22, after milestone 2
 shipped and the automated suite was green, a hands-on pass at a real repository
 found six issues (see Discoveries and blockers). Four are defects against
 requirements version 1 already carries; two — the Files tab's flat listing and
 its lack of ignore rules — are behavior version 1 does not require, so they are
-proposed as **specification version 2**, a bounded revision of WSP-05 that is
-Draft with product approval pending. Of the four reported as defects, two were
+proposed as **specification version 2**, a bounded revision of WSP-05, which the
+user **approved on 2026-08-23** (see the approval context above). Of the four
+reported as defects, two were
 subsequently **closed as false positives from the inspection tool** (see
 Discoveries), leaving one open question and one open defect. This plan version
 accordingly:
 
 - adds **milestone 4**, the file tree and ignore rules, and renumbers the
   milestones after it;
+- adds **milestone 8**, the positioned tab-body layer, added on 2026-08-23 from
+  the decision recorded in the log below, and renumbers the browser-tab
+  milestone after it to 9;
 - folds the close-control question into **milestone 3** and the file-content
   overflow defect into **milestone 5**, rather than queueing either behind
   feature work;
@@ -92,10 +108,14 @@ accordingly:
 - adds a standing hands-on UI verification step to every remaining milestone,
   whose findings are confirmed before they become work.
 
-Milestone 4 must not start production work until specification version 2 is
-approved. Every other milestone is unchanged from plan version 1 and is covered
-by that version's technical approval; the defect fix items are corrections to
-work already approved, not new scope.
+Milestone 4's gate — no production work until specification version 2 is
+approved — **is satisfied**: the user approved that version on 2026-08-23. The
+milestone was implemented on the coordinator's instruction before that approval
+was recorded; the sequence is in Discoveries and blockers, and the approval that
+has since been given covers the behaviour that was built. Every other milestone
+except milestone 8, added later in plan version 2, is unchanged from plan
+version 1 and is covered by that version's technical approval; the defect fix
+items are corrections to work already approved, not new scope.
 
 Product behavior change: yes, and it is the whole point of the change. The
 shipped `Changes | Files | Terminal` inspector is removed and replaced. The
@@ -145,7 +165,7 @@ links them rather than restating them.
 | [WSP-06](../../product-specs/workspace-panel.md#wsp-06--changes-and-diff-tabs)                                                          | `parseUnifiedDiff.ts` turns the existing `GitDiffResponse` staged/unstaged strings into hunks with old/new line numbers; `DiffTab` renders labelled sections, collapsible hunks, retained `+`/`-` prefixes, a sticky header with counts, and an explicit truncation notice. The server diff contract is unchanged.                                                                                                                                                                                                                                                                                | `parseUnifiedDiff.test.ts` (headers, counts, renames, no-newline marker, malformed input degrades to raw text); `DiffTab.test.tsx` (sections, collapse, dual gutters, sticky header, truncation).                                                                                                                                                                                                                                                                                                                                      |
 | [WSP-07](../../product-specs/workspace-panel.md#wsp-07--terminal-tabs)                                                                  | `ProjectTerminalManager.owners` is rekeyed by `TerminalId` with a `scopeId -> Set<TerminalId>` index and a per-scope cap of 8; the `attach` frame gains optional `terminalId` and `cwd`; a `create` frame is added; `GET …/terminals` lists live terminals for the scope; `terminal/cwd.ts` polls the working directory at most 1 Hz while attached and pushes a `cwd` server frame.                                                                                                                                                                                                              | `manager.test.ts` (N per scope, cap rejection, re-attach by id, cross-scope id rejected, spawn cwd containment, disposal); `cwd.test.ts` (Linux, macOS, unsupported platform, timeout, non-UTF-8); `app.test.ts` (listing route); `TerminalTab.test.tsx` (reload re-attaches, gone state, per-tab warning).                                                                                                                                                                                                                            |
 | [WSP-08](../../product-specs/workspace-panel.md#wsp-08--browser-tab)                                                                    | `POST /api/browser/probe` reports only whether the target refuses framing; `BrowserTab` renders an explicit named state instead of a blank frame; an address whose origin equals the workspace's own is refused at parse time; the iframe is sandboxed with `allow-same-origin` but **without** either top-navigation token, so the embedded page cannot navigate the workspace away; production CSP gains `frame-src http: https:` while `X-Frame-Options: DENY` on our own responses stays.                                                                                                     | `probe.test.ts` (scheme allowlist, same-origin refusal before any request, redirect bound, timeout, body never read or returned, `X-Frame-Options` and `frame-ancestors` detection); `app.test.ts` (CSP header contains `frame-src http: https:` and still `frame-ancestors 'none'`); `BrowserTab.test.tsx` (blocked, unreachable, and self-origin states, address restore, exact sandbox token set).                                                                                                                                  |
-| [WSP-09](../../product-specs/workspace-panel.md#wsp-09--the-panel-stays-responsive)                                                     | Tab bodies stay mounted and are hidden with `hidden`/`content-visibility` rather than unmounted; every query and timer in a tab body is gated on `isVisible`; the file list keeps the existing 200-row render cap and the debounced search with `keepPreviousData`; diffs and previews cap rendered lines with an explicit notice; drag and resize mutate only geometry.                                                                                                                                                                                                                          | `Panel.perf.test.tsx` (hidden tab issues no query and runs no timer; switching back keeps scroll offset; a moved tab does not remount its terminal); existing `useDebouncedValue` tests retained; `App.test.tsx` search assertions retained.                                                                                                                                                                                                                                                                                           |
+| [WSP-09](../../product-specs/workspace-panel.md#wsp-09--the-panel-stays-responsive)                                                     | Tab bodies stay mounted and are hidden with `hidden`/`content-visibility` rather than unmounted, and from milestone 8 every body host lives in one never-detached layer positioned over its group's rectangle rather than being moved into it; every query and timer in a tab body is gated on `isVisible`; the file list keeps the existing 200-row render cap and the debounced search with `keepPreviousData`; diffs and previews cap rendered lines with an explicit notice; drag and resize mutate only geometry.                                                                            | `Panel.perf.test.tsx` (hidden tab issues no query and runs no timer; switching back keeps scroll offset; a moved tab does not remount its terminal); existing `useDebouncedValue` tests retained; `App.test.tsx` search assertions retained.                                                                                                                                                                                                                                                                                           |
 | [WSP-10](../../product-specs/workspace-panel.md#wsp-10--keyboard-accessibility-and-defined-states)                                      | `panelKeybindings.ts` is a single table of `{ id, keys, label, command }`; the handler dispatches from it and `SettingsPage` renders the same table, so an inert binding cannot be advertised; the tab strip is a real `tablist`; drag is mirrored by a keyboard move mode with `aria-live` announcements; a closed panel is `inert`.                                                                                                                                                                                                                                                             | `panelKeybindings.test.ts` (every advertised id resolves to a command and every command is advertised); `TabStrip.test.tsx` (roles, selection, roving focus); axe checks in every tab-body test; `SettingsPage.test.tsx` (list matches the table).                                                                                                                                                                                                                                                                                     |
 
 ## Current behavior and affected invariants
@@ -241,20 +261,25 @@ persistence across a server restart.
 planning and are recorded in the decision log: the migrated inspector tab's
 missing context (D-1), the typed terminal rejection channel (D-2), and the
 iframe sandbox's token set together with the self-origin address refusal that
-carries the protection instead (D-3).
+carries the protection instead (D-3). A fourth, raised as milestone 9's blocking
+prerequisite — whether tab body hosts keep being relocated between groups — was
+resolved by the user on 2026-08-23 in favour of positioning them, which is
+milestone 8.
 
 ## Implementation milestones
 
-Eight milestones, in this order. Each is independently shippable and each ends
+Nine milestones, in this order. Each is independently shippable and each ends
 with the repository building, the full unit suite green, and no half-wired
 surface. Milestone 2 is the only one that removes a shipped feature, and it
 delivers its replacement in the same milestone. Milestone 4 was added in plan
 version 2 and the milestones after it were renumbered; a reference to
 "milestone 4" written before 2026-08-22 means the File tab, which is now
-milestone 5.
+milestone 5. Milestone 8, the positioned tab-body layer, was added on 2026-08-23
+and the browser tab moved after it; a reference to "milestone 8" written before
+that date means the browser tab, which is now milestone 9.
 
 **Standing verification step — a hands-on UI pass.** Every remaining milestone
-(3 through 8) ends with a **hands-on pass in the running application, driven
+(3 through 9) ends with a **hands-on pass in the running application, driven
 through the browser**, exercising that milestone's behavior against a real
 repository — not a fixture — and reporting what it finds. It is **distinct from
 and additional to** the milestone's automated suite: a milestone is not done
@@ -633,9 +658,12 @@ close a tab without a pointer.
 ### Milestone 4 — File tree: directory-scoped listing, ignore rules, flat search
 
 Added in plan version 2. It implements
-[WSP-05 as revised by specification version 2](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs-revised-by-version-2)
-and **must not start production work until that specification version is
-approved**. It carries both server and browser work, and the server half comes
+[WSP-05 as revised by specification version 2](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs-revised-by-version-2),
+whose approval gated it — **that gate is now satisfied**: the user approved
+specification version 2 on 2026-08-23. The milestone was built before that
+approval was recorded, on the coordinator's instruction; Discoveries and
+blockers records the order events actually happened in. It carries both server
+and browser work, and the server half comes
 first: the browser cannot synthesise a tree or an ignore rule from a listing
 that already flattened and already included everything.
 
@@ -907,36 +935,221 @@ worktree, `cd` in one, reload the browser, confirm both re-attach with replay
 and the changed directory is shown, and confirm the ninth terminal is refused
 with the cap message.
 
-### Milestone 8 — Browser tab, probe endpoint, CSP, and sandboxing
+### Milestone 8 — Tab bodies are positioned, not relocated
 
-**Blocking prerequisite: a Browser tab cannot use milestone 3's body-moving
-strategy.** `PanelBodies.tsx` gives every tab a host element that is created
-once and _moved_ into whichever group owns the tab, because moving a DOM node
-re-runs no effect and so keeps a terminal's socket alive. That guarantee does
-not extend to an `iframe`: removing an `iframe` from the document discards its
-nested browsing context, so reparenting one reloads the page, losing its
-navigation history, scroll position, and any form state. The behaviour is
-specified, not a browser quirk, and no amount of care in the move makes it
-survivable. The same applies to media elements' playback state.
+Added on 2026-08-23 from the decision recorded in the log below, and it comes
+**before** the Browser tab because that tab cannot be built on the strategy this
+milestone replaces.
+
+**What is being replaced.** `PanelBodies.tsx` gives every tab a host element
+created once and _moved_, with `appendChild`, into whichever group's
+`.panel-bodies` node currently owns the tab. Moving a DOM node re-runs no React
+effect, which is the whole reason a dragged terminal keeps its socket and its
+process. But moving is also a **removal followed by an insertion**, and a
+removal is not free for every element: taking an `iframe` out of the document
+discards its nested browsing context, so a relocated Browser tab reloads its
+page and loses its navigation history, its scroll position, and any form state.
+That is specified HTML behaviour rather than a browser quirk, and no care in the
+move makes it survivable. Media elements lose playback state the same way. The
+relocation is also why `PanelBodies` carries a scroll save/restore workaround,
+and that workaround has already been the source of one regression — G1, where it
+went on recording the body's own offsets after the F2 fix moved the scrolling
+element inward, so it saved zeros and restored zeros.
+
+**The decision: stop relocating hosts.** Every tab body host lives in one layer
+that is never detached, and each is **positioned over its owning group's
+rectangle** instead of being moved into it. Nothing is ever removed from the
+document, so a browser tab, a terminal, a playing media element, and a scroll
+offset all survive a drag identically and by the same mechanism, and the scroll
+workaround is retired rather than re-fixed.
+
+**The positioning layer.**
+
+- One `.panel-bodies-layer` element, a child of the panel's own positioned root
+  and a sibling of the tree, holding every mounted host for the life of the
+  panel. It is the only parent a host ever has. `PanelBodies` keeps its portal
+  and its one-host-per-tab rule; what changes is that the host is never
+  re-parented.
+- Each group keeps a `.panel-bodies` node, but it becomes a **measured
+  placeholder** rather than a parent: it is what states where a body belongs,
+  and `groupBodiesElementId` keeps naming it. The host is placed over that
+  rectangle in the layer's own coordinates.
+- Placement is `left`/`top`/`width`/`height`, not a transform. A body must lay
+  out at its real size: xterm's fit addon measures its container (F4), the
+  file and diff bodies are height-bounded flex columns (F2), and the render
+  budgets of WSP-09 are stated in rows that only exist at a real size. A
+  transform would scale or offset a box that still had the wrong size.
+  `.panel-tabpanel-host`'s `display: contents` goes with this: a positioned
+  host has to be a real box.
+- Only the active tab of each group is shown. Every other host stays **in the
+  document** and keeps `hidden` and `inert`, exactly as today — `hidden`
+  removes a box from layout but does not detach the node, so an `iframe` under
+  it keeps its browsing context and a terminal keeps its socket. A hidden host
+  is not positioned at all until it is shown.
+- **During a drag**, nothing moves: the model does not change until the drop
+  commits, so no rectangle changes and no host is repositioned. The drag ghost
+  stays portalled into `document.body` (G2) and the layer must not become a new
+  containing block for it — a positioned ancestor is exactly the hazard G2 was.
+- **During a divider resize**, the group rectangles change continuously. This is
+  the path that must not measure per pointer move; see the WSP-09 note below.
+- **When the panel is closed**, the layer is hidden and inert with the panel and
+  positions nothing; hosts stay attached, so a terminal keeps its process and a
+  browser tab keeps its page, and the first observation after it reopens places
+  them again. The same holds for the narrow-width drawer, which hides the panel
+  rather than unmounting it.
+- **When a group is removed** — a sibling promoted after a close, or the last
+  tab closing the panel — a host whose tab moved to another group is
+  repositioned over the new slot, and a host whose tab was closed is unmounted
+  and removed. Closing a tab is the only path that legitimately detaches a host,
+  and it is the one path where nothing is owed to what the host contained.
+
+**Rectangle tracking, and why it stays inside WSP-09.** WSP-09 forbids per-move
+layout work: it is why the drag path measures every group's rectangle **once at
+pick-up** (`measureZones` in `useTabDrag.ts`) and why the ghost is deliberately
+not clamped to the viewport. This milestone must not reintroduce that cost from
+the other side.
+
+- Positions are read in a **`ResizeObserver`** over the placeholders, not in a
+  pointer handler. The observer's callback runs after the browser has already
+  computed layout for that frame, so reading a rectangle there forces no reflow;
+  the same read inside a `pointermove` handler would force one on every event.
+  A divider drag therefore keeps writing size fractions only, and the layer
+  answers afterwards, once per frame the browser actually laid out.
+- One observer, one callback: it **reads every changed placeholder's rectangle
+  first and writes every style afterwards**, so a frame never interleaves reads
+  and writes and cannot thrash layout, however many groups exist.
+- Only changed slots are written, and a hidden host is skipped entirely, so a
+  panel showing two of ten tabs positions two boxes.
+- The observer is disconnected while the panel is closed, so a closed panel does
+  no work at all — the same rule the tab bodies already follow.
+- A structural change (split, promotion, tab move) repositions in the same
+  layout effect that already runs for it, so the first paint after the change is
+  already correct rather than corrected a frame later.
+
+**Retiring the scroll save/restore workaround.** Nothing is detached any more,
+so the browser keeps every scroller's offset by itself. The capture-phase
+`scroll` listener, the per-body `Map` of scrollers, `restoreScroll`, and the
+`wasActive` bookkeeping in `PanelBodies.tsx` all go. Hidden bodies keep `hidden`
+— it is what stops a hidden tab doing layout work — so the one remaining
+browser-dependent behaviour is that a box which left layout under `hidden`
+restores its offset when it comes back, measured true in HeadlessChrome/151
+under G1. That is a claim about the browser, so it keeps its **end-to-end**
+guard rather than being trusted.
+
+Tests that pin the workaround, and what happens to each:
+
+- `PanelBodies.test.tsx` → **"records and restores the offset of a descendant
+  scroller, not the body's own"** pins the record-and-restore mechanism, with
+  the browser's reset stood in for by hand. The mechanism is gone; the case is
+  **deleted with it**, not adjusted to keep passing.
+- `PanelBodies.test.tsx` → **"keeps a body's scroll position across a split"**
+  and **"keeps a body's scroll position across a tab switch"** state the
+  guarantee rather than the mechanism, so they stay — but they are recorded here
+  as **weak** evidence: jsdom neither detaches on a move nor lays anything out,
+  so they can pass vacuously. The evidence is the two e2e cases below.
+- e2e → **"panel file tab: returning to a tab restores the scroll offset of the
+  element that scrolls"** and **"panel drag: a dragged tab keeps the scroll
+  offset of the element that scrolls"** must stay green unchanged. They are the
+  guarantee, and they are what proves the workaround was removable rather than
+  load-bearing.
+
+**Every guarantee the current strategy verifies must still hold.** These are the
+existing cases the milestone is not allowed to break, weaken, or rewrite; if one
+needs editing, the positioning is wrong.
+
+Unit:
+
+- `PanelBodies.test.tsx` — "keeps a running terminal's socket across a split and
+  across the promotion that follows" (a body survives every change of tree shape
+  with **zero** new sockets).
+- `WorkspacePanel.test.tsx` — "mounts and queries only the tab a restored panel
+  shows" (a never-activated tab is never mounted, measured from a restored
+  panel because opening a tab activates it); "keeps a hidden tab mounted and
+  inert, and issues nothing for it even when its data is invalidated"; "issues
+  nothing further when the panel is toggled shut and open"; "is inert rather
+  than merely invisible while it is closed, and the rail brings it back".
+- `TabStrip.test.tsx` — "is a tablist whose active tab points at its own panel",
+  whose last assertion is that a never-activated tab claims no `aria-controls`,
+  because it has no body.
+- `tabBodies.test.tsx` — the four "issues no request while it is hidden" cases,
+  one per ported body (Changes, Files, File, Diff).
+
+End to end:
+
+- "panel drag: a dragged terminal keeps its shell and its scrollback".
+- "panel terminal: contained at every width, and in a split group" and "panel
+  terminal: the rendered screen fits its container at every height" — the F4
+  arithmetic depends on the container's real size, which is what the layer now
+  supplies.
+- "panel groups: a split at the minimum width scrolls rather than shrinking"
+  (F6): the panel scrolls when the tree cannot fit, so a slot's rectangle moves
+  with the scroll and a host must follow it.
+- "panel drag: a tab dropped on another group's centre moves into it", "panel
+  drag: a tab dragged along its own strip is reordered", and "panel keyboard: a
+  chord splits, moves a tab, and says when it cannot split".
+- "panel drag: the ghost follows the pointer in viewport coordinates" (G2) — the
+  new layer must not become the ghost's containing block.
+
+**Milestone 8 verification.** jsdom computes no layout, so the substance of this
+milestone is invisible to the unit suite by construction and the evidence is end
+to end, in `e2e/workspace-panel.spec.ts`:
+
+- each visible host's client rectangle equals its group's `.panel-bodies`
+  rectangle, within a pixel — at rest, after a divider drag, after an
+  edge-split, after a sibling promotion, after a panel resize, at the panel's
+  minimum width, and after the panel is closed and reopened;
+- a terminal tab dragged into another group keeps the **same** `WebSocket`
+  (asserted as today, by counting sockets) **and** its rendered screen still
+  fits its new group, which is the pairing the move-based strategy could satisfy
+  only because it moved the real box;
+- a file body scrolled, hidden by a tab switch, and shown again keeps its
+  offset, and the same after a drop into another group — the two existing cases,
+  now with no restore code behind them;
+- the drag ghost's client rectangle still tracks the pointer in viewport
+  coordinates and is still not parented inside the panel;
+- **a bounded-measurement case for WSP-09**: instrument
+  `Element.prototype.getBoundingClientRect`, drag a divider from one edge to the
+  other in forty steps, and assert the call count does not grow with the number
+  of pointer moves — the same claim the drag path makes by measuring once at
+  pick-up, made from the resize side.
+
+Unit-side, `PanelBodies.test.tsx` keeps the socket and mount-count cases,
+loses the record-and-restore case, and gains one asserting that a host's parent
+node is the layer and is **unchanged** across a split, a promotion, and a move
+between groups — the jsdom-visible half of "nothing is ever detached".
+
+Then the **standing hands-on UI pass**: with a terminal, a file, and a diff open
+across two groups, drag each between groups, drag the divider, resize the panel,
+close and reopen it, and confirm every body sits exactly over its group with
+nothing clipped, no terminal reconnecting, and no scroll position lost. Milestone
+9's own pass adds the case this milestone exists for — a Browser tab dragged
+between groups does not reload — because it needs the tab to exist first.
+
+### Milestone 9 — Browser tab, probe endpoint, CSP, and sandboxing
+
+**Blocking prerequisite: milestone 8 must land first.** A Browser tab cannot use
+the body-**moving** strategy milestone 3 shipped. `PanelBodies.tsx` gives every
+tab a host element that is created once and _moved_ into whichever group owns
+the tab, because moving a DOM node re-runs no effect and so keeps a terminal's
+socket alive. That guarantee does not extend to an `iframe`: removing an
+`iframe` from the document discards its nested browsing context, so reparenting
+one reloads the page, losing its navigation history, scroll position, and any
+form state. The behaviour is specified, not a browser quirk, and no amount of
+care in the move makes it survivable. The same applies to media elements'
+playback state. That is why milestone 8 exists, and it is why the explanation
+stays here: without it, this milestone reads as an arbitrary ordering.
 
 The consequence is that WSP-03's "a moved tab keeps its process, scroll
 position, and state" and WSP-08's restorable address cannot both hold for a
-Browser tab under the current strategy. Resolve it in this milestone, before
-building the tab, by one of:
-
-- **Position hosts instead of reparenting them.** Keep every host in one
-  absolutely-positioned layer owned by the panel and place each over its
-  group's slot rectangle, so no host is ever removed from the document. This
-  fixes the general case, retires the scroll save/restore workaround
-  `PanelBodies` currently needs, and costs rectangle tracking on resize and
-  on layout change.
-- **Accept the reload for Browser tabs only**, and say so in the product:
-  a moved Browser tab reloads. This is cheap and honest but it makes one tab
-  type behave unlike every other, which is the kind of inconsistency WSP-02
-  exists to avoid.
-
-Choose deliberately and record the choice in the decision log. Do not discover
-this while implementing the tab.
+Browser tab while hosts are relocated. **Resolved on 2026-08-23 by the user**
+(see the decision log): hosts are positioned rather than relocated, in milestone 8. The alternative — **accepting a reload for Browser tabs only** and saying so
+in the product — was **rejected**: it is cheap and honest, but it makes one tab
+type behave unlike every other, which is the kind of inconsistency WSP-02 exists
+to avoid, and it would have left the scroll save/restore workaround in place.
+This milestone therefore starts from a panel in which no host is ever detached,
+and its e2e coverage adds the case that proves it: a Browser tab dragged into
+another group keeps its page — same document, unchanged history position and
+scroll offset — rather than reloading.
 
 **`apps/server/src/browser/probe.ts`.** `POST /api/browser/probe` takes
 `{ url: string }`. The URL is parsed with `new URL()` and its protocol must be
@@ -1007,7 +1220,7 @@ responses stay: they govern who may frame **us**, which this change must not
 relax. Development has no CSP, so the tab works there either way; the header
 test guards the production path.
 
-**Milestone 8 verification:** `probe.test.ts` against a local fixture server for
+**Milestone 9 verification:** `probe.test.ts` against a local fixture server for
 the scheme allowlist, a redirect chain of exactly three and of four, a
 non-responding host inside and outside the deadline, `X-Frame-Options: DENY` /
 `SAMEORIGIN` / absent, a `frame-ancestors` directive, a `HEAD`-refusing server,
@@ -1022,6 +1235,10 @@ state rather than a blank frame. Same-origin refusal is tested
 at both ends: the route rejects a self-origin URL with `same_origin_refused`
 before issuing any request, and the tab renders its named state without ever
 mounting an `iframe`, for a typed address and for one restored from storage.
+Added with the milestone-8 decision: an e2e case that drags a Browser tab
+showing a local page into another group and asserts the page **did not reload** —
+same document, unchanged history position and scroll offset — which is the
+guarantee milestone 8 was built to make available here.
 
 ## Untrusted-data-boundary analysis
 
@@ -1121,6 +1338,10 @@ Runtime and manual checks that no unit test covers:
 - open a file with a 2,000-character line in a narrow panel and confirm the end
   of the line is reachable;
 
+- with a terminal, a file, and a diff open across two groups, drag each between
+  groups, drag the divider, resize the panel, and close and reopen it, and
+  confirm every body sits exactly over its group with nothing clipped, no
+  terminal reconnecting, and no scroll position lost (milestone 8);
 - open a `Diff` tab against thread A and a `Terminal` tab against thread B in
   one group, focus a third chat pane, and confirm both tabs still read their own
   worktrees and both show a worktree chip;
@@ -1158,9 +1379,11 @@ holds no unsaved content.
 
 **Deployment.** Milestones ship in order. Milestone 2 is the user-visible
 switch; the milestones after it add capability to a working panel and can each
-stop at any point without leaving a broken surface. Milestones 4, 7, and 8 are
+stop at any point without leaving a broken surface. Milestones 4, 7, and 9 are
 the only ones touching the server and can be deployed independently of each
-other. Milestone 4's server change is additive — a new query parameter and a
+other. Milestone 8 is browser-only and changes no contract, persisted record, or
+route: it changes how a tab body is placed in the document and nothing a user
+can name. Milestone 4's server change is additive — a new query parameter and a
 filter — so a browser built before it still receives the listing it expects,
 and a browser built after it degrades to the full recursive listing if the
 parameter is ignored.
@@ -1185,7 +1408,10 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 - [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
       verification, close-control question confirmed
 - [x] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
-      search. Shipped 2026-08-23: `apps/server/src/inspector/ignoreRules.ts`
+      search. Implemented on the coordinator's instruction ahead of the recorded
+      approval of specification version 2; that approval was given by the user
+      on 2026-08-23 and the gate is now satisfied (see Discoveries and
+      blockers). Shipped 2026-08-23: `apps/server/src/inspector/ignoreRules.ts`
       and its 36 cases, the `depth`/`showIgnored` query parameters and
       `ignoredHidden` response field, `apps/web/src/features/panel/FileTree.tsx`
       and its 22 cases, panel record version 3, and five end-to-end specs
@@ -1196,7 +1422,9 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       fixed
 - [ ] Milestone 6 — Diff tab, structured unified diff
 - [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
-- [ ] Milestone 8 — browser tab, probe endpoint, CSP, sandbox
+- [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
+      workaround retired
+- [ ] Milestone 9 — browser tab, probe endpoint, CSP, sandbox
 - [ ] Documentation — designs and architecture updated, CWS-06 supersession
       recorded
 
@@ -1683,11 +1911,76 @@ the pointer has left — is silent and unrecoverable by the user. A synthetic
 release far from the last move is exactly what an assistive or automation
 tool produces, so "no real pointer does this" is not the whole population.
 
-- No blockers. Milestone 4 is **gated**, not blocked: it waits on product
-  approval of specification version 2, which is a normal lifecycle step rather
-  than an obstacle.
+**2026-08-23 — milestone 4 was implemented before its approval was recorded, and
+the approval has since been given.** The order events actually happened in,
+recorded rather than tidied away, because this plan's own Discoveries section is
+the record of how this work went:
+
+1. On 2026-08-22 the coordinator reported the hands-on pass's findings to the
+   user — the Files tab flooded by `node_modules` and flat where it should be
+   hierarchical — and the user answered "however you think is best to fix all of
+   these issues, put it into the plan of fixes".
+2. Specification version 2 and milestone 4 were drafted from that instruction,
+   and the milestone was **implemented and shipped on 2026-08-23** on the
+   coordinator's instruction, while this plan still said milestone 4 must not
+   start production work until specification version 2 was approved and the
+   specification still recorded that approval as pending. The gate was crossed
+   before it was recorded as open.
+3. On 2026-08-23 the coordinator put that discrepancy to the user explicitly —
+   that they had approved the **behaviour** described in session and not the
+   document — and the user confirmed the approval stands as intended. The gate
+   is now satisfied, under the same qualification version 1 carries: a
+   discrepancy between the specification document and that discussion resolves
+   in favour of the discussion and returns the proposal to Draft.
+
+The durable lesson is the one the ExecPlan lifecycle already states: an approval
+gate is satisfied by a recorded approval, not by a well-founded expectation of
+one. Nothing implemented is being undone by this entry — the approved behaviour
+and the built behaviour are the same behaviour — but the sequence is not erased,
+because the next reader is entitled to know that the document trailed the work.
+
+- No blockers. Milestone 4's gate is **satisfied** as of 2026-08-23; it was
+  never blocked, only waiting on a normal lifecycle step.
 
 ## Decision and revision log
+
+- 2026-08-23: **Tab body hosts are positioned over their group's rectangle, not
+  relocated into it.** Decided by the user, from the two options milestone 9's
+  blocking prerequisite put to them. Every host stays in one layer that is never
+  detached, and each is placed over the rectangle of its owning group's
+  `.panel-bodies` slot; nothing is ever removed from the document, so a browser
+  tab, a terminal, a media element, and a scroll offset all survive a drag by
+  the same mechanism, and the scroll save/restore workaround in `PanelBodies` is
+  retired rather than re-fixed — it has already produced one regression (G1).
+  The cost is rectangle tracking on resize and on layout change, which stays
+  inside WSP-09 by reading in a `ResizeObserver` callback, after the browser has
+  laid out, rather than in a pointer handler.
+
+  **Rejected: accepting a reload for Browser tabs only**, and saying so in the
+  product. It is cheap and it is honest, and it was rejected because it makes
+  one tab type behave unlike every other — the inconsistency WSP-02 exists to
+  avoid — for a limitation that is fixable, and because it would have left the
+  scroll workaround in place as a permanent second mechanism. The reason a
+  relocated `iframe` cannot survive is unchanged and is kept in milestone 9:
+  removing an `iframe` from the document discards its nested browsing context,
+  which is specified HTML behaviour rather than a browser quirk.
+
+  This lands as **milestone 8**, before the browser tab, which becomes milestone 9. It is added inside plan version 2 rather than opening a version 3: version
+  2 is Draft with technical approval pending, so no granted approval is
+  invalidated and there is nothing to re-approve separately — the pending
+  approval now covers this milestone too, and the Technical approval field says
+  so.
+
+- 2026-08-23: **Specification version 2 is approved, and milestone 4's gate is
+  satisfied.** Approved by the user on 2026-08-23, under version 1's
+  qualification: the approval is of the behaviour as described in session — the
+  2026-08-22 report and the instruction that followed it — not of a reading of
+  the specification document, and a discrepancy between document and discussion
+  resolves in favour of the discussion, returns the proposal to Draft, and
+  invalidates the approval of the milestone that implements it. Recorded here
+  with the fact that the milestone was implemented before the approval was
+  recorded, on the coordinator's instruction; the sequence is in Discoveries and
+  blockers and is deliberately not erased.
 
 - 2026-08-23 (milestone 4): **A directory's children are ordered directories
   first, then files, each case-insensitively by name, with a case-sensitive

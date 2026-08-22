@@ -4,25 +4,35 @@
 
 **Proposed version:** 2
 
-**Proposal status:** Draft
+**Proposal status:** Approved
 
 **Implementation status:** In progress
 
-**Product approval:** Pending for specification version 2 — the bounded Files-tab
-revision below (navigable tree, ignore rules honoured by default, flat search,
-accessible naming), drafted 2026-08-22 after a hands-on pass at a real
-repository. **Specification version 1 remains approved** (user, 2026-08-22, from
-the design as presented in session, which the user approved and directed to
-implementation; the user has not yet read this document itself, so a discrepancy
-between it and that discussion resolves in favour of the discussion and returns
-that proposal to Draft), and its implementation continues. Version 2 adds
-behaviour to WSP-05 alone and reopens no other requirement.
+**Product approval:** Approved for specification version 2 — the bounded
+Files-tab revision below (navigable tree, ignore rules honoured by default, flat
+search, accessible naming), drafted 2026-08-22 after a hands-on pass at a real
+repository — by the user on 2026-08-23. The approval is of **the behaviour as
+described in session**: on 2026-08-22 the user was told that the pass had found
+the Files tab flooded by `node_modules` and flat where it should be
+hierarchical, and answered "however you think is best to fix all of these
+issues, put it into the plan of fixes", from which this revision was drafted and
+implemented; on 2026-08-23 the discrepancy was put to the user explicitly — that
+they had approved the behaviour in session and not this document — and the user
+confirmed that the approval stands as intended. As for version 1, a discrepancy
+between this document and that discussion resolves in favour of the discussion
+and returns this proposal to Draft. **Specification version 1 remains approved**
+(user, 2026-08-22, from the design as presented in session, which the user
+approved and directed to implementation; the user has not yet read this document
+itself, so a discrepancy between it and that discussion resolves in favour of
+the discussion and returns that proposal to Draft), and its implementation
+continues. Version 2 adds behaviour to WSP-05 alone and reopens no other
+requirement.
 
 **Subsystem:** Browser workspace composition — the right-hand workspace surface,
 its tabs, its internal tiling, and the file, diff, terminal, and browser views it
 hosts
 
-**Last verified:** 2026-08-22
+**Last verified:** 2026-08-23
 
 **Related ExecPlans:** [Workspace panel implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)
 
@@ -346,7 +356,10 @@ by colour alone.
 
 ## Proposed revision (version 2) — the Files tab is a navigable, ignore-aware tree
 
-**Proposal status:** Draft; product approval pending.
+**Proposal status:** Approved by the user on 2026-08-23, from the behaviour as
+described in session rather than from a reading of this document; a discrepancy
+between the two resolves in favour of the discussion and returns this proposal
+to Draft. See the Product approval field above for the sequence.
 
 **Scope.** This revision replaces the Files-tab listing behavior of
 [WSP-05](#wsp-05--files-and-file-tabs) and adds acceptance criteria 11 through 14. Every other requirement of version 1 — WSP-01 through WSP-04 and WSP-06
@@ -579,7 +592,9 @@ None. The four questions raised during drafting were resolved with the user on
 - Diff and preview fidelity → **structured unified diff** (WSP-06) and
   **lazy-loaded syntax highlighting** (WSP-05).
 
-Proposed version 2 raises no new product question. It awaits product approval,
-not a decision: the behavior it specifies was chosen from what the hands-on pass
-showed, and the one judgement inside it — flat results while a search is active,
-a tree otherwise — is stated in the requirement rather than left open.
+Proposed version 2 raises no new product question. It was never a decision
+awaiting an answer: the behavior it specifies was chosen from what the hands-on
+pass showed, and the one judgement inside it — flat results while a search is
+active, a tree otherwise — is stated in the requirement rather than left open.
+It was approved by the user on 2026-08-23, as the Product approval field
+records.

@@ -13,7 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Workspace panel](workspace-panel.md)                             | None            | 2                | Draft    | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
+| [Workspace panel](workspace-panel.md)                             | None            | 2                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -63,10 +63,13 @@ other requirements are unaffected. Implementation is in progress under the
 linked plan and the proposal becomes Current only after the behavior is
 implemented and verified.
 
-Workspace panel version 2 is a Draft proposal with product approval pending. It
-is bounded to WSP-05: after a 2026-08-22 hands-on pass at a real repository
-found the Files tab flooded by `node_modules` and presented as a flat list of
-root-relative paths, version 2 requires a navigable tree with persisted
+Workspace panel version 2 is an Approved proposal, approved by the user on
+2026-08-23 from the behaviour as described in session rather than from a reading
+of the document; as for version 1, a discrepancy between the document and that
+discussion resolves in favour of the discussion and returns the proposal to
+Draft. It is bounded to WSP-05: after a 2026-08-22 hands-on pass at a real
+repository found the Files tab flooded by `node_modules` and presented as a flat
+list of root-relative paths, version 2 requires a navigable tree with persisted
 expansion, ignore rules honoured by default in both the listing and the search
 with an explicit opt-in to reveal ignored files, flat results while a search is
 active, and accessible names on every row and every tab. Version 1 stays
