@@ -524,6 +524,8 @@ describe("the Diff tab's colours", () => {
 describe("the Diff tab's line numbers", () => {
   const oldSide = declarationsFor(".diff-lines .diff-line::before");
   const newSide = declarationsFor(".diff-lines .diff-line-body::before");
+  const prefix = declarationsFor(".diff-lines .diff-line-prefix");
+  const cells = declarationsFor(".diff-view .diff-lines");
 
   it("draws both numbers from attributes, not from the line's text", () => {
     // The same mechanism as the File tab's single gutter (J11), and the same
@@ -531,15 +533,101 @@ describe("the Diff tab's line numbers", () => {
     // selection cannot reach it and a copied diff is the diff. Two gutters
     // need two pseudo-elements, which is why the line's text is wrapped in an
     // element of its own.
-    expect(oldSide.content).toBe("attr(data-old)");
-    expect(newSide.content).toBe("attr(data-new)");
+    // The trailing zero-width space is load-bearing and is asserted with
+    // the attribute it follows; see the case below.
+    expect(oldSide.content).toBe('attr(data-old) "\\200b"');
+    expect(newSide.content).toBe('attr(data-new) "\\200b"');
     expect(oldSide["user-select"]).toBe("none");
     expect(newSide["user-select"]).toBe("none");
   });
 
   it("reserves a width the diff's own largest number decides", () => {
-    expect(oldSide.width).toContain("--diff-gutter");
-    expect(newSide.width).toContain("--diff-gutter");
+    // One step of indirection now, because the same widths are also what
+    // `left` pins the next cell at: the cells are named on `.diff-lines` and
+    // every one of them is derived from `--diff-gutter`.
+    expect(oldSide.width).toBe("var(--diff-old-cell)");
+    expect(newSide.width).toBe("var(--diff-new-cell)");
+    expect(cells["--diff-old-cell"]).toContain("--diff-gutter");
+    expect(cells["--diff-new-cell"]).toContain("--diff-gutter");
+    expect(cells["--diff-column"]).toContain("--diff-old-cell");
+  });
+
+  // K1. Measured in Chrome at the panel's 280px floor, on a real Python
+  // diff: `.diff-body` scrollWidth/clientWidth was 757/259 — 498px of scroll
+  // range — with the `+` character at x=50 inside the box. Any scrollLeft
+  // past ~58px, 12% of that range, took the prefix and both gutters off
+  // screen for the remaining 88% and left the add/remove distinction to the
+  // wash alone, which measures 1.04:1 (light) and 1.06:1 (dark) between add
+  // and delete. WSP-06 says that distinction is never carried by colour
+  // alone, and "unless you scroll" is not a clause it has.
+  describe("stay on screen at every scroll offset (K1)", () => {
+    it("pins each of the three cells to its own column", () => {
+      expect(oldSide.position).toBe("sticky");
+      expect(newSide.position).toBe("sticky");
+      expect(prefix.position).toBe("sticky");
+      // Pinned in order, each one at the sum of the widths before it, so the
+      // three of them are one column with no gap and no overlap.
+      expect(oldSide.left).toBe("0");
+      expect(newSide.left).toBe("var(--diff-old-cell)");
+      expect(prefix.left).toBe(
+        "calc(var(--diff-old-cell) + var(--diff-new-cell))",
+      );
+    });
+
+    it("gives every pinned cell an opaque background of the line's own kind", () => {
+      // Without one the scrolled code runs UNDER the numbers and the prefix
+      // and the column becomes unreadable — a worse failure than the one it
+      // is fixing. `--diff-line-bg` is a custom property, so it inherits from
+      // the line into both pseudo-elements and the prefix span.
+      for (const cell of [oldSide, newSide, prefix])
+        expect(cell.background).toBe("var(--diff-line-bg)");
+      expect(declarationsFor(".diff-lines .diff-line")["--diff-line-bg"]).toBe(
+        "var(--hover)",
+      );
+      expect(declarationsFor(".diff-add")["--diff-line-bg"]).toBe(
+        "var(--diff-add-bg)",
+      );
+      expect(declarationsFor(".diff-delete")["--diff-line-bg"]).toBe(
+        "var(--diff-delete-bg)",
+      );
+    });
+
+    it("never lets a gutter's generated content be empty", () => {
+      // Measured, and the one thing about K1 that is not obvious from the
+      // rules: `position: sticky` did NOT apply to a `::before` whose
+      // `content` resolved to the empty string, even with an explicit width
+      // and a background. An added line has no old-side number and a deleted
+      // line no new-side one, so on every changed line one of the two cells
+      // was empty — and it was the changed lines the whole fix is for. With
+      // `content: "9" attr(data-old)` it pinned; with `attr(data-old)` alone
+      // it stayed at its scrolled-away flow position and the code was
+      // painted over its column. The zero-width space costs no width, is
+      // generated content and so cannot be copied, and makes the box
+      // non-empty for every line.
+      expect(oldSide.content).toContain('"\\200b"');
+      expect(newSide.content).toContain('"\\200b"');
+    });
+
+    it("spends the row's left inset inside the pinned cell, not on the `pre`", () => {
+      // A padding on the `pre` scrolls away with the content, so the pinned
+      // column would jump left by it — 12.8px, measured — the moment the
+      // body moved. The rows are full-bleed and the inset is inside the
+      // old-side cell, which is pinned and therefore does not move.
+      expect(declarationsFor(".diff-view .diff-lines").padding).toBe(
+        "0.3rem 0",
+      );
+      expect(oldSide.padding).toContain("0.7rem");
+    });
+
+    it("keeps the prefix a real character rather than generated content", () => {
+      // The numbers are `::before` content precisely so a copy cannot reach
+      // them. The prefix is the opposite case: it is patch content, a copy
+      // MUST carry it, so it is a text node in a box rather than a box that
+      // draws it. What this asserts is that nobody "fixed" the prefix the
+      // way the gutters were fixed.
+      expect(prefix.content).toBeUndefined();
+      expect(prefix["user-select"]).toBeUndefined();
+    });
   });
 });
 

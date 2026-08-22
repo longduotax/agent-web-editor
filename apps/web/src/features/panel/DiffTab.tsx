@@ -303,7 +303,8 @@ function HunkView({
 }
 
 /**
- * One diff line, with its two numbers drawn beside it and in neither of them.
+ * One diff line: two numbers, a prefix, and the code — in four boxes, three
+ * of which the stylesheet pins to the left edge.
  *
  * The numbers are NOT in the document's text. `data-old` and `data-new` are
  * attributes, and the stylesheet draws them through `content: attr(…)` on a
@@ -314,6 +315,17 @@ function HunkView({
  * gutters need two pseudo-elements, so the line's text is wrapped in an
  * element of its own and carries the new-side number.
  *
+ * The prefix character is the opposite case and the reason it now has a box
+ * (K1). WSP-06 says the add/remove distinction is never carried by colour
+ * alone, and a horizontal scroll used to make it exactly that: the gutters
+ * and the prefix were ordinary in-flow content, so at any `scrollLeft` past
+ * a few dozen pixels all three were off screen and only the wash was left —
+ * 1.04:1 between add and delete in light, 1.06:1 in dark. The stylesheet
+ * pins all three with `position: sticky`, which needs the prefix to be a box
+ * of its own. It stays a REAL text node inside that box, because a prefix is
+ * patch content and a copy has to carry it; drawing it the way the numbers
+ * are drawn would silently make every copied diff unapplyable.
+ *
  * The trailing newline is a real character and stays one, which is why these
  * are inline elements rather than blocks: a block would add a break of its
  * own and double every line, and its background would then be the only thing
@@ -323,7 +335,10 @@ function Line({ line, last }: { line: DiffLine; last: boolean }): JSX.Element {
   return (
     <span className={`diff-line diff-${line.kind}`} data-old={number(line.old)}>
       <span className="diff-line-body" data-new={number(line.new)}>
-        {line.text}
+        {/* Split for layout only: the two spans concatenate back to the
+            line Git wrote, so `textContent` and a selection are unchanged. */}
+        <span className="diff-line-prefix">{line.text.slice(0, 1)}</span>
+        <span className="diff-line-text">{line.text.slice(1)}</span>
       </span>
       {last ? null : "\n"}
     </span>

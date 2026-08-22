@@ -261,9 +261,12 @@ test.beforeAll(async () => {
     "first\nsecond\nthird\n",
     "utf8",
   );
+  // Long on BOTH sides, so the diff has a wide `-` line as well as a wide
+  // `+` one: the two gutters are empty on opposite lines, and K1 has to pin
+  // an empty cell as reliably as a numbered one.
   await writeFile(
     join(projectPath, "wide-diff.json"),
-    '[\n  {"note":"short"}\n]\n',
+    `[\n  {"note":"${"unreachable-without-horizontal-scrolling-".repeat(24)}"}\n]\n`,
     "utf8",
   );
   await writeFile(
@@ -2797,8 +2800,11 @@ function changeRow(page: Page, path: string) {
  * pseudo-elements.
  */
 function diffLineNumbers() {
+  // The trailing zero-width space is what keeps an EMPTY gutter a box the
+  // browser will pin (K1); it is not part of the number, so it comes off
+  // here along with the quotes the serialisation adds.
   const unquote = (value: string) =>
-    value === "none" ? "" : value.replace(/^"|"$/g, "");
+    value === "none" ? "" : value.replace(/^"|"$/g, "").replace(/\u200b/g, "");
   return [
     ...document.querySelectorAll(
       '[role="tabpanel"]:not([hidden]) .diff-lines .diff-line',
@@ -2853,6 +2859,59 @@ function diffGeometry() {
     viewBottom: bodyRect.y + bodyRect.height,
     bodyOverflowX: body.scrollWidth - body.clientWidth,
     bodyOverflowY: body.scrollHeight - body.clientHeight,
+  };
+}
+
+/**
+ * The pinned first column at one horizontal scroll offset (K1).
+ *
+ * Reported by hit-testing rather than by reading a rule, because what WSP-06
+ * requires is that the prefix and the numbers are ON SCREEN, and a
+ * `position: sticky` that a containing block quietly defeats computes
+ * exactly the same as one that works. `elementFromPoint` answers with the
+ * element that is actually painted at a point: `.diff-line` for the old
+ * gutter's `::before`, `.diff-line-body` for the new side's, and
+ * `.diff-line-prefix` for the prefix itself — and, if the pinning failed,
+ * `.diff-line-text`, which is the scrolled code that would have taken their
+ * place.
+ */
+function diffPinnedColumn(request: { scrollLeft: number; kind: string }) {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (scroller === null) return null;
+  scroller.scrollLeft = request.scrollLeft;
+  const line = document.querySelector(
+    `[role="tabpanel"]:not([hidden]) .diff-lines .diff-${request.kind}`,
+  );
+  const prefix = line?.querySelector(".diff-line-prefix") ?? null;
+  if (line === null || prefix === null) return null;
+  const box = scroller.getBoundingClientRect();
+  const rect = prefix.getBoundingClientRect();
+  const y = rect.y + rect.height / 2;
+  // Sampled across the column rather than at three guessed offsets: the
+  // cells are `ch`-sized from the diff's own largest number, so where each
+  // one ends is not a constant this file can know. The panel's own resize
+  // separator overlays the first few pixels of everything in the panel and
+  // is dropped by the caller.
+  const scan: string[] = [];
+  for (let x = box.x + 1; x < rect.x + rect.width; x += 1) {
+    const hit = document.elementFromPoint(x, y);
+    const name = hit === null ? "(nothing)" : hit.className;
+    if (scan[scan.length - 1] !== name) scan.push(name);
+  }
+  return {
+    scrollLeft: scroller.scrollLeft,
+    range: scroller.scrollWidth - scroller.clientWidth,
+    boxLeft: box.x,
+    boxRight: box.x + box.width,
+    prefixLeft: rect.x,
+    prefixRight: rect.x + rect.width,
+    prefixText: prefix.textContent,
+    scan,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
   };
 }
 
@@ -3048,5 +3107,108 @@ test("panel diff: a long diff line's scrollbar is on screen at every panel width
     // And the overflow stays contained: the panel never scrolls sideways.
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
     expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
+  }
+});
+
+/**
+ * What is not one of the diff's own cells.
+ *
+ * The panel's resize separator sits over the first pixels of everything in
+ * the panel, and the `pre` itself shows through a sub-pixel sliver at its own
+ * left edge, because the scroller's rectangle starts on a fraction. Neither
+ * is the scrolled code, which is the thing this scan exists to rule out.
+ */
+function notTheDiffsOwnEdge(name: string): boolean {
+  return !name.includes("panel-resizer") && !/^diff-lines\b/.test(name);
+}
+
+test("panel diff: the prefix and both gutters stay on screen at any scroll offset", async ({
+  page,
+}) => {
+  // K1, and the reason it was fixed before anything else on this pass.
+  // WSP-06 says the add/remove distinction is never carried by colour alone.
+  // The `+`/`-` prefix and both line-number gutters were ordinary in-flow
+  // content, so scrolling a diff sideways carried all three off the left
+  // edge and left only the background wash — measured at 1.04:1 between add
+  // and delete in light and 1.06:1 in dark, which is no distinction at all.
+  // At the 280px floor, on a real Python diff, `.diff-body` had 498px of
+  // scroll range and the `+` sat at x=50: 12% of the range hid the meaning
+  // for the other 88%, on the ordinary reading path rather than in a corner.
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    // Both kinds, because each has ONE empty gutter and they are opposite
+    // ones: an added line has no old-side number, a deleted line no new-side
+    // one. An empty cell is the case that has to be pinned as reliably as a
+    // numbered one, and the one that was not.
+    for (const kind of ["add", "delete"] as const) {
+      const atRest = await page.evaluate(diffPinnedColumn, {
+        scrollLeft: 0,
+        kind,
+      });
+      expect(atRest).not.toBeNull();
+      if (atRest === null) return;
+      // There genuinely is somewhere to scroll to, or this proves nothing.
+      expect(atRest.range).toBeGreaterThan(0);
+
+      // Far past the point the old rendering lost the column, and past the
+      // end of the range so the browser clamps to the far edge.
+      const scrolled = await page.evaluate(diffPinnedColumn, {
+        scrollLeft: 100_000,
+        kind,
+      });
+      expect(scrolled).not.toBeNull();
+      if (scrolled === null) return;
+      expect(scrolled.scrollLeft).toBe(atRest.range);
+      // The column does not merely stay on screen, it does not MOVE: the
+      // row's left inset lives inside the pinned cell rather than on the
+      // `pre`, whose padding would have scrolled away under it.
+      expect(`${width} ${kind} ${String(scrolled.prefixLeft)}`).toBe(
+        `${width} ${kind} ${String(atRest.prefixLeft)}`,
+      );
+
+      for (const [offset, column] of [
+        ["at rest", atRest],
+        ["scrolled to the far end", scrolled],
+      ] as const) {
+        const where = `${width}, ${kind}, ${offset}`;
+        // The prefix is a real character in a box of its own, and the box is
+        // inside the visible width of the body at both offsets.
+        expect(`${where} ${String(column.prefixText)}`).toBe(
+          `${where} ${kind === "add" ? "+" : "-"}`,
+        );
+        expect(
+          `${where} left ${String(column.prefixLeft >= column.boxLeft)}`,
+        ).toBe(`${where} left true`);
+        expect(
+          `${where} right ${String(column.prefixRight <= column.boxRight + 1)}`,
+        ).toBe(`${where} right true`);
+        // And all three cells are what is actually PAINTED across that
+        // width, in order — not the code that would have scrolled over them.
+        // The old gutter is a `::before`, so it answers as its originating
+        // `.diff-line` and the new side as its `.diff-line-body`.
+        expect(
+          `${where} ${column.scan.filter(notTheDiffsOwnEdge).join(" | ")}`,
+        ).toBe(
+          `${where} diff-line diff-${kind} | diff-line-body | diff-line-prefix`,
+        );
+        // Pinning a column must not push the page itself sideways.
+        expect(`${where} page ${String(column.pageOverflowX <= 0)}`).toBe(
+          `${where} page true`,
+        );
+      }
+    }
   }
 });

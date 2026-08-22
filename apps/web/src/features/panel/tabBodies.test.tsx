@@ -561,6 +561,38 @@ describe("DiffTab", () => {
     );
   });
 
+  it("gives the +/- prefix an element of its own so it can be pinned (K1)", async () => {
+    // WSP-06 says the add/remove distinction is never carried by colour
+    // alone, and a sideways scroll used to do exactly that: the prefix and
+    // both gutters scrolled out of view and left only a wash whose add/
+    // delete pair measures 1.04:1 in light and 1.06:1 in dark. Pinning them
+    // needs the prefix to be a box, and it has to be a REAL text node rather
+    // than generated content, because the prefix is patch content a copy has
+    // to carry (unlike the numbers, which it must not).
+    api.getDiff.mockResolvedValue(diffOf());
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    const split = [...container.querySelectorAll(".diff-line")].map((line) => [
+      line.querySelector(".diff-line-prefix")?.textContent,
+      line.querySelector(".diff-line-text")?.textContent,
+    ]);
+    expect(split).toEqual([
+      [" ", "one"],
+      ["-", "two"],
+      ["+", "TWO"],
+      [" ", "twenty"],
+      ["+", "twenty and a half"],
+    ]);
+    // The split is presentational only: the text a selection sees is the
+    // patch line, character for character, prefix included.
+    expect(container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
+  });
+
   it("collapses a hunk into the tab's own record, and reopens it from there", async () => {
     const user = userEvent.setup();
     api.getDiff.mockResolvedValue(diffOf());

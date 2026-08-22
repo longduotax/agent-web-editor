@@ -2325,13 +2325,38 @@ a:focus-visible {
 .diff-hunk-tally {
   flex: none;
 }
-/* The lines themselves. The `pre` carries the padding so a line's own tinted
-   background begins where its gutters do. */
-.diff-lines,
-.diff-raw {
+/* The lines themselves.
+   `.diff-raw` keeps its horizontal padding; `.diff-lines` spends its own on
+   the first pinned cell instead, because a padding on the `pre` scrolls away
+   with the content and would leave the pinned column jumping left by that
+   padding the moment the body was scrolled — measured at 12.8px, and
+   perfectly visible. The rows are therefore full-bleed and the inset lives
+   inside the old-side gutter, which is pinned and therefore does not move.
+
+   Both selectors name `.diff-view` because `.markdown pre, .activity pre,
+   .diff-view pre, .file-preview pre` above sets `padding: 0.8rem`, and a
+   lone `.diff-lines` loses to it on specificity however far down the file it
+   sits. The 0.3rem/0.7rem written here before K1 never applied at all. */
+.diff-view .diff-raw {
   padding: 0.3rem 0.7rem;
   border: 0;
   border-radius: 0;
+}
+.diff-view .diff-lines {
+  padding: 0.3rem 0;
+  border: 0;
+  border-radius: 0;
+  /* The pinned column, cell by cell (K1). Named here rather than repeated,
+     because each cell's `left` is the sum of the widths before it and the
+     wrapped-text rule below needs the total. Every one of them is derived
+     from `--diff-gutter`, which `DiffTab` sets from the largest number the
+     diff actually paints. */
+  --diff-old-cell: calc(var(--diff-gutter, 4ch) + 1ch + 0.7rem);
+  --diff-new-cell: calc(var(--diff-gutter, 4ch) + 1ch);
+  --diff-prefix-cell: 1.5ch;
+  --diff-column: calc(
+    var(--diff-old-cell) + var(--diff-new-cell) + var(--diff-prefix-cell)
+  );
 }
 /* Diff colouring, from tokens with measured contrast rather than from the
    status palette: those hues are chosen against the page's white, not
@@ -2339,13 +2364,21 @@ a:focus-visible {
    fail AA (J2). `styles.test.ts` computes every pair below. The `+`/`-`
    prefix characters stay in the text either way: colour is never the only
    carrier of the distinction (WSP-06). */
+.diff-lines .diff-line {
+  /* What the pinned cells paint themselves with. A custom property because
+     it has to reach a `::before` two elements down, which `background:
+     inherit` cannot do; it is redeclared by each kind below. */
+  --diff-line-bg: var(--hover);
+}
 .diff-add {
   color: var(--diff-add-fg);
   background: var(--diff-add-bg);
+  --diff-line-bg: var(--diff-add-bg);
 }
 .diff-delete {
   color: var(--diff-delete-fg);
   background: var(--diff-delete-bg);
+  --diff-line-bg: var(--diff-delete-bg);
 }
 .diff-note {
   color: var(--muted-body);
@@ -2356,26 +2389,62 @@ a:focus-visible {
    diff yields the diff and not a column of numbers. Two gutters need two
    pseudo-elements, so the old side is drawn on the line and the new side on
    the element wrapping its text. The width comes from the largest number
-   actually painted, which `DiffTab` sets as an inline custom property. */
+   actually painted, which `DiffTab` sets as an inline custom property.
+
+   K1: all three of them are PINNED. WSP-06 says the add/remove distinction
+   is never carried by colour alone, and these were ordinary in-flow content,
+   so a horizontal scroll carried them off the left edge and left only the
+   wash — which measures 1.04:1 between add and delete in light and 1.06:1 in
+   dark, i.e. nothing. Measured at the 280px floor on a real Python diff, the
+   body had 498px of scroll range and the `+` sat at x=50: 12% of the range
+   hid the whole distinction for the other 88%. `position: sticky` inside
+   `.diff-body` keeps them on screen at any offset, and each carries the
+   line's own background so the scrolled code passes UNDER them rather than
+   through them. */
 .diff-lines .diff-line::before {
-  content: attr(data-old);
+  content: attr(data-old) "\200b";
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
   display: inline-block;
-  width: var(--diff-gutter, 4ch);
-  margin-right: 1ch;
+  width: var(--diff-old-cell);
+  padding: 0 1ch 0 0.7rem;
+  background: var(--diff-line-bg);
   color: var(--diff-gutter-colour);
   text-align: right;
   user-select: none;
   -webkit-user-select: none;
 }
 .diff-lines .diff-line-body::before {
-  content: attr(data-new);
+  content: attr(data-new) "\200b";
+  position: sticky;
+  left: var(--diff-old-cell);
+  z-index: 1;
+  box-sizing: border-box;
   display: inline-block;
-  width: var(--diff-gutter, 4ch);
-  margin-right: 1.5ch;
+  width: var(--diff-new-cell);
+  padding-right: 1ch;
+  background: var(--diff-line-bg);
   color: var(--diff-gutter-colour);
   text-align: right;
   user-select: none;
   -webkit-user-select: none;
+}
+/* The `+`, `-`, space or `\` the line begins with — patch content, so it is
+   a real character in a box and NOT generated content: a copy has to carry
+   it, and the numbers beside it must never be carried. `inline-block` for
+   the width, which is what makes the column line up when a prefix is a
+   space. */
+.diff-lines .diff-line-prefix {
+  position: sticky;
+  left: calc(var(--diff-old-cell) + var(--diff-new-cell));
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-prefix-cell);
+  padding-right: 0.5ch;
+  background: var(--diff-line-bg);
 }
 /* The header's counts (WSP-06). Words rather than glyphs, so the sentence a
    screen reader hears is the sentence on screen. */
