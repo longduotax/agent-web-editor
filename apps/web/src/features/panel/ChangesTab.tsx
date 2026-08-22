@@ -1,10 +1,10 @@
 import { memo, type JSX } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { getStatus } from "../../api/client.js";
 import { summarizeChanges } from "../../components/changesSummary.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
-import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
+import { UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
 // The working-tree status of one execution scope (WSP-06). Labelled as the
@@ -25,7 +25,24 @@ export const ChangesTab = memo(function ChangesTab({
       return await getStatus(context.projectId, context.threadId);
     },
     enabled: visible && context !== null,
-    staleTime: PANEL_QUERY_STALE_TIME,
+    // The one tab body that does NOT share the panel's stale window (D5).
+    //
+    // WSP-06 says this list is "the current working-tree state of a named
+    // worktree". Nothing invalidates it: the live channel carries transcript,
+    // run, completion and diagnostic events — none of which says the worktree
+    // changed — and it is only subscribed for threads that have a chat pane
+    // on screen, while this tab may be pointed at any thread. A shell run in
+    // a Terminal tab changes the tree and emits nothing at all. So an
+    // invalidation route would be wrong for most of the ways the tree
+    // actually changes, and a thirty-second window would leave a diff list
+    // claiming to be current while being wrong.
+    //
+    // WSP-09's "no refetch on switch" gives way to that, but only as far as
+    // it has to: `keepPreviousData` holds the list on screen while the
+    // refetch runs, so returning to this tab costs a request, never a blank
+    // panel or a lost scroll position.
+    staleTime: 0,
+    placeholderData: keepPreviousData,
   });
 
   if (context === null) return <UnboundNotice />;

@@ -1,10 +1,10 @@
 import { memo, type JSX } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { getDiff } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { DiffText } from "./DiffText.js";
-import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
+import { UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
 // One path's working-tree diff (WSP-06). This is the ported rendering:
@@ -25,7 +25,11 @@ export const DiffTab = memo(function DiffTab({
       return await getDiff(context.projectId, context.threadId, tab.path);
     },
     enabled: visible && context !== null,
-    staleTime: PANEL_QUERY_STALE_TIME,
+    // Working-tree state, so the same reasoning as ChangesTab applies (D5):
+    // WSP-06 calls this the CURRENT diff of a named worktree, and nothing
+    // invalidates it. Retained content stays on screen while it refetches.
+    staleTime: 0,
+    placeholderData: keepPreviousData,
   });
 
   if (context === null) return <UnboundNotice />;

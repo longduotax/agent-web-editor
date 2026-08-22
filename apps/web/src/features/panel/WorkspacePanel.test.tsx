@@ -401,6 +401,42 @@ describe("WorkspacePanel does only the visible tab's work", () => {
     expect(screen.getByText("src/main.ts")).toBeVisible();
   });
 
+  // D5. WSP-06 calls the Changes list the CURRENT state of a named worktree,
+  // and nothing invalidates it — the live channel carries no worktree signal,
+  // and a shell run in a Terminal tab emits nothing at all. So this body
+  // re-reads on every activation, while the bodies that are not making that
+  // claim keep the panel's stale window.
+  it("re-reads the worktree whenever the Changes tab is shown, without blanking it", async () => {
+    const user = userEvent.setup();
+    stubStorage();
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [{ path: "src/main.ts", kind: "modified" }],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    renderPanel();
+    await openBothTabs(user);
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(1);
+    });
+    expect(api.getStatus).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("tab", { name: "Changes" }));
+
+    // Its previous answer is still on screen while the new one is in flight:
+    // no "Reading the worktree…", no lost scroll position.
+    expect(screen.getByText("src/main.ts")).toBeVisible();
+    expect(screen.queryByText("Reading the worktree…")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.getStatus).toHaveBeenCalledTimes(2);
+    });
+
+    // Files is not making that claim, so it still costs nothing to return to.
+    await user.click(screen.getByRole("tab", { name: "Files" }));
+    expect(api.getFiles).toHaveBeenCalledTimes(1);
+  });
+
   // D2. Every panel chord acts on `focusedGroupId`, and the only thing that
   // wrote it was a pointer press on a tab strip — so a keyboard user who
   // moved focus into another group had their chords act on the group they

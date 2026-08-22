@@ -18,6 +18,11 @@ import type { PanelActions } from "./usePanelState.js";
  * Beyond this window the tab does refetch, but in the background: the
  * retained content stays on screen, so nothing blanks and no scroll position
  * is lost.
+ *
+ * The Files and File bodies use this. The Changes and Diff bodies
+ * deliberately do NOT: they claim to show the CURRENT working tree (WSP-06),
+ * nothing invalidates that claim, and a status list that is thirty seconds
+ * wrong is worse than a request. See ChangesTab for the full reasoning.
  */
 export const PANEL_QUERY_STALE_TIME = 30_000;
 
