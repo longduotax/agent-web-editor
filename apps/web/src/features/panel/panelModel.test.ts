@@ -21,7 +21,7 @@ import {
   splitGroupWithTab,
   updateTab,
 } from "./panelModel.js";
-import type { GroupId, PanelState } from "./panelModel.js";
+import type { GroupId, PanelState, TabPatch } from "./panelModel.js";
 import type { NewPanelTab, TabContext, TabId } from "./panelTabs.js";
 
 const PROJECT = "11111111-1111-1111-1111-111111111111" as ProjectId;
@@ -646,19 +646,29 @@ describe("updateTab", () => {
     expect(tab.terminalId).toBe(terminalId);
   });
 
-  it("binds a migrated tab's context, and can clear one back to null", () => {
+  // A File or Diff tab's path is its identity — WSP-05 opens a *different*
+  // tab for a different file — and a tab's context is fixed when it is
+  // opened (WSP-02). Patching either would let a tab become a duplicate of
+  // one already open, which openTab's dedupe only ever prevented at open
+  // time. Neither key exists on TabPatch; `bindTabContext` is the one route
+  // that may set a context, and it resolves the collision it can create.
+  it("cannot re-target a tab's identity", () => {
+    // @ts-expect-error `path` is not patchable: it is the tab's identity.
+    const repointed: TabPatch = { path: "b.ts" };
+    // @ts-expect-error `context` is bindTabContext's to set, once.
+    const rebound: TabPatch = { context: null };
     const make = ids();
-    let state = openTab(createEmptyPanel(make), changesTab(), make);
+    const state = openTab(createEmptyPanel(make), fileTab("a.md"), make);
     const tabId = tabIdsOf(state, onlyGroupId(state))[0];
     if (tabId === undefined) throw new Error("expected a tab");
 
-    state = updateTab(state, tabId, { context: null });
-    expect(state.tabs[tabId]?.context).toBeNull();
+    const next = updateTab(updateTab(state, tabId, repointed), tabId, rebound);
 
-    const bound = context({ label: "feature" });
-    state = updateTab(state, tabId, { context: bound });
-    expect(state.tabs[tabId]?.context).toEqual(bound);
-    assertPanelInvariants(state);
+    const tab = next.tabs[tabId];
+    if (tab?.type !== "file") throw new Error("expected a file tab");
+    expect(tab.path).toBe("a.md");
+    expect(tab.context).toEqual(context());
+    assertPanelInvariants(next);
   });
 
   it("ignores keys that do not belong to the tab's type", () => {
@@ -757,6 +767,36 @@ describe("panelStateProblems", () => {
       },
     };
     expect(panelStateProblems(broken)).not.toEqual([]);
+  });
+
+  // openTab's dedupe is a contract, not an optimisation (WSP-09), but it was
+  // enforced only at open time: a patch could re-point a File tab at a path
+  // another tab already held, and the result was two tabs rendering the same
+  // content, each re-fetching it. Nothing may produce that state, so the
+  // invariant belongs here rather than in one operation.
+  it("rejects two tabs addressing the same thing", () => {
+    const { state, groupA, tabA } = twoGroups();
+    const tab = state.tabs[tabA];
+    const group = state.groups[groupA];
+    if (tab === undefined || group === undefined)
+      throw new Error("expected a tab and its group");
+    const broken = {
+      ...state,
+      tabs: { ...state.tabs, twin: { ...tab, id: "twin" } },
+      groups: {
+        ...state.groups,
+        [groupA]: { ...group, tabIds: [...group.tabIds, "twin"] },
+      },
+    };
+    expect(panelStateProblems(broken)).not.toEqual([]);
+  });
+
+  it("accepts two terminals of one scope, which are never the same target", () => {
+    const make = ids();
+    let state = openTab(createEmptyPanel(make), terminalTab(), make);
+    state = openTab(state, terminalTab(), make);
+    expect(Object.keys(state.tabs)).toHaveLength(2);
+    expect(panelStateProblems(state)).toEqual([]);
   });
 
   it("rejects a tab that belongs to no group at all", () => {

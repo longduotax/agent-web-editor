@@ -41,14 +41,20 @@ export const PANEL_MAX_WIDTH = 4096;
 
 export type PanelEdge = "top" | "bottom" | "left" | "right";
 
-// Which fields of a tab may be updated after it is opened. Its type never
-// changes — a tab's type is its identity — and neither does its id. Keys
-// that do not belong to the addressed tab's type are ignored, so a caller
-// cannot graft a browser's `url` onto a file tab.
+// Which fields of a tab may be updated after it is opened: its view state,
+// and nothing that says *what* it addresses. Its type never changes, and
+// neither does its id. Keys that do not belong to the addressed tab's type
+// are ignored, so a caller cannot graft a browser's `url` onto a file tab.
+//
+// `path` and `context` are deliberately absent. A File or Diff tab's path is
+// its identity — WSP-05 opens a *different* tab for a different file — and a
+// tab's context is fixed when it is opened (WSP-02). Patching either could
+// point one tab at what another already holds, and openTab's dedupe (a
+// contract, not an optimisation: WSP-09) only ever ran at open time.
+// `bindTabContext` is the one route that may set a context, because it is
+// the one that resolves the collision that creates.
 export interface TabPatch {
-  context?: TabContext | null;
   search?: string;
-  path?: string;
   view?: "preview" | "source";
   collapsedHunks?: string[];
   cwd?: string;
@@ -154,6 +160,26 @@ function targetGroupId(state: PanelState, requested?: GroupId): GroupId | null {
   if (state.focusedGroupId !== null && state.focusedGroupId in state.groups)
     return state.focusedGroupId;
   return leafIds(state.root)[0] ?? null;
+}
+
+// The one route by which a tab's context is set after it is opened; see the
+// note on TabPatch, which deliberately cannot. Spelled out per type for the
+// same reason as `withId`.
+function withContext(tab: PanelTab, context: TabContext): PanelTab {
+  switch (tab.type) {
+    case "changes":
+      return { ...tab, context };
+    case "files":
+      return { ...tab, context };
+    case "file":
+      return { ...tab, context };
+    case "diff":
+      return { ...tab, context };
+    case "terminal":
+      return { ...tab, context };
+    case "browser":
+      return tab; // a browser tab reads no worktree, so it has no context
+  }
 }
 
 function withId(tab: NewPanelTab, id: TabId): PanelTab {
@@ -387,34 +413,25 @@ export function updateTab(
   return { ...state, tabs: { ...state.tabs, [tabId]: next } };
 }
 
-// `context` is applied with an explicit `undefined` check because null is a
-// meaningful value for it: the UI clears a tab's context when the thread it
-// pointed at goes away, and sets one when it binds a migrated tab.
+// `terminalId` is applied with an explicit `undefined` check because null is
+// a meaningful value for it: a terminal whose process has gone is detached
+// by patching it back to null.
 function patchTab(tab: PanelTab, patch: TabPatch): PanelTab {
-  const context = patch.context === undefined ? tab.context : patch.context;
   switch (tab.type) {
     case "changes":
-      return { ...tab, context };
+      return tab; // a Changes tab has no state of its own to patch
     case "files":
-      return { ...tab, context, search: patch.search ?? tab.search };
+      return { ...tab, search: patch.search ?? tab.search };
     case "file":
-      return {
-        ...tab,
-        context,
-        path: patch.path ?? tab.path,
-        view: patch.view ?? tab.view,
-      };
+      return { ...tab, view: patch.view ?? tab.view };
     case "diff":
       return {
         ...tab,
-        context,
-        path: patch.path ?? tab.path,
         collapsedHunks: patch.collapsedHunks ?? tab.collapsedHunks,
       };
     case "terminal":
       return {
         ...tab,
-        context,
         cwd: patch.cwd ?? tab.cwd,
         terminalId:
           patch.terminalId === undefined ? tab.terminalId : patch.terminalId,
@@ -479,6 +496,22 @@ export function panelStateProblems(state: PanelState): string[] {
     if (!owner.has(tabId)) problems.push(`tab ${tabId} belongs to no group`);
   }
 
+  // Opening a tab that addresses something already open reveals the open one
+  // instead of stacking a second on top of it (WSP-09: reaching an
+  // already-open tab must not re-fetch its content or lose its scroll
+  // position). That dedupe used to be enforced at open time only, so it was
+  // a rule about one operation rather than about the panel. It is a rule
+  // about the panel: two tabs rendering the same content, each doing the
+  // same work, is a state nothing may produce. Terminal and browser tabs are
+  // never the same target, so several of either remain sound (WSP-07).
+  const seen: PanelTab[] = [];
+  for (const tab of Object.values(state.tabs)) {
+    const twin = seen.find((other) => sameTarget(other, tab));
+    if (twin !== undefined)
+      problems.push(`tab ${tab.id} and tab ${twin.id} address the same thing`);
+    seen.push(tab);
+  }
+
   if (state.focusedGroupId !== null && !(state.focusedGroupId in state.groups))
     problems.push(`focus points at unknown group ${state.focusedGroupId}`);
 
@@ -507,9 +540,11 @@ export function bindTabContext(
   if (tab === undefined || tab.type === "browser" || tab.context !== null)
     return state;
 
-  const bound = updateTab(state, tabId, { context });
-  const boundTab = bound.tabs[tabId];
-  if (boundTab === undefined) return bound;
+  const boundTab = withContext(tab, context);
+  const bound: PanelState = {
+    ...state,
+    tabs: { ...state.tabs, [tabId]: boundTab },
+  };
   const duplicate = Object.values(bound.tabs).find(
     (other) => other.id !== tabId && sameTarget(other, boundTab),
   );
