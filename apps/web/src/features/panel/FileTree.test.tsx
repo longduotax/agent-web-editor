@@ -22,6 +22,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { ApiClientError, shouldRetryRequest } from "../../api/client.js";
 import { FilesTab } from "./FilesTab.js";
 import type { PanelActions } from "./usePanelState.js";
 import type { PanelTab, TabContext } from "./panelTabs.js";
@@ -75,6 +76,22 @@ function filesTab(overrides: Partial<FilesTabRecord> = {}): FilesTabRecord {
 function renderBody(node: JSX.Element) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>{node}</QueryClientProvider>,
+  );
+}
+
+/**
+ * The tab under the retry policy the application actually runs (H5).
+ *
+ * `retry: false` is a convenience for the other cases here and it is also
+ * exactly what hid the question the hands-on pass asked: whether a failing
+ * listing reaches its error row at all under the shipped policy.
+ */
+function renderBodyWithRetryPolicy(node: JSX.Element) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: shouldRetryRequest } },
   });
   return render(
     <QueryClientProvider client={client}>{node}</QueryClientProvider>,
@@ -272,6 +289,49 @@ describe("FileTree", () => {
       await screen.findByRole("treeitem", { name: "main.ts" }),
     ).toBeVisible();
   });
+
+  // H5, reproduced under the application's own retry policy rather than the
+  // suite's `retry: false`. The pass reported a row that read "Listing ops…"
+  // thirty seconds after the server began answering 500, and never reached
+  // the error row; a failing listing does reach it, in about three seconds.
+  it("reaches the error row under the shipped retry policy", async () => {
+    let attempts = 0;
+    api.getFiles.mockImplementation(
+      (_project: ProjectId, _thread: ThreadId, options: Listing = {}) => {
+        if (options.path === "src") {
+          attempts += 1;
+          return Promise.reject(
+            new ApiClientError(500, "internal_error", "Server fault."),
+          );
+        }
+        return Promise.resolve({
+          entries: (TREE[options.path ?? ""] ?? []).map((entry) => ({
+            ...entry,
+            size: null,
+          })),
+          truncated: false,
+          ignoredHidden: false,
+        });
+      },
+    );
+    renderBodyWithRetryPolicy(
+      <FilesTab
+        tab={filesTab({ expanded: ["src"] })}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole(
+        "treeitem",
+        { name: /Could not list src/ },
+        { timeout: 10_000 },
+      ),
+    ).toBeVisible();
+    // Three attempts: the first and the two retries the policy allows.
+    expect(attempts).toBe(3);
+  }, 15_000);
 
   it("opens a File tab for an activated file and does not expand it", async () => {
     const user = userEvent.setup();

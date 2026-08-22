@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App.js";
+import { shouldRetryRequest } from "./api/client.js";
 import "./styles.css";
 
 // Keys belonging to features that no longer exist. They can never be read or
@@ -28,14 +29,10 @@ if (!(rootElement instanceof HTMLElement)) {
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: {
-      retry: (count, error) =>
-        !(
-          error instanceof Error &&
-          "status" in error &&
-          error.status === 401
-        ) && count < 2,
-    },
+    // One policy, stated once, and unit-tested where it lives: a client error
+    // and a timeout go straight to the view's error state, and everything
+    // else is retried twice (H5, H6).
+    queries: { retry: shouldRetryRequest },
     mutations: { retry: false },
   },
 });

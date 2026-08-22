@@ -98,6 +98,27 @@ let root: string;
 let projectPath: string;
 let launchUrl: string;
 
+/**
+ * Thirteen nested directories, so the file inside the last of them is a
+ * level-14 row — the depth the hands-on pass measured as unreadable at
+ * `PANEL_MIN_WIDTH`, with names of the length it saw there.
+ */
+const DEEP_CHAIN = [
+  "packages",
+  "integration",
+  "fixtures",
+  "elements",
+  "playwright",
+  "requests",
+  "sessions",
+  "specifications",
+  "storage",
+  "test-support",
+  "utilities",
+  "verification",
+  "workspaces",
+];
+
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "pi-web-e2e-panel-"));
   const state = join(root, "state");
@@ -141,6 +162,20 @@ test.beforeAll(async () => {
   await writeFile(
     join(projectPath, "src", "features", "panel.ts"),
     "export const panel = 1;\n",
+    "utf8",
+  );
+  // Two ordinary directories that exist only to be failed and to be deleted
+  // (H5, H6), and one chain deep enough to reproduce the unreadable indent
+  // at the panel's minimum width (H3): the reported case was level 14, whose
+  // 11.05rem of padding left 44px for a name 128px wide.
+  await mkdir(join(projectPath, "ops"));
+  await writeFile(join(projectPath, "ops", "deploy.sh"), "#!/bin/sh\n", "utf8");
+  await mkdir(join(projectPath, "gone"));
+  await writeFile(join(projectPath, "gone", "leaving.txt"), "bye\n", "utf8");
+  await mkdir(join(projectPath, DEEP_CHAIN.join("/")), { recursive: true });
+  await writeFile(
+    join(projectPath, ...DEEP_CHAIN, "session-storage.spec.ts"),
+    "export const deep = 1;\n",
     "utf8",
   );
   for (let index = 0; index < 200; index += 1) {
@@ -689,11 +724,11 @@ test.describe("on a device with no hover", () => {
  * the middle of that element would land on whichever child is there. The row
  * as the user sees it is its own line.
  */
-function treeRow(page: Page, name: string) {
+function treeRow(page: Page, name: string | RegExp) {
   return page.getByRole("treeitem", { name });
 }
 
-async function clickTreeRow(page: Page, name: string) {
+async function clickTreeRow(page: Page, name: string | RegExp) {
   await treeRow(page, name).locator(".file-tree-line").first().click();
 }
 
@@ -846,6 +881,47 @@ test("panel files: the keyboard walks, opens, and closes tree rows", async ({
   await src.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(src).toHaveAttribute("aria-expanded", "false");
+});
+
+// H5. The pass saw a row that read "Listing ops…" thirty seconds after the
+// server began answering 500 for it, and never saw the error row. Driven
+// here against the real server with the real client, where the recovery half
+// the pass could not confirm is also checked: the row's own retry.
+test("panel files: a failing listing reaches its error row, and the row retries", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("treeitem", { name: "ops" })).toBeVisible();
+
+  let failing = true;
+  await page.route(
+    (url) => url.pathname.endsWith("/files") && url.search.includes("path=ops"),
+    async (route) => {
+      if (!failing) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "internal_error", message: "No." },
+        }),
+      });
+    },
+  );
+
+  await clickTreeRow(page, "ops");
+  await expect(
+    page.getByRole("treeitem", { name: /Could not list ops/ }),
+  ).toBeVisible({ timeout: 15_000 });
+  // One unreadable directory costs its own row and not the tree.
+  await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+
+  failing = false;
+  await clickTreeRow(page, /Could not list ops/);
+  await expect(page.getByRole("treeitem", { name: "deploy.sh" })).toBeVisible();
 });
 
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({

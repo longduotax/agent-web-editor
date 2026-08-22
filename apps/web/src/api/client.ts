@@ -33,10 +33,48 @@ export class ApiClientError extends Error {
   }
 }
 
+/**
+ * How long a panel read waits before it is a failure rather than a wait.
+ *
+ * H5: nothing bounded this, and a request that never settles is the one
+ * failure React Query cannot turn into an error state — a rejected promise
+ * retries and then fails, a pending one stays pending. The file tree's row
+ * therefore read "Listing ops…" for as long as the page was open. Ten
+ * seconds is the same deadline the server gives its own Git calls, and it is
+ * far longer than the slowest measured listing on a real repository.
+ */
+export const PANEL_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * Whether a failed request is worth issuing again.
+ *
+ * A client error is a statement about the request — a deleted directory is
+ * still deleted on the third attempt — and a timeout has already waited its
+ * whole deadline, so both go straight to the view's error state, where the
+ * user has a retry control of their own. Everything else is a fault that may
+ * not repeat, and is retried twice.
+ */
+export function shouldRetryRequest(
+  failureCount: number,
+  error: unknown,
+): boolean {
+  if (error instanceof ApiClientError) {
+    if (error.status >= 400 && error.status < 500) return false;
+    if (error.code === "request_timeout") return false;
+  }
+  return failureCount < 2;
+}
+
+interface RequestOptions {
+  /** A deadline, after which the request is aborted and reported as one. */
+  timeoutMs?: number;
+}
+
 async function request<T>(
   path: string,
   schema: z.ZodType<T>,
   init: RequestInit = {},
+  options: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -44,10 +82,35 @@ async function request<T>(
     headers.set("Content-Type", "application/json");
     headers.set("X-Pi-Web-Request", "1");
   }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-  });
+  // An explicit controller and timer rather than `AbortSignal.timeout`: the
+  // request has to be cancelled, not just abandoned, and this reports the
+  // deadline as a typed failure of ours instead of an `AbortError` every
+  // caller would have to recognise.
+  const controller = new AbortController();
+  const deadline =
+    options.timeoutMs === undefined
+      ? null
+      : setTimeout(() => {
+          controller.abort();
+        }, options.timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new ApiClientError(
+        504,
+        "request_timeout",
+        "The workspace did not answer in time. Try again.",
+      );
+    throw error;
+  } finally {
+    if (deadline !== null) clearTimeout(deadline);
+  }
   const value: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(value);
@@ -265,6 +328,8 @@ export async function getFiles(
   return await request(
     `/api/projects/${projectId}/threads/${threadId}/files?${query.toString()}`,
     FileTreeResponseSchema,
+    {},
+    { timeoutMs: PANEL_READ_TIMEOUT_MS },
   );
 }
 export async function getFile(
@@ -275,6 +340,8 @@ export async function getFile(
   return await request(
     `/api/projects/${projectId}/threads/${threadId}/file?path=${encodeURIComponent(path)}`,
     FilePreviewResponseSchema,
+    {},
+    { timeoutMs: PANEL_READ_TIMEOUT_MS },
   );
 }
 export async function getStatus(projectId: ProjectId, threadId: ThreadId) {
