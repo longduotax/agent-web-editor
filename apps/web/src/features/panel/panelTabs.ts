@@ -120,26 +120,36 @@ function sameScope(a: TabContext | null, b: TabContext | null): boolean {
 // (WSP-09: switching to an already-open tab must not re-fetch what is
 // already there).
 //
-// Terminal and browser tabs are never the same target. Asking for a terminal
-// means "give me another shell" (WSP-07 allows several per scope), and asking
-// for a browser tab means "give me another viewport" — deduping either would
-// take away the only way to get a second one.
+// Each branch tests `b`'s own type rather than relying on an earlier
+// `a.type !== b.type` guard: a comparison the compiler cannot carry across
+// two independent unions is one a reader cannot carry either, and File and
+// Diff both hold a path, so "same path, therefore same target" is only true
+// once both sides are known to be the same one of the two.
 export function sameTarget(a: NewPanelTab, b: NewPanelTab): boolean {
-  if (a.type !== b.type) return false;
   switch (a.type) {
+    // Asking for a terminal means "give me another shell" (WSP-07 allows
+    // several per scope) and asking for a browser tab means "give me another
+    // viewport", so neither is ever the same target as anything — deduping
+    // either would take away the only way to get a second one.
     case "terminal":
     case "browser":
       return false;
     case "changes":
+      return b.type === "changes" && sameScope(a.context, b.context);
     case "files":
-      return sameScope(a.context, b.context);
+      return b.type === "files" && sameScope(a.context, b.context);
     case "file":
-    case "diff": {
-      // `b.type === a.type` is established above, but the compiler cannot
-      // carry that across two independent unions, so re-narrow b.
-      if (b.type !== "file" && b.type !== "diff") return false;
-      return sameScope(a.context, b.context) && a.path === b.path;
-    }
+      return (
+        b.type === "file" &&
+        sameScope(a.context, b.context) &&
+        a.path === b.path
+      );
+    case "diff":
+      return (
+        b.type === "diff" &&
+        sameScope(a.context, b.context) &&
+        a.path === b.path
+      );
   }
 }
 

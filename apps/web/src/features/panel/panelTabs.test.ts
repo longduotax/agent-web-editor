@@ -162,6 +162,83 @@ describe("sameTarget", () => {
     expect(sameTarget(changes, files)).toBe(false);
   });
 
+  // File and Diff are the interesting cross-type pair: they are the two
+  // types that carry a path, so they are the two that a same-path
+  // comparison could confuse. A Diff of `a.ts` and a File of `a.ts` show
+  // different content and must never dedupe one another away.
+  it("is false between a file tab and a diff tab on the same path", () => {
+    const file: PanelTab = {
+      id: "t1",
+      type: "file",
+      context: context(),
+      path: "a.ts",
+      view: "preview",
+    };
+    const diff: PanelTab = {
+      id: "t2",
+      type: "diff",
+      context: context(),
+      path: "a.ts",
+      collapsedHunks: [],
+    };
+    expect(sameTarget(file, diff)).toBe(false);
+    expect(sameTarget(diff, file)).toBe(false);
+  });
+
+  // "Addresses the same thing" is a relation between two tabs, not a
+  // property of the first one: openTab compares a new tab against every open
+  // one in whatever order the record happens to hold them.
+  it("is symmetric across every pair of tab types", () => {
+    const tabs: PanelTab[] = [
+      { id: "t1", type: "changes", context: context() },
+      { id: "t2", type: "changes", context: null },
+      { id: "t3", type: "files", context: context(), search: "" },
+      {
+        id: "t4",
+        type: "file",
+        context: context(),
+        path: "a.ts",
+        view: "preview",
+      },
+      {
+        id: "t5",
+        type: "file",
+        context: context(),
+        path: "b.ts",
+        view: "preview",
+      },
+      {
+        id: "t6",
+        type: "diff",
+        context: context(),
+        path: "a.ts",
+        collapsedHunks: [],
+      },
+      {
+        id: "t7",
+        type: "terminal",
+        context: context(),
+        cwd: "/repo",
+        terminalId: null,
+      },
+      {
+        id: "t8",
+        type: "browser",
+        context: null,
+        url: "http://localhost:5173/",
+        history: [],
+        historyIndex: -1,
+      },
+    ];
+    for (const a of tabs)
+      for (const b of tabs)
+        expect([a.id, b.id, sameTarget(a, b)]).toEqual([
+          a.id,
+          b.id,
+          sameTarget(b, a),
+        ]);
+  });
+
   it("matches two Changes tabs on the same execution scope", () => {
     const a: PanelTab = { id: "t1", type: "changes", context: context() };
     const b: PanelTab = { id: "t2", type: "changes", context: context() };
