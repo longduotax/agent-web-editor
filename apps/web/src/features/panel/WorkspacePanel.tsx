@@ -8,6 +8,7 @@ import {
 
 import { leafIds } from "../layout/binaryTree.js";
 import { NewTabMenu } from "./NewTabMenu.js";
+import { PanelBodies } from "./PanelBodies.js";
 import { PanelRightIcon } from "./PanelRightIcon.js";
 import { PanelTree } from "./PanelTree.js";
 import { PANEL_MIN_WIDTH } from "./panelModel.js";
@@ -85,10 +86,11 @@ export function WorkspacePanel({
   const closePanel = () => {
     actions.setOpen(false);
   };
+  const groupOrder = leafIds(state.root);
   // One close control for the whole panel, on the first group in reading
   // order — where the shipped one was, and where it still is whenever
   // the panel holds a single group.
-  const closeControlGroupId = leafIds(state.root)[0] ?? null;
+  const closeControlGroupId = groupOrder[0] ?? null;
 
   return (
     <>
@@ -139,11 +141,15 @@ export function WorkspacePanel({
             actions={actions}
             focusRequest={focusRequest}
             focusedContext={focusedContext}
-            panelVisible={open}
+            groupOrder={groupOrder}
             closeControlGroupId={closeControlGroupId}
             onClosePanel={closePanel}
           />
         )}
+        {/* Renders no markup of its own: every tab body is portalled into
+            the group that currently owns its tab, so regrouping moves a body
+            instead of tearing it down (WSP-09). */}
+        <PanelBodies state={state} actions={actions} panelVisible={open} />
       </aside>
       {!open && (
         <div className="panel-rail">

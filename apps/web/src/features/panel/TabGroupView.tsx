@@ -1,24 +1,18 @@
-import { useState, type JSX } from "react";
+import type { JSX } from "react";
 
-import { ChangesTab } from "./ChangesTab.js";
-import { DiffTab } from "./DiffTab.js";
-import { FilesTab } from "./FilesTab.js";
-import { FileTab } from "./FileTab.js";
-import { TerminalTab } from "./TerminalTab.js";
+import { groupBodiesElementId } from "./PanelBodies.js";
 import type { TabGroup } from "./panelModel.js";
 import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
-import { TabStrip, tabElementId, tabPanelElementId } from "./TabStrip.js";
+import { TabStrip } from "./TabStrip.js";
 import type { PanelActions } from "./usePanelState.js";
 
-// One tab group: its strip, plus the bodies of the tabs that have been
-// activated at least once.
+// One tab group: its strip, plus the slot its tab bodies are placed into.
 //
-// The mounting rule is WSP-09's other half. A body is mounted the first time
-// its tab is activated and stays mounted for the life of the tab — that is
-// what preserves its scroll position, its fetched data and, for a terminal,
-// its process — but it is hidden with `hidden` plus `inert`, so it paints
-// nothing and focus cannot wander into it. A tab that has never been
-// activated is never mounted at all, so opening ten tabs costs one body.
+// The bodies themselves are NOT rendered here. They are mounted once per tab
+// by `PanelBodies`, at the panel's level, and moved into this group's slot —
+// because this component is unmounted whenever the tree changes shape at its
+// position, and a body that went down with it would lose a running terminal
+// and every scroll position in the group (WSP-09). See PanelBodies.tsx.
 
 export interface TabGroupViewProps {
   group: TabGroup;
@@ -27,9 +21,24 @@ export interface TabGroupViewProps {
   focused: boolean;
   focusRequest: number;
   focusedContext: TabContext | null;
-  /** False while the whole panel is closed: nothing in it does work then. */
-  panelVisible: boolean;
+  /** 1-based position in reading order, for the group's accessible name. */
+  index: number;
+  /** How many groups the panel holds, so a lone group needs no number. */
+  groupCount: number;
   onClosePanel?: (() => void) | undefined;
+}
+
+/**
+ * A split panel would otherwise expose two landmarks both called "Panel tab
+ * group" and two tablists both called "Panel tabs", which a screen-reader
+ * user cannot tell apart (WSP-10). Numbering them in reading order is stable
+ * under tab switching — an active tab's title is not — and a single group
+ * keeps the plain name, because there is nothing to distinguish it from.
+ */
+export function groupAccessibleName(index: number, groupCount: number): string {
+  return groupCount > 1
+    ? `Panel tab group ${String(index)} of ${String(groupCount)}`
+    : "Panel tab group";
 }
 
 export function TabGroupView(props: TabGroupViewProps): JSX.Element {
@@ -40,34 +49,21 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
     focused,
     focusRequest,
     focusedContext,
-    panelVisible,
+    index,
+    groupCount,
     onClosePanel,
   } = props;
-  const activeTabId = group.activeTabId;
-
-  // Adjusted during render rather than in an effect: mounting a body one
-  // render later would paint an empty group for a frame on every first
-  // activation. See https://react.dev/learn/you-might-not-need-an-effect
-  const [mounted, setMounted] = useState<readonly TabId[]>(() =>
-    activeTabId === null ? [] : [activeTabId],
-  );
-  // Mounted, minus tabs that have since been closed, plus the active one if
-  // this is its first activation.
-  const live = mounted.filter((tabId) => group.tabIds.includes(tabId));
-  const bodies =
-    activeTabId !== null && !live.includes(activeTabId)
-      ? [...live, activeTabId]
-      : live;
-  if (
-    bodies.length !== mounted.length ||
-    bodies.some((tabId, index) => tabId !== mounted[index])
-  )
-    setMounted(bodies);
 
   return (
     <section
       className={`panel-group ${focused ? "focused" : ""}`}
-      aria-label="Panel tab group"
+      aria-label={groupAccessibleName(index, groupCount)}
+      // Every panel chord acts on the focused group, so keyboard focus has
+      // to move it — a pointer press on the strip was the only thing that
+      // did, which left chords acting on a group the user was not in (D2).
+      onFocusCapture={() => {
+        if (!focused) actions.focusGroup(group.id);
+      }}
     >
       <TabStrip
         group={group}
@@ -76,66 +72,15 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
         focused={focused}
         focusRequest={focusRequest}
         focusedContext={focusedContext}
+        index={index}
+        groupCount={groupCount}
         onClosePanel={onClosePanel}
       />
-      <div className="panel-bodies">
+      <div className="panel-bodies" id={groupBodiesElementId(group.id)}>
         {group.tabIds.length === 0 && (
           <div className="empty">No tabs open. Use ＋ to open one.</div>
         )}
-        {bodies.map((tabId) => {
-          const tab = tabs[tabId];
-          if (tab === undefined) return null;
-          const active = tabId === activeTabId;
-          return (
-            <div
-              key={tabId}
-              id={tabPanelElementId(tabId)}
-              className="panel-tabpanel"
-              role="tabpanel"
-              aria-labelledby={tabElementId(tabId)}
-              hidden={!active}
-              inert={!active}
-            >
-              <TabBody
-                tab={tab}
-                visible={active && panelVisible}
-                actions={actions}
-              />
-            </div>
-          );
-        })}
       </div>
     </section>
   );
-}
-
-function TabBody({
-  tab,
-  visible,
-  actions,
-}: {
-  tab: PanelTab;
-  visible: boolean;
-  actions: PanelActions;
-}): JSX.Element | null {
-  switch (tab.type) {
-    case "changes":
-      return <ChangesTab tab={tab} visible={visible} actions={actions} />;
-    case "files":
-      return <FilesTab tab={tab} visible={visible} actions={actions} />;
-    case "file":
-      return <FileTab tab={tab} visible={visible} actions={actions} />;
-    case "diff":
-      return <DiffTab tab={tab} visible={visible} actions={actions} />;
-    case "terminal":
-      return <TerminalTab tab={tab} visible={visible} actions={actions} />;
-    case "browser":
-      // WSP-08 arrives in milestone 7. Nothing can create one of these yet,
-      // and a persisted record carrying one is not silently blank.
-      return (
-        <div className="empty">
-          Browser tabs are not available in this version of the workspace.
-        </div>
-      );
-  }
 }

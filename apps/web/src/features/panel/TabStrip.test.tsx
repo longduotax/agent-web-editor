@@ -87,6 +87,8 @@ function renderStrip(
       focusedContext={
         overrides.focusedContext === undefined ? here : overrides.focusedContext
       }
+      index={1}
+      groupCount={1}
       onClosePanel={overrides.onClosePanel}
     />,
   );
@@ -257,6 +259,8 @@ describe("TabStrip", () => {
           focused
           focusRequest={0}
           focusedContext={here}
+          index={1}
+          groupCount={1}
           onClosePanel={vi.fn()}
         />
         {/* The body the active tab controls, which the group renders in the

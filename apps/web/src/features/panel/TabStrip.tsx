@@ -43,6 +43,10 @@ export interface TabStripProps {
   /** The focused chat pane's scope: what `+` opens tabs for, and what the
    * worktree chip is compared against. */
   focusedContext: TabContext | null;
+  /** 1-based position in reading order, for this strip's accessible name. */
+  index: number;
+  /** How many groups the panel holds, so a lone strip needs no number. */
+  groupCount: number;
   /** Supplied to exactly one strip, so the panel has one close control. */
   onClosePanel?: (() => void) | undefined;
 }
@@ -55,6 +59,8 @@ export function TabStrip(props: TabStripProps): JSX.Element {
     focused,
     focusRequest,
     focusedContext,
+    index,
+    groupCount,
     onClosePanel,
   } = props;
   const activeTabId = group.activeTabId;
@@ -108,7 +114,13 @@ export function TabStrip(props: TabStripProps): JSX.Element {
       <div
         className="panel-tab-options"
         role="tablist"
-        aria-label="Panel tabs"
+        // A split panel holds two of these, and "Panel tabs" twice over is
+        // indistinguishable to a screen reader (WSP-10).
+        aria-label={
+          groupCount > 1
+            ? `Panel tabs, group ${String(index)} of ${String(groupCount)}`
+            : "Panel tabs"
+        }
         aria-orientation="horizontal"
         onKeyDown={moveFocus}
       >

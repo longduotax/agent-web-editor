@@ -27,7 +27,8 @@ export interface PanelTreeProps {
   actions: PanelActions;
   focusRequest: number;
   focusedContext: TabContext | null;
-  panelVisible: boolean;
+  /** Every group in reading order, so each can name itself (WSP-10). */
+  groupOrder: readonly GroupId[];
   /** The group that carries the panel's single close control. */
   closeControlGroupId: GroupId | null;
   onClosePanel: () => void;
@@ -46,7 +47,8 @@ export function PanelTree(props: PanelTreeProps): JSX.Element | null {
         focused={state.focusedGroupId === node.id}
         focusRequest={props.focusRequest}
         focusedContext={props.focusedContext}
-        panelVisible={props.panelVisible}
+        index={props.groupOrder.indexOf(node.id) + 1}
+        groupCount={props.groupOrder.length}
         onClosePanel={
           props.closeControlGroupId === node.id ? props.onClosePanel : undefined
         }

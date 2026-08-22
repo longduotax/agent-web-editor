@@ -1648,8 +1648,16 @@ a:focus-visible {
   flex: 1;
   flex-direction: column;
 }
+/* Each tab body lives in a host node of its own that the panel moves between
+   groups, so the body survives a split (see PanelBodies.tsx). The host must
+   not become a box: `display: contents` leaves the tabpanel inside it a flex
+   item of .panel-bodies, exactly as it was when the group rendered it. */
+.panel-tabpanel-host {
+  display: contents;
+}
 .panel-tabpanel {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
