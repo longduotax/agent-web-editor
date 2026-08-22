@@ -1,76 +1,36 @@
 import type { ThreadId } from "@pi-web/contracts";
 
+import {
+  containsLeaf,
+  leafIds,
+  removeLeaf,
+  setSplitSizes as setNodeSizes,
+  splitLeaf,
+} from "../layout/binaryTree.js";
+import type {
+  SplitAxis,
+  TreeLeaf,
+  TreeNode,
+  TreeSplit,
+} from "../layout/binaryTree.js";
+
 export type PaneId = string;
 export type SplitId = string;
-export type SplitAxis = "row" | "column"; // row = split right; column = split down
+export type { SplitAxis };
 export type FocusDirection = "left" | "right" | "up" | "down";
 
-export interface PaneNode {
-  type: "pane";
-  id: PaneId;
-}
-export interface SplitNode {
-  type: "split";
-  id: SplitId; // stable identity, independent of position in the tree — used
-  // for React keys and as the resize handle, so a split survives a sibling
-  // being promoted/removed around it instead of being reused positionally.
-  axis: SplitAxis;
-  children: [LayoutNode, LayoutNode];
-  sizes: [number, number]; // fractions in (0,1) summing to 1
-}
-export type LayoutNode = PaneNode | SplitNode;
+// The chat surface's leaves are panes. The tree itself lives in
+// `features/layout/binaryTree.ts`, shared with the workspace panel; the
+// "pane" tag is what keeps this surface's persisted format its own.
+export type PaneNode = TreeLeaf<"pane", PaneId>;
+export type SplitNode = TreeSplit<"pane", PaneId>;
+export type LayoutNode = TreeNode<"pane", PaneId>;
 
 export interface WorkspaceLayout {
   root: LayoutNode | null; // null = no tiled panes
   panes: Record<PaneId, { threadId: ThreadId | null }>; // all panes, all tiled
   focusedPaneId: PaneId | null;
   boundPaneId: PaneId | null; // right-panel binding (carried; used in a later phase)
-}
-
-const MIN_SIZE_FRACTION = 0.05;
-
-// Returns a new tree with the pane identified by `targetId` replaced by
-// whatever `make` returns for it. Every ancestor on the path is rebuilt so
-// the result never shares object identity with unrelated nodes' parents.
-function replaceNode(
-  node: LayoutNode,
-  targetId: PaneId,
-  make: (p: PaneNode) => LayoutNode,
-): LayoutNode {
-  if (node.type === "pane") return node.id === targetId ? make(node) : node;
-  const children = node.children.map((c) => replaceNode(c, targetId, make)) as [
-    LayoutNode,
-    LayoutNode,
-  ];
-  return { ...node, children };
-}
-
-// Removes the leaf pane `id` from the tree. When a split loses a child, the
-// surviving sibling takes the split's place. Returns null when the whole
-// subtree (a single pane) was removed.
-function removeLeaf(node: LayoutNode, id: PaneId): LayoutNode | null {
-  if (node.type === "pane") return node.id === id ? null : node;
-  const [a, b] = node.children;
-  const na = removeLeaf(a, id);
-  const nb = removeLeaf(b, id);
-  if (na === null) return nb; // surviving sibling replaces the split
-  if (nb === null) return na;
-  return { ...node, children: [na, nb] };
-}
-
-// In-order leaf ids, left-to-right / top-to-bottom.
-function leafIds(node: LayoutNode | null): PaneId[] {
-  if (node === null) return [];
-  if (node.type === "pane") return [node.id];
-  return [...leafIds(node.children[0]), ...leafIds(node.children[1])];
-}
-
-function nodeContains(node: LayoutNode | null, id: PaneId): boolean {
-  if (node === null) return false;
-  if (node.type === "pane") return node.id === id;
-  return (
-    nodeContains(node.children[0], id) || nodeContains(node.children[1], id)
-  );
 }
 
 // Picks the next focus target after a pane leaves the tree: keep the
@@ -80,7 +40,7 @@ function nextFocus(
   root: LayoutNode | null,
   previouslyFocused: PaneId | null,
 ): PaneId | null {
-  if (previouslyFocused !== null && nodeContains(root, previouslyFocused))
+  if (previouslyFocused !== null && containsLeaf(root, previouslyFocused))
     return previouslyFocused;
   return leafIds(root)[0] ?? null;
 }
@@ -101,18 +61,17 @@ export function splitPane(
   axis: SplitAxis,
   makeId: () => PaneId,
 ): WorkspaceLayout {
-  if (l.root === null || !nodeContains(l.root, target)) return l;
+  if (l.root === null || !containsLeaf(l.root, target)) return l;
   const newId = makeId();
   // Same generator as pane ids; only the field it's stored in (and thus its
   // uniqueness within the tree) matters, not which pool it came from.
   const splitId: SplitId = makeId();
-  const root = replaceNode(l.root, target, (pane): LayoutNode => ({
-    type: "split",
-    id: splitId,
+  const root = splitLeaf(l.root, target, {
+    splitId,
     axis,
-    children: [pane, { type: "pane", id: newId }],
-    sizes: [0.5, 0.5],
-  }));
+    leaf: { type: "pane", id: newId },
+    side: "after", // a split always opens the new pane right of / below the old
+  });
   return {
     ...l,
     root,
@@ -150,23 +109,22 @@ export function restoreIntoTree(
   }
   // `focusedPaneId` from a corrupt/stale persisted payload can point at an
   // id that isn't actually a leaf of `root` (e.g. a split id, or a pane that
-  // no longer exists). replaceNode no-ops when its target isn't found, which
+  // no longer exists). splitLeaf no-ops when its target isn't found, which
   // would silently drop the docked pane being folded in here — so only trust
   // focusedPaneId when it really is a leaf; otherwise fall back to the first
   // leaf, same as when focusedPaneId is absent.
   const target =
-    l.focusedPaneId !== null && nodeContains(l.root, l.focusedPaneId)
+    l.focusedPaneId !== null && containsLeaf(l.root, l.focusedPaneId)
       ? l.focusedPaneId
       : leafIds(l.root)[0];
   if (target === undefined) return l;
   const splitId: SplitId = `split-${crypto.randomUUID()}`;
-  const root = replaceNode(l.root, target, (pane): LayoutNode => ({
-    type: "split",
-    id: splitId,
+  const root = splitLeaf(l.root, target, {
+    splitId,
     axis: "row",
-    children: [pane, { type: "pane", id }],
-    sizes: [0.5, 0.5],
-  }));
+    leaf: { type: "pane", id },
+    side: "after",
+  });
   return { ...l, root, focusedPaneId: id };
 }
 
@@ -223,30 +181,8 @@ export function setSplitSizes(
   sizes: [number, number],
 ): WorkspaceLayout {
   if (l.root === null) return l;
-
-  function update(node: LayoutNode): { node: LayoutNode; found: boolean } {
-    if (node.type === "pane") return { node, found: false };
-    if (node.id === splitId)
-      return {
-        node: { ...node, sizes: normalizeSizes(sizes) },
-        found: true,
-      };
-    const [a, b] = node.children;
-    const ua = update(a);
-    const ub = update(b);
-    if (!ua.found && !ub.found) return { node, found: false };
-    return { node: { ...node, children: [ua.node, ub.node] }, found: true };
-  }
-
-  const result = update(l.root);
-  return result.found ? { ...l, root: result.node } : l;
-}
-
-function normalizeSizes(sizes: [number, number]): [number, number] {
-  const clamped: [number, number] = [
-    Math.max(sizes[0], MIN_SIZE_FRACTION),
-    Math.max(sizes[1], MIN_SIZE_FRACTION),
-  ];
-  const total = clamped[0] + clamped[1];
-  return [clamped[0] / total, clamped[1] / total];
+  // setNodeSizes returns the tree it was given, by reference, when the split
+  // is absent — which is exactly the "leave the layout alone" case here.
+  const root = setNodeSizes(l.root, splitId, sizes);
+  return root === l.root ? l : { ...l, root };
 }
