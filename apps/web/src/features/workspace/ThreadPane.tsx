@@ -38,6 +38,7 @@ import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
 import { isReleaseKey, releaseFocusToPane } from "./paneFocus.js";
 import {
+  countAllUserMessages,
   countUserMessages,
   dropSettledSteers,
   isReaderFacingDiagnostic,
@@ -45,6 +46,7 @@ import {
   mergePendingSteers,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
+  type LiveTurn,
   type PendingSteer,
 } from "./liveTranscript.js";
 import { PaneHeader } from "./PaneHeader.js";
@@ -108,7 +110,7 @@ const TRUST_NOTICE =
  * at 7ms intervals, but a blank paragraph for the whole of a tool call.
  */
 export interface LiveState {
-  turn: TranscriptItem | null;
+  turn: LiveTurn | null;
   /**
    * The newest reader-facing diagnostic of the run in flight, or null.
    *
@@ -126,7 +128,7 @@ function useLive(
   runActive: boolean,
 ): LiveState {
   const queryClient = useQueryClient();
-  const [liveTurn, setLiveTurn] = useState<TranscriptItem | null>(null);
+  const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [diagnostic, setDiagnostic] = useState<LiveDiagnostic | null>(null);
   // The turn belongs to the run that produced it. `runActive` only goes false
   // once a fetch has told us so, and that same fetch carried the settled
@@ -159,7 +161,19 @@ function useLive(
       }
       if (pending.length === 0) return;
       const batch = pending.splice(0, pending.length);
-      setLiveTurn((current) => batch.reduce(reduceLiveTurn, current));
+      // The baseline a new turn is identified by: how many user messages the
+      // authoritative transcript holds right now. Read from the cache rather
+      // than passed down, because this is the moment the turn begins and the
+      // pane's render is not.
+      const cached = queryClient.getQueryData<ThreadSnapshot>(queryKey);
+      const userMessagesNow =
+        cached === undefined ? 0 : countAllUserMessages(cached.transcript);
+      setLiveTurn((current) =>
+        batch.reduce(
+          (turn, item) => reduceLiveTurn(turn, item, userMessagesNow),
+          current,
+        ),
+      );
     };
     const scheduleFlush = () => {
       flushTimer ??= window.setTimeout(flush, LIVE_FLUSH_MS);
@@ -449,6 +463,7 @@ export function Composer({
   snapshot,
   onSteered,
   onSent,
+  restoreDraft,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
@@ -457,15 +472,32 @@ export function Composer({
    * A steer the server accepted. The pane echoes it into the transcript,
    * because nothing else will until the run ends (see `steerEchoItem`).
    *
-   * `priorCopies` is how many user messages already carried this text when
-   * the request went out, and it is measured HERE rather than in the pane so
-   * that it describes the transcript as it stood before the steer could
-   * possibly have landed.
+   * The two baselines are how many user messages already carried this text,
+   * and how many there were of any text, when the request went out. They are
+   * measured HERE rather than in the pane so that they describe the
+   * transcript as it stood before the steer could possibly have landed.
    */
   onSteered?:
-    ((text: string, runId: string, priorCopies: number) => void) | undefined;
+    | ((
+        text: string,
+        runId: string,
+        baseline: { priorCopies: number; priorUserMessages: number },
+      ) => void)
+    | undefined;
   /** Anything was sent: re-pin the transcript to the bottom. */
   onSent?: (() => void) | undefined;
+  /**
+   * A token whose identity changes when the pane has written something back
+   * into this thread's draft — an undelivered steer handed back after a
+   * stopped run. The composer re-reads its draft when it changes.
+   *
+   * This used to be a `key` on the composer, which remounted it to make the
+   * new draft visible. A remount drops focus and the caret, so a reader who
+   * was already typing when a stopped run handed a steer back had their
+   * cursor thrown into a textarea they had not asked for. Re-reading in
+   * place keeps both, and keeps the merge itself in one place (the pane).
+   */
+  restoreDraft?: { token: number } | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
@@ -484,10 +516,15 @@ export function Composer({
       const sent = text.trim();
       if (activeRun === null) return await prompt(projectId, threadId, sent);
       // Measured before the request, so a copy that arrives after it is
-      // unambiguously this steer landing.
-      const priorCopies = countUserMessages(snapshot.transcript, sent);
+      // unambiguously this steer landing. Both are taken: Pi rewrites a
+      // `/`-prefixed steer before storing it, and the count of ALL user
+      // messages is the only baseline that still means something then.
+      const baseline = {
+        priorCopies: countUserMessages(snapshot.transcript, sent),
+        priorUserMessages: countAllUserMessages(snapshot.transcript),
+      };
       const result = await steer(projectId, threadId, sent);
-      onSteered?.(sent, activeRun.id, priorCopies);
+      onSteered?.(sent, activeRun.id, baseline);
       return result;
     },
     onSuccess: async () => {
@@ -502,6 +539,15 @@ export function Composer({
   useEffect(() => {
     writeDraft(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
+  // The pane has merged something into the stored draft. Read it rather than
+  // being told it, so storage and the box cannot disagree about what the
+  // reader is now holding.
+  // Re-reading what the `useState` initialiser already read is a no-op, so
+  // no guard is needed for the mount where a token is already in place.
+  useEffect(() => {
+    if (restoreDraft === undefined) return;
+    setText(readDraft(`pi-draft:${threadId}`));
+  }, [restoreDraft, threadId]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -751,12 +797,16 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   const nextOrdinal = useRef(0);
   const settledTranscript = snapshot.data?.transcript;
   const onSteered = useCallback(
-    (text: string, runId: string, priorCopies: number) => {
+    (
+      text: string,
+      runId: string,
+      baseline: { priorCopies: number; priorUserMessages: number },
+    ) => {
       const ordinal = nextOrdinal.current;
       nextOrdinal.current += 1;
       setPendingSteers((current) => [
         ...current,
-        { runId, text, ordinal, priorCopies },
+        { runId, text, ordinal, ...baseline },
       ]);
     },
     [],
@@ -776,25 +826,32 @@ function ThreadPaneBody(props: ThreadPaneProps) {
     );
   }, [settledTranscript]);
   // Text the run ended without ever delivering, handed back to the composer.
-  const [undelivered, setUndelivered] = useState(0);
-  const [composerGeneration, setComposerGeneration] = useState(0);
+  // `token` changes identity on every hand-back, which is what tells the
+  // composer to re-read its draft.
+  const [undelivered, setUndelivered] = useState<{
+    token: number;
+    count: number;
+  } | null>(null);
   const lastRun = snapshot.data?.lastRun ?? null;
   // An echo belongs to its run, and cannot outlive it.
   //
   // For a run that COMPLETED the handover is silent: the fetch that reports
   // the run finished is the same fetch that carries the now-persisted
-  // message, so the text is never gone from both. That was claimed here for
-  // all three settled states and it is only true of one. Pi's agent loop
-  // drains its steering queue between turns, but on abort or error it returns
-  // before that poll, and neither `AgentSession.abort()` nor `Agent.abort()`
-  // flushes the queue -- so a steer queued into a turn that is then stopped
-  // is never delivered and never persisted. Dropping the echo there would
-  // take the user's words off the screen, having already taken them out of
-  // the composer, with no notice that they were never acted on.
+  // message, so the text is never gone from both. A run that was STOPPED is
+  // the case this exists for, and the claim it makes is true only because
+  // `PiOpenSession.stop` now empties Pi's steering queue before aborting.
+  // Neither `AgentSession.abort()` nor `Agent.abort()` does that on its own,
+  // and the queue belongs to the session rather than the run, so a steer left
+  // in it used to be injected into whatever the reader sent next -- while
+  // this pane told them it had never been delivered and put it back in the
+  // composer for them to send again. See the comment on that method.
   //
-  // So they go back where they came from. The composer is the one place the
-  // text is actionable -- one keystroke re-sends it -- and leaving it in the
-  // transcript would assert it is part of a conversation it never reached.
+  // Dropping the echo instead would take the user's words off the screen,
+  // having already taken them out of the composer, with no notice that they
+  // were never acted on. So they go back where they came from: the composer
+  // is the one place the text is actionable -- one keystroke re-sends it --
+  // and leaving it in the transcript would assert it is part of a
+  // conversation it never reached.
   useEffect(() => {
     const stale = pendingSteers.filter(
       (steer) => !runActive || steer.runId !== currentRunId,
@@ -803,32 +860,31 @@ function ThreadPaneBody(props: ThreadPaneProps) {
     setPendingSteers((current) =>
       current.filter((steer) => runActive && steer.runId === currentRunId),
     );
-    if (lastRun === null || lastRun.state === "completed") return;
     // Anything Pi did persist is server truth now and must not be handed
-    // back as well.
-    const lost = (
+    // back as well -- and that check is the WHOLE guard. It used to be
+    // fenced behind `lastRun.state !== "completed"` and a
+    // `steer.runId === lastRun.id` filter, and the filter silently dropped
+    // the text whenever a fast Stop-then-send had already made `lastRun` the
+    // new run: the exact outcome this path exists to prevent. The transcript
+    // is better evidence than either fence, because the fetch that reports a
+    // run settled is the same fetch that carries what that run persisted.
+    const lost =
       settledTranscript === undefined
         ? stale
-        : dropSettledSteers(settledTranscript, stale)
-    ).filter((steer) => steer.runId === lastRun.id);
+        : dropSettledSteers(settledTranscript, stale);
     if (lost.length === 0) return;
     const draftKey = `pi-draft:${threadId}`;
     const kept = [readDraft(draftKey), ...lost.map((steer) => steer.text)]
       .filter((part) => part !== "")
       .join("\n\n");
     writeDraft(draftKey, kept);
-    setUndelivered(lost.length);
-    // The composer reads its draft once, in a `useState` initialiser, so it
-    // has to be remounted to see the restored text.
-    setComposerGeneration((generation) => generation + 1);
-  }, [
-    runActive,
-    currentRunId,
-    pendingSteers,
-    lastRun,
-    settledTranscript,
-    threadId,
-  ]);
+    // Written here rather than handed to the composer as a value so that the
+    // text survives even when there is no composer mounted to receive it.
+    setUndelivered((current) => ({
+      token: (current?.token ?? 0) + 1,
+      count: lost.length,
+    }));
+  }, [runActive, currentRunId, pendingSteers, settledTranscript, threadId]);
   const queryClient = useQueryClient();
   const restore = useMutation({
     mutationFn: async () => await unarchiveThread(projectId, threadId),
@@ -1032,22 +1088,27 @@ function ThreadPaneBody(props: ThreadPaneProps) {
               </button>
             </div>
           )}
-          {outcome !== null && (
-            <div className={`run-failure ${outcome.tone}`}>
+          {/* The undelivered sentence rides on the outcome notice wherever
+              there is one: it is part of what the ended run means, and it
+              has the same lifetime -- the reader sending again is exactly
+              what resolves it. But it must not DEPEND on one. A Stop
+              followed quickly by a send makes `lastRun` the new, running
+              run, which has no outcome to report, and the sentence used to
+              vanish with it -- handing the words back with nothing on
+              screen to say why they had reappeared. */}
+          {(outcome !== null || undelivered !== null) && (
+            <div className={`run-failure ${outcome?.tone ?? "stopped"}`}>
               <p className="run-failure-body" role="status">
                 <span
-                  className={`sdot ${outcome.tone === "failed" ? "fail" : "stop"}`}
+                  className={`sdot ${outcome?.tone === "failed" ? "fail" : "stop"}`}
                   aria-hidden="true"
                 />
-                {outcome.text}
-                {/* Said here rather than as a notice of its own: it is part
-                    of what the ended run means, and it has the same
-                    lifetime -- the reader sending again is exactly what
-                    resolves it. */}
-                {undelivered > 0 &&
-                  (undelivered === 1
-                    ? " Your steering message was never delivered — it is back in the composer."
-                    : ` Your ${String(undelivered)} steering messages were never delivered — they are back in the composer.`)}
+                {outcome?.text}
+                {outcome !== null && undelivered !== null && " "}
+                {undelivered !== null &&
+                  (undelivered.count === 1
+                    ? "Your steering message was never delivered — it is back in the composer."
+                    : `Your ${String(undelivered.count)} steering messages were never delivered — they are back in the composer.`)}
               </p>
             </div>
           )}
@@ -1062,17 +1123,19 @@ function ThreadPaneBody(props: ThreadPaneProps) {
           ) : (
             <Composer
               // The composer reads its saved draft ONCE, in a `useState`
-              // initialiser, so anything that changes the draft underneath it
-              // -- an undelivered steer handed back above -- has to remount
-              // it to be seen. (Rebinding to another thread is handled a
-              // level up, by the key on the pane itself.)
-              key={composerGeneration}
+              // initialiser, so anything that changes the draft underneath
+              // it -- an undelivered steer handed back above -- has to tell
+              // it to look again. A token rather than a `key`, because a key
+              // remounts it and a remount costs the reader their focus and
+              // caret. (Rebinding to another thread is handled a level up,
+              // by the key on the pane itself.)
+              restoreDraft={undelivered ?? undefined}
               projectId={projectId}
               threadId={threadId}
               snapshot={snapshot.data}
               onSteered={onSteered}
               onSent={() => {
-                setUndelivered(0);
+                setUndelivered(null);
                 // Only a notice that is on screen right now can be dismissed
                 // by sending. `lastRun` INCLUDES the run in flight, so
                 // recording its id unconditionally pre-dismissed the outcome

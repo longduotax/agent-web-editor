@@ -1089,6 +1089,70 @@ describe("live streaming", () => {
     expect(screen.queryByText("half an answer")).toBeNull();
   });
 
+  // B1. Pi drains its steering queue AFTER the turn in flight, so a steer it
+  // persists lands BELOW the assistant message it interrupted. The window
+  // `alreadySettled` searched was anchored on the last user message, so the
+  // settled turn fell outside it, `mergeLiveTurn` appended the live copy
+  // again, and the reader saw the entire answer twice under their own steer.
+  // `live.turn` is only cleared when the run goes inactive, and this happens
+  // while the run is still going, so nothing rescued it.
+  it("does not duplicate the settled turn once a steer is persisted after it", async () => {
+    const prompt = {
+      id: "pi-prompt",
+      kind: "message",
+      role: "user",
+      text: "do the thing",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    } as const;
+    api.getSnapshot.mockResolvedValue({ ...running, transcript: [prompt] });
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(socket, frame(1, streamed("Here is the")));
+    await deliver(
+      socket,
+      frame(2, {
+        id: "live-0e4bf4e4-6c2e-4b2f-9f2b-0f4b0f4b0f4b",
+        kind: "message",
+        role: "assistant",
+        text: "Here is the answer.",
+        timestamp: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    expect(screen.getAllByText("Here is the answer.")).toHaveLength(1);
+
+    // The turn is persisted, and the steer Pi drained after it lands below.
+    // The run is STILL running: the next turn has not produced a token yet,
+    // so nothing replaces the live turn.
+    api.getSnapshot.mockResolvedValue({
+      ...running,
+      transcript: [
+        prompt,
+        {
+          id: "pi-answer",
+          kind: "message",
+          role: "assistant",
+          text: "Here is the answer.",
+          timestamp: "2026-01-01T00:00:02.000Z",
+        },
+        {
+          id: "pi-steer",
+          kind: "message",
+          role: "user",
+          text: "also add tests",
+          timestamp: "2026-01-01T00:00:03.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await screen.findByText("also add tests");
+    expect(screen.getAllByText("Here is the answer.")).toHaveLength(1);
+  });
+
   it("falls back to a full refetch when the server cannot replay from our cursor", async () => {
     api.getSnapshot.mockResolvedValue(snapshot);
     renderPane();
@@ -1432,6 +1496,95 @@ describe("live streaming", () => {
         "wait, use pnpm",
       );
     });
+    expect(screen.getByText(/never delivered/)).toBeInTheDocument();
+  });
+
+  // Nit 5. The hand-back used to remount the composer to make the restored
+  // draft visible, which threw away focus and the caret. A reader typing
+  // when a stopped run hands a steer back should keep both.
+  it("hands a steer back without taking the reader's cursor with it", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "wait, use pnpm");
+    await user.keyboard("{Enter}");
+    await screen.findByText("wait, use pnpm");
+    // The reader has started typing the next thing while the run finishes.
+    await user.type(composer, "and then");
+    expect(composer).toHaveFocus();
+
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runState: "interrupted" },
+      currentRun: null,
+      lastRun: {
+        ...running.currentRun,
+        state: "interrupted",
+        endedAt: "2026-01-01T00:00:05.000Z",
+        failureCode: "user_stop",
+        failureMessage: "Stopped by the user.",
+      },
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+        "and then\n\nwait, use pnpm",
+      );
+    });
+    // Same element, still focused: the box was not rebuilt underneath them.
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(composer);
+    expect(composer).toHaveFocus();
+  });
+
+  // Nit 6. `lost` was filtered to `steer.runId === lastRun.id`, and a fast
+  // Stop-then-send makes `lastRun` the NEW run. The stranded text was then
+  // dropped with no notice at all -- the exact outcome this path exists to
+  // prevent, and now a guaranteed loss rather than a double send, because
+  // the adapter really does clear Pi's queue.
+  it("still returns a stranded steer once the next run has already started", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "wait, use pnpm",
+    );
+    await user.keyboard("{Enter}");
+    await screen.findByText("wait, use pnpm");
+
+    // Stopped, and a NEW run is already in flight by the time the pane sees
+    // it -- so `lastRun` names the new run, not the one that was stopped.
+    const nextRun = {
+      ...running.currentRun,
+      id: "50000000-0000-4000-8000-00000000000a" as RunId,
+      startedAt: "2026-01-01T00:00:06.000Z",
+    };
+    api.getSnapshot.mockResolvedValue({
+      ...running,
+      currentRun: nextRun,
+      lastRun: nextRun,
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+        "wait, use pnpm",
+      );
+    });
+    // And it says why, although the run it belongs to is no longer the one
+    // the pane has an outcome for.
     expect(screen.getByText(/never delivered/)).toBeInTheDocument();
   });
 

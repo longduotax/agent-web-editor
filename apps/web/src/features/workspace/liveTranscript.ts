@@ -48,6 +48,21 @@ function sameRenderedItem(a: TranscriptItem, b: TranscriptItem): boolean {
 }
 
 /**
+ * The in-progress assistant turn, with the one fact that identifies it.
+ *
+ * `priorUserMessages` is how many user messages the authoritative transcript
+ * held when this turn STARTED streaming, and it is the whole of the identity
+ * rule (see `alreadySettled`). It is the same discipline the steer echo uses
+ * for its own handover: a mint-time baseline against the authoritative
+ * transcript, so that "arrived after I started" is a fact rather than a
+ * guess about position.
+ */
+export interface LiveTurn {
+  item: TranscriptItem;
+  priorUserMessages: number;
+}
+
+/**
  * Folds one live transcript item into the in-progress assistant turn.
  *
  * The turn is client-only state: it is the one thing on screen that the
@@ -57,54 +72,89 @@ function sameRenderedItem(a: TranscriptItem, b: TranscriptItem): boolean {
  * authoritative fetch — the 15s background poll, or any throttled refetch —
  * from deleting a partly-streamed answer off the screen.
  *
+ * `userMessagesNow` is the count of user messages in the authoritative
+ * transcript at the moment the frame arrives; it is recorded only when a NEW
+ * turn begins, so every frame of one turn shares one baseline.
+ *
  * Returns `current` unchanged when the frame changes nothing, so a repeated
  * frame cannot force a re-render.
  */
 export function reduceLiveTurn(
-  current: TranscriptItem | null,
+  current: LiveTurn | null,
   item: TranscriptItem,
-): TranscriptItem | null {
+  userMessagesNow: number,
+): LiveTurn | null {
   // Only an assistant message can be, or replace, an in-progress turn.
   // `live-<uuid>` is the id the adapter gives EVERY settled item, user and
   // system messages included, so a steer landing mid-stream must not be
   // mistaken for the end of the answer being streamed.
   if (item.kind !== "message" || item.role !== "assistant") return current;
-  if (current !== null && sameRenderedItem(current, item)) return current;
+  if (current !== null && sameRenderedItem(current.item, item)) return current;
+  // A frame continues the turn in hand only while that turn is still the
+  // streaming placeholder: the adapter reuses one id for every frame of an
+  // answer and then closes it with the settled item under a fresh id. So a
+  // frame arriving on top of a SETTLED item is the next turn beginning, and
+  // gets a baseline of its own; anything on top of the placeholder -- another
+  // frame, or the settled item closing it -- is the same turn still.
+  //
   // Both a streamed frame and the settled turn replace what came before: the
   // settled item carries the same text the placeholder was building, so
   // holding on to it keeps the answer on screen until the refetch that
   // persists it lands.
-  return item;
+  if (current?.item.id !== STREAMING_ITEM_ID)
+    return { item, priorUserMessages: userMessagesNow };
+  return { item, priorUserMessages: current.priorUserMessages };
 }
 
 /**
  * Whether this turn has already reached the authoritative transcript.
  *
  * The settled turn arrives in the snapshot under Pi's own id rather than the
- * `live-<uuid>` the adapter minted, so identity has to be the text. The
- * search is scoped to the current turn — everything after the last user
- * message — so that an identical sentence Pi wrote in an earlier turn is
- * not mistaken for this one.
+ * `live-<uuid>` the adapter minted, so identity has to be the text. A window
+ * keeps an identical sentence Pi wrote in an EARLIER turn from being mistaken
+ * for this one, and where that window starts is the whole of B1.
+ *
+ * It used to start after the LAST user message, which is correct only while
+ * the newest user message is the prompt that started this turn. Pi drains its
+ * steering queue after the turn in flight, so a persisted steer lands BELOW
+ * the assistant message it interrupted: the settled turn then fell outside
+ * the window, and the live copy was appended a second time — the whole
+ * answer, drawn twice under the reader's own steer, for as long as the next
+ * turn took to produce a token.
+ *
+ * The window now starts after the `priorUserMessages`-th user message, i.e.
+ * after the ones that already existed when this turn began. Position cannot
+ * separate the two cases on its own — `[user, assistant, user]` is the shape
+ * of both "a steer landed under my answer" and "a new prompt started the turn
+ * I am streaming" — but the baseline can, because it says which of those user
+ * messages the turn is older than.
+ *
+ * If the transcript holds FEWER user messages than the baseline (compaction),
+ * every one of them predates the turn and the window is the old one: after
+ * the last user message.
  */
 function alreadySettled(
   transcript: readonly TranscriptItem[],
-  turn: TranscriptItem,
+  turn: LiveTurn,
 ): boolean {
-  if (turn.kind !== "message") return false;
+  if (turn.item.kind !== "message") return false;
+  const text = turn.item.text;
   let start = 0;
-  for (let index = transcript.length - 1; index >= 0; index -= 1) {
-    const item = transcript[index];
-    if (item?.kind === "message" && item.role === "user") {
+  let remaining = turn.priorUserMessages;
+  if (remaining > 0)
+    for (let index = 0; index < transcript.length; index += 1) {
+      const item = transcript[index];
+      if (item?.kind !== "message" || item.role !== "user") continue;
       start = index + 1;
-      break;
+      remaining -= 1;
+      if (remaining === 0) break;
     }
-  }
   for (let index = start; index < transcript.length; index += 1) {
     const item = transcript[index];
     if (
       item?.kind === "message" &&
       item.role === "assistant" &&
-      item.text === turn.text
+      item.text === text
     )
       return true;
   }
@@ -121,10 +171,10 @@ function alreadySettled(
  */
 export function mergeLiveTurn(
   transcript: readonly TranscriptItem[],
-  turn: TranscriptItem | null,
+  turn: LiveTurn | null,
 ): readonly TranscriptItem[] {
   if (turn === null || alreadySettled(transcript, turn)) return transcript;
-  return [...transcript, turn];
+  return [...transcript, turn.item];
 }
 
 /** The prefix every optimistic steer echo's id carries. */
@@ -161,20 +211,73 @@ export interface PendingSteer {
    * Retiring only on a copy ABOVE the baseline keeps what counting got right
    * (two steers of the same words retire one echo per persisted copy) and
    * drops the false positive.
+   *
+   * Meaningless for a steer Pi will rewrite (`isRewrittenByPi`), which uses
+   * `priorUserMessages` instead.
    */
   priorCopies: number;
+  /**
+   * How many user messages of ANY text the transcript held at the same
+   * moment. The baseline for a steer whose stored text the client cannot
+   * predict; see `isRewrittenByPi`.
+   */
+  priorUserMessages: number;
 }
 
-/** How many user messages in `transcript` carry exactly this text. */
+/**
+ * Whether Pi will store something other than the text we sent.
+ *
+ * `AgentSession.steer` rewrites the text before queueing it, and both
+ * rewrites are gated on the same prefix: `_expandSkillCommand` turns
+ * `/skill:name args` into a `<skill name=… location=…>…</skill>` wrapper, and
+ * `expandPromptTemplate` replaces `/name args` wholesale when `name` matches
+ * a prompt template. (An extension command never gets this far: `steer`
+ * throws on one, so the request fails and no echo is ever minted.)
+ *
+ * The prefix is deliberately the whole test rather than a guess at which
+ * skills and templates exist. It over-triggers — `/tmp is full` is rewritten
+ * by nothing — and over-triggering costs only a weaker retirement rule,
+ * while under-triggering costs an echo that can never retire and is then
+ * reported as never delivered.
+ */
+export function isRewrittenByPi(text: string): boolean {
+  return text.startsWith("/");
+}
+
+function isUserMessage(
+  item: TranscriptItem,
+): item is Extract<TranscriptItem, { kind: "message" }> {
+  return item.kind === "message" && item.role === "user";
+}
+
+/**
+ * How many user messages in `transcript` carry exactly this text.
+ *
+ * Client-minted echoes do not count, for the same reason they do not count in
+ * `dropSettledSteers`: one function mints the baseline the other spends, and
+ * a baseline that counted echoes would be spent against a count that did not.
+ * Both callers pass the authoritative transcript today, so this changes no
+ * behaviour — it removes the trap for the caller that does not.
+ */
 export function countUserMessages(
   transcript: readonly TranscriptItem[],
   text: string,
 ): number {
   let count = 0;
   for (const item of transcript) {
-    if (item.kind !== "message" || item.role !== "user") continue;
+    if (!isUserMessage(item) || isSteerEcho(item)) continue;
     if (item.text === text) count += 1;
   }
+  return count;
+}
+
+/** How many user messages `transcript` holds, echoes excluded. */
+export function countAllUserMessages(
+  transcript: readonly TranscriptItem[],
+): number {
+  let count = 0;
+  for (const item of transcript)
+    if (isUserMessage(item) && !isSteerEcho(item)) count += 1;
   return count;
 }
 
@@ -202,10 +305,12 @@ export function isSteerEcho(item: TranscriptItem): boolean {
  *    shows nothing until the run settles, because nothing was published.
  *  - it does not survive a reload for the same reason it is not in the query
  *    cache: it is state no fetch can reproduce.
- *  - a steer queued into a turn that is then STOPPED is never delivered and
- *    never persisted (Pi's agent loop returns on abort before it drains the
- *    queue, and nothing flushes it), so the pane hands that text back to the
- *    composer rather than dropping it. See `ThreadPane`.
+ *  - a steer queued into a turn that is then STOPPED is never delivered, so
+ *    the pane hands that text back to the composer rather than dropping it.
+ *    That is true because `PiOpenSession.stop` empties Pi's steering queue
+ *    before aborting; abort alone does not, and the queue outlives the run,
+ *    so without that the words would arrive attached to whatever the reader
+ *    sent next. See `ThreadPane` and `packages/pi-adapter`.
  */
 export function steerEchoItem(pending: PendingSteer): TranscriptItem {
   return {
@@ -231,6 +336,23 @@ export function steerEchoItem(pending: PendingSteer): TranscriptItem {
  * per persisted copy rather than both at the first. `transcript` must be the
  * authoritative one -- passing a transcript with echoes already merged in
  * would let an echo retire itself.
+ *
+ * Two refinements on that rule, and both are about what the client can
+ * honestly claim to recognise:
+ *
+ *  - SF1. A steer Pi REWRITES before storing (`isRewrittenByPi`) can never
+ *    match on text, so it is judged on the weaker fact the client still has:
+ *    a user message of any text arrived that was not there when it was sent.
+ *    Mid-run the only source of user messages is a steer landing, so this is
+ *    a good identity and a bad one is not on offer. Without it the echo
+ *    showed twice for the rest of the run and was then handed back to the
+ *    composer as "never delivered" -- of a message Pi had acted on.
+ *
+ *  - SF2. The baseline is CLAMPED to what the transcript currently holds, and
+ *    the clamp is returned so it persists. A transcript that shrinks between
+ *    mint and retirement (compaction) otherwise leaves a count that can never
+ *    exceed its baseline: the echo never retires, and is then reported
+ *    undelivered although Pi delivered it.
  */
 export function dropSettledSteers(
   transcript: readonly TranscriptItem[],
@@ -238,23 +360,41 @@ export function dropSettledSteers(
 ): readonly PendingSteer[] {
   if (pending.length === 0) return pending;
   const counts = new Map<string, number>();
+  let total = 0;
   for (const item of transcript) {
-    if (item.kind !== "message" || item.role !== "user") continue;
-    if (isSteerEcho(item)) continue;
+    if (!isUserMessage(item) || isSteerEcho(item)) continue;
+    total += 1;
     counts.set(item.text, (counts.get(item.text) ?? 0) + 1);
   }
   const kept: PendingSteer[] = [];
+  let changed = false;
   for (const steer of pending) {
-    const count = counts.get(steer.text) ?? 0;
-    if (count > steer.priorCopies) {
-      // Consumed, so a second echo of the same words is judged against what
-      // is left rather than against the same copy again.
-      counts.set(steer.text, count - 1);
+    const rewritten = isRewrittenByPi(steer.text);
+    const count = rewritten ? total : (counts.get(steer.text) ?? 0);
+    const minted = rewritten ? steer.priorUserMessages : steer.priorCopies;
+    const baseline = Math.min(minted, count);
+    if (count > baseline) {
+      // Consumed from BOTH ledgers: a second echo of the same words is
+      // judged against what is left rather than against the same copy again,
+      // and a copy that retired a recognisable echo must not go on to retire
+      // an unrecognisable one as well.
+      if (!rewritten) counts.set(steer.text, count - 1);
+      total -= 1;
+      changed = true;
       continue;
     }
-    kept.push(steer);
+    if (baseline === minted) {
+      kept.push(steer);
+      continue;
+    }
+    changed = true;
+    kept.push(
+      rewritten
+        ? { ...steer, priorUserMessages: baseline }
+        : { ...steer, priorCopies: baseline },
+    );
   }
-  return kept.length === pending.length ? pending : kept;
+  return changed ? kept : pending;
 }
 
 /**

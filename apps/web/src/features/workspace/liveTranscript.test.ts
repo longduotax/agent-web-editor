@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
 import {
+  countAllUserMessages,
   countUserMessages,
   dropSettledSteers,
   isReaderFacingDiagnostic,
@@ -10,6 +11,7 @@ import {
   mergePendingSteers,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
+  type LiveTurn,
   type PendingSteer,
 } from "./liveTranscript.js";
 
@@ -47,78 +49,125 @@ const asked: TranscriptItem = {
   timestamp: "2026-01-01T00:00:00.000Z",
 };
 
+/**
+ * The live turn as the pane holds it: the streamed item plus the baseline the
+ * pane measures when the turn begins. Computed with the same function the
+ * pane uses, so a test cannot pass by hand-writing a baseline the production
+ * path would never produce.
+ */
+function turnAfter(
+  transcript: readonly TranscriptItem[],
+  item: TranscriptItem,
+): LiveTurn {
+  return { item, priorUserMessages: countAllUserMessages(transcript) };
+}
+
 describe("reduceLiveTurn", () => {
   it("takes the newest streamed frame as the turn", () => {
-    const first = reduceLiveTurn(null, streaming("The Pomodoro"));
-    expect(first).toMatchObject({ text: "The Pomodoro" });
-    expect(reduceLiveTurn(first, streaming("The Pomodoro te"))).toMatchObject({
-      text: "The Pomodoro te",
-    });
+    const first = reduceLiveTurn(null, streaming("The Pomodoro"), 1);
+    expect(first).toMatchObject({ item: { text: "The Pomodoro" } });
+    expect(
+      reduceLiveTurn(first, streaming("The Pomodoro te"), 1),
+    ).toMatchObject({ item: { text: "The Pomodoro te" } });
   });
 
   // The server does re-send the same text (the last two frames of a 2,583
   // character answer were identical), and it stamps every frame with a fresh
   // timestamp that nothing renders. Neither may cost a re-render.
   it("returns the identical turn when a frame changes nothing that renders", () => {
-    const turn = reduceLiveTurn(null, streaming("Same"));
+    const turn = reduceLiveTurn(null, streaming("Same"), 1);
     expect(
-      reduceLiveTurn(turn, streaming("Same", "2026-01-01T00:00:09.000Z")),
+      reduceLiveTurn(turn, streaming("Same", "2026-01-01T00:00:09.000Z"), 1),
     ).toBe(turn);
   });
 
   it("lets the settled assistant turn take over from the placeholder", () => {
-    const streamed = reduceLiveTurn(null, streaming("Work in 25 minute"));
+    const streamed = reduceLiveTurn(null, streaming("Work in 25 minute"), 1);
     expect(
-      reduceLiveTurn(streamed, settled("Work in 25 minute blocks.")),
-    ).toMatchObject({ text: "Work in 25 minute blocks." });
+      reduceLiveTurn(streamed, settled("Work in 25 minute blocks."), 1),
+    ).toMatchObject({ item: { text: "Work in 25 minute blocks." } });
+  });
+
+  // B1's half of the identity rule. Every frame of one answer shares the
+  // baseline measured when that answer began, and the settled item closing
+  // the placeholder is the same turn -- but a frame arriving ON TOP of a
+  // settled item is the next turn, and gets a baseline of its own. Without
+  // that, a whole run's turns would be judged against the transcript as it
+  // stood before the first of them.
+  it("keeps one baseline for a turn, and takes a fresh one for the next", () => {
+    const first = reduceLiveTurn(null, streaming("Reading the file"), 1);
+    expect(reduceLiveTurn(first, settled("Read it."), 2)).toMatchObject({
+      priorUserMessages: 1,
+    });
+    const closed = reduceLiveTurn(first, settled("Read it."), 2);
+    // A steer landed and was persisted between the turns, so the next turn
+    // begins against a transcript with one more user message in it.
+    expect(reduceLiveTurn(closed, streaming("Now the"), 2)).toMatchObject({
+      priorUserMessages: 2,
+    });
   });
 
   // `live-<uuid>` is the id the adapter gives EVERY settled item, and
   // `translateMessage` maps user and system roles as readily as assistant. A
   // steer landing mid-stream must not wipe the answer being streamed.
   it("ignores a settled user or system message instead of ending the turn", () => {
-    const streamed = reduceLiveTurn(null, streaming("Half an answ"));
+    const streamed = reduceLiveTurn(null, streaming("Half an answ"), 1);
     expect(
-      reduceLiveTurn(streamed, {
-        id: "live-11111111-1111-4111-8111-111111111111",
-        kind: "message",
-        role: "user",
-        text: "actually, stop",
-        timestamp: "2026-01-01T00:00:03.000Z",
-      }),
+      reduceLiveTurn(
+        streamed,
+        {
+          id: "live-11111111-1111-4111-8111-111111111111",
+          kind: "message",
+          role: "user",
+          text: "actually, stop",
+          timestamp: "2026-01-01T00:00:03.000Z",
+        },
+        1,
+      ),
     ).toBe(streamed);
     expect(
-      reduceLiveTurn(streamed, {
-        id: "live-22222222-2222-4222-8222-222222222222",
-        kind: "message",
-        role: "system",
-        text: "compacted",
-        timestamp: "2026-01-01T00:00:03.000Z",
-      }),
+      reduceLiveTurn(
+        streamed,
+        {
+          id: "live-22222222-2222-4222-8222-222222222222",
+          kind: "message",
+          role: "system",
+          text: "compacted",
+          timestamp: "2026-01-01T00:00:03.000Z",
+        },
+        1,
+      ),
     ).toBe(streamed);
   });
 
   it("ignores tool and diagnostic items", () => {
-    const streamed = reduceLiveTurn(null, streaming("Reading"));
+    const streamed = reduceLiveTurn(null, streaming("Reading"), 1);
     expect(
-      reduceLiveTurn(streamed, {
-        id: "t1",
-        kind: "tool",
-        name: "read",
-        status: "running",
-        input: "{}",
-        output: "",
-        cwd: null,
-        exitCode: null,
-        timestamp: null,
-      }),
+      reduceLiveTurn(
+        streamed,
+        {
+          id: "t1",
+          kind: "tool",
+          name: "read",
+          status: "running",
+          input: "{}",
+          output: "",
+          cwd: null,
+          exitCode: null,
+          timestamp: null,
+        },
+        1,
+      ),
     ).toBe(streamed);
   });
 });
 
 describe("mergeLiveTurn", () => {
   it("appends the in-progress turn to the authoritative transcript", () => {
-    const merged = mergeLiveTurn([asked], streaming("The Pomodoro"));
+    const merged = mergeLiveTurn(
+      [asked],
+      turnAfter([asked], streaming("The Pomodoro")),
+    );
     expect(merged).toHaveLength(2);
     expect(merged[1]).toMatchObject({ text: "The Pomodoro" });
   });
@@ -153,15 +202,19 @@ describe("mergeLiveTurn", () => {
         timestamp: "2026-01-01T00:00:03.000Z",
       },
     ];
+    // The turn began when the transcript held only the prompt.
     expect(
-      mergeLiveTurn(transcript, settled("Work in 25 minute blocks.")),
+      mergeLiveTurn(
+        transcript,
+        turnAfter([asked], settled("Work in 25 minute blocks.")),
+      ),
     ).toBe(transcript);
   });
 
   // Pi does repeat itself across turns -- "The directory contains .git and
   // README.md." appeared twice in one real thread. An identical sentence from
   // an earlier turn is not this turn.
-  it("only treats matches after the last user message as this turn", () => {
+  it("does not mistake an identical sentence from an earlier turn for this one", () => {
     const transcript: TranscriptItem[] = [
       {
         id: "a-old",
@@ -172,11 +225,40 @@ describe("mergeLiveTurn", () => {
       },
       { ...asked, id: "u2", text: "check again" },
     ];
+    // "check again" is the prompt that STARTED this turn, so it is part of
+    // the baseline, and the sentence above it belongs to an earlier turn.
     const merged = mergeLiveTurn(
       transcript,
-      streaming("The directory contains .git and README.md."),
+      turnAfter(
+        transcript,
+        streaming("The directory contains .git and README.md."),
+      ),
     );
     expect(merged).toHaveLength(3);
+  });
+
+  // B1. Pi drains its steering queue AFTER the turn in flight, so a steer it
+  // persists lands BELOW the assistant message. Anchoring the window on the
+  // last user message therefore put the settled turn outside it, and the live
+  // copy was appended a second time -- the whole answer drawn twice, under
+  // the reader's own steer, until the next turn's first token replaced it.
+  it("stops appending the settled turn once a steer is persisted after it", () => {
+    const transcript: TranscriptItem[] = [
+      { ...asked, id: "u1", text: "do the thing" },
+      {
+        id: "pi-answer",
+        kind: "message",
+        role: "assistant",
+        text: "Here is the answer.",
+        timestamp: "2026-01-01T00:00:02.000Z",
+      },
+      { ...asked, id: "u2", text: "also add tests" },
+    ];
+    // The turn began when the transcript held only the prompt: "also add
+    // tests" arrived AFTER it, so it cannot be the prompt that started it.
+    const askedFirst = transcript.slice(0, 1);
+    const turn = turnAfter(askedFirst, settled("Here is the answer."));
+    expect(mergeLiveTurn(transcript, turn)).toBe(transcript);
   });
 });
 
@@ -213,6 +295,7 @@ describe("pending steers", () => {
       text,
       ordinal,
       priorCopies: countUserMessages(transcript, text),
+      priorUserMessages: countAllUserMessages(transcript),
     };
   }
 
@@ -300,6 +383,56 @@ describe("pending steers", () => {
     // The surviving echo is the same bubble it was a frame ago. Deriving the
     // id from the array index remounted it when its neighbour retired.
     expect(after.at(0)?.id).toBe(before.at(1)?.id);
+  });
+
+  // SF1. `AgentSession.steer` rewrites a `/`-prefixed message before Pi
+  // stores it -- `/skill:foo` becomes a `<skill …>…</skill>` wrapper, and a
+  // `/name args` matching a prompt template is replaced wholesale. The stored
+  // text is therefore never the text we sent, so text equality can never
+  // retire the echo: it showed twice for the rest of the run, and was then
+  // handed back to the composer under the words "never delivered" -- of a
+  // message Pi had acted on.
+  it("retires a rewritten `/` steer on the arrival Pi's rewrite hides", () => {
+    const before = [user("Explore the repo")];
+    const pending = [mint(before, "/skill:review the diff")];
+    // Nothing new has arrived: still pending, and still on screen.
+    expect(dropSettledSteers(before, pending)).toBe(pending);
+    // Pi stored the expansion. The text does not match and never will, but a
+    // user message that was not there before is the steer landing.
+    const expanded = user(
+      '<skill name="review" location="/skills/review.md">…</skill>',
+      "pi-expanded",
+    );
+    expect(dropSettledSteers([...before, expanded], pending)).toEqual([]);
+  });
+
+  it("does not let one landing retire both a matching and a rewritten steer", () => {
+    const before = [user("Explore the repo")];
+    const both = [mint(before, "use pnpm"), mint(before, "/tidy")];
+    // Only the recognisable one landed. The rewritten one must not be
+    // retired by the copy that already retired its neighbour.
+    const landed = [...before, user("use pnpm", "pi-steer")];
+    expect(dropSettledSteers(landed, both)).toEqual([both[1]]);
+  });
+
+  // SF2. Compaction rewrites Pi's history, so the transcript can LOSE a copy
+  // between mint and retirement. The count could then never exceed the
+  // baseline: the echo duplicated for the rest of the run and was reported
+  // undelivered although Pi delivered it.
+  it("re-arms an echo whose baseline a shrinking transcript left stranded", () => {
+    const before = [user("continue", "a"), user("continue", "b")];
+    const pending = [mint(before, "continue")];
+    expect(pending[0]?.priorCopies).toBe(2);
+    // Compaction took a copy with it, and this steer has landed.
+    const compacted = dropSettledSteers([user("continue", "c")], pending);
+    expect(compacted).toEqual([{ ...pending[0], priorCopies: 1 }]);
+    // The clamp is returned, not recomputed, so the next copy retires it.
+    expect(
+      dropSettledSteers(
+        [user("continue", "c"), user("continue", "d")],
+        compacted,
+      ),
+    ).toEqual([]);
   });
 
   it("leaves the transcript untouched when nothing is pending", () => {

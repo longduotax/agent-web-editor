@@ -904,7 +904,41 @@ class PiOpenSession implements OpenRuntimeSession {
   public async steer(text: string): Promise<void> {
     await this.session.steer(text);
   }
+  /**
+   * Stop the run, and take Pi's steering queue with it.
+   *
+   * Aborting does not empty that queue. `AgentSession.abort()` is
+   * `abortRetry(); agent.abort(); waitForIdle()` and `Agent.abort()` is
+   * `this.activeRun?.abortController.abort()` — neither touches
+   * `steeringQueue`. The queue belongs to the SESSION, and `openRuntime`
+   * memoises one session per thread for its whole life, so a steer stranded
+   * by a Stop survives the run: the next `prompt()` drains it before the
+   * model call (`runLoop` polls `getSteeringMessages` at its head) and emits
+   * the `message_start`/`message_end` pair that persists it. The user is told
+   * their words were never delivered, is handed the text back in the
+   * composer, presses Enter — and Pi has the instruction twice. For "delete
+   * the temp files" that is not cosmetic, and because the app moves the text
+   * INTO the composer, the double send is the action the UI invites rather
+   * than a hazard the reader might stumble into.
+   *
+   * Cleared BEFORE the abort, which is the order Pi's own TUI uses
+   * (`restoreQueuedMessagesToEditor` clears the queue and only then calls
+   * `agent.abort()`). The order is load-bearing: of the two abort outcomes in
+   * `agent-loop.js`, aborting during the model stream returns before the
+   * drain and persists nothing, while aborting during tool execution returns
+   * NORMALLY, reaches the end-of-turn drain and persists the queued steer on
+   * the next pass. Clearing first empties that drain, so both branches now
+   * agree with what the pane tells the reader.
+   *
+   * The `clearQueue` guard is deliberate: it is present on the installed
+   * `@earendil-works/pi-coding-agent@0.84.2` and is what the TUI calls, but a
+   * Pi that does not have it must still be able to stop a run.
+   */
   public async stop(): Promise<void> {
+    const clearQueue: unknown = (this.session as Partial<AgentSession>)
+      .clearQueue;
+    if (typeof clearQueue === "function")
+      Reflect.apply(clearQueue, this.session, []);
     await this.session.abort();
   }
   public subscribe(listener: (event: RuntimeEvent) => void): () => void {

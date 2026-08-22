@@ -1228,3 +1228,64 @@ describe("PiOpenSession preflight boundary", () => {
     });
   });
 });
+
+// B2. The pane tells a reader whose Stop stranded a steer that the message
+// was "never delivered" and hands the text back to the composer. That was
+// false: neither `AgentSession.abort()` nor `Agent.abort()` empties
+// `steeringQueue`, the queue belongs to the one session this thread reuses
+// for every run, and the next `prompt()` drains it BEFORE the model call. So
+// the reader pressed Enter on text Pi already held, and the instruction ran
+// twice. Pi's own TUI clears the queue on abort; this adapter did not.
+describe("stopping a run", () => {
+  async function stoppableSession(session: Record<string, unknown>) {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        subscribe: () => () => undefined,
+        prompt: () => new Promise<void>(() => undefined),
+        steer: () => Promise.resolve(),
+        dispose: () => undefined,
+        ...session,
+      },
+    });
+    return await new PiAgentRuntime().open(context.project, sessionId);
+  }
+
+  it("clears the steering queue, so a stranded steer cannot ride the next prompt", async () => {
+    const calls: string[] = [];
+    const opened = await stoppableSession({
+      clearQueue: () => {
+        calls.push("clearQueue");
+        return { steering: [], followUp: [] };
+      },
+      abort: () => {
+        calls.push("abort");
+        return Promise.resolve();
+      },
+    });
+
+    await opened.stop();
+
+    // Before the abort, which is the order Pi's own TUI uses. Aborting during
+    // a TOOL call returns normally and reaches the end-of-turn drain, so a
+    // queue cleared afterwards would already have been drained and persisted.
+    expect(calls).toEqual(["clearQueue", "abort"]);
+  });
+
+  it("still stops a run on a Pi that has no clearQueue", async () => {
+    let aborted = false;
+    const opened = await stoppableSession({
+      abort: () => {
+        aborted = true;
+        return Promise.resolve();
+      },
+    });
+
+    await expect(opened.stop()).resolves.toBeUndefined();
+    expect(aborted).toBe(true);
+  });
+});
