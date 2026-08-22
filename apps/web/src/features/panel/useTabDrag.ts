@@ -59,7 +59,6 @@ export interface TabDragState {
   tabId: TabId;
   /** The dragged tab's title, for the ghost and the announcements. */
   title: string;
-  sourceGroupId: GroupId;
   /** What a release here would do, or null over no target at all. */
   target: DropTarget | null;
   /** The rectangles measured when the drag began. */
@@ -343,7 +342,6 @@ export function useTabDrag(
     setDrag({
       tabId: current.tabId,
       title: current.title,
-      sourceGroupId: current.groupId,
       target: next,
       zones: zones.current,
     });
