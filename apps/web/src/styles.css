@@ -886,27 +886,42 @@ a:focus-visible {
   margin: -5px 0;
   cursor: row-resize;
 }
+/* The seam between panes is always drawn as a hairline, so a split reads as
+   two panes even at rest; grabbing it turns the same line blue. The line is
+   centred in the 10px hit area so its width can change without reflowing. */
 .tiling-divider::after {
   position: absolute;
-  background: transparent;
+  background: var(--hairline-2);
   content: "";
 }
 .tiling-split-row > .tiling-divider::after {
   top: 0;
   bottom: 0;
-  left: 4px;
-  width: 2px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
 }
 .tiling-split-column > .tiling-divider::after {
-  top: 4px;
+  top: 50%;
   right: 0;
   left: 0;
-  height: 2px;
+  height: 1px;
+  transform: translateY(-50%);
 }
 .tiling-divider:hover::after,
 .tiling-divider:focus-visible::after,
 .tiling-divider.resizing::after {
   background: var(--blue);
+}
+.tiling-split-row > .tiling-divider:hover::after,
+.tiling-split-row > .tiling-divider:focus-visible::after,
+.tiling-split-row > .tiling-divider.resizing::after {
+  width: 2px;
+}
+.tiling-split-column > .tiling-divider:hover::after,
+.tiling-split-column > .tiling-divider:focus-visible::after,
+.tiling-split-column > .tiling-divider.resizing::after {
+  height: 2px;
 }
 .tiling-divider:focus-visible {
   outline: none;
