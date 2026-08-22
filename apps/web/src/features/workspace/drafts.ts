@@ -1,40 +1,8 @@
-interface DraftStorage {
-  getItem(key: string): unknown;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
-function storageMethods(value: object): DraftStorage | null {
-  if (
-    !("getItem" in value) ||
-    !("setItem" in value) ||
-    !("removeItem" in value)
-  )
-    return null;
-  const { getItem, setItem, removeItem } = value;
-  if (
-    typeof getItem !== "function" ||
-    typeof setItem !== "function" ||
-    typeof removeItem !== "function"
-  )
-    return null;
-  return {
-    getItem: getItem.bind(value) as (key: string) => unknown,
-    setItem: setItem.bind(value) as (key: string, stored: string) => void,
-    removeItem: removeItem.bind(value) as (key: string) => void,
-  };
-}
-
-function draftStorage(): DraftStorage | null {
-  const storage: unknown = globalThis.localStorage;
-  return typeof storage === "object" && storage !== null
-    ? storageMethods(storage)
-    : null;
-}
+import { preferenceStorage } from "../storage/preferenceStorage.js";
 
 export function readDraft(key: string): string {
   try {
-    const value = draftStorage()?.getItem(key);
+    const value = preferenceStorage()?.getItem(key);
     return typeof value === "string" ? value : "";
   } catch {
     // Browser storage can be disabled or replaced by an incomplete test shim.
@@ -47,8 +15,8 @@ export function writeDraft(key: string, value: string): void {
     // An empty draft is not a draft. Storing it left one key per pane the
     // user had merely opened, forever -- the keys are never revisited once
     // the pane is gone, so storage grew without bound.
-    if (value === "") draftStorage()?.removeItem(key);
-    else draftStorage()?.setItem(key, value);
+    if (value === "") preferenceStorage()?.removeItem(key);
+    else preferenceStorage()?.setItem(key, value);
   } catch {
     // Draft persistence is best-effort.
   }
@@ -56,7 +24,7 @@ export function writeDraft(key: string, value: string): void {
 
 export function removeDraft(key: string): void {
   try {
-    draftStorage()?.removeItem(key);
+    preferenceStorage()?.removeItem(key);
   } catch {
     // Draft persistence is best-effort.
   }

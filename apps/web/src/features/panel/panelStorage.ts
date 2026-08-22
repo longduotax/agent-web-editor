@@ -3,6 +3,8 @@ import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
 
 import { normalizeSizes } from "../layout/binaryTree.js";
 import type { TreeNode } from "../layout/binaryTree.js";
+import { preferenceStorage } from "../storage/preferenceStorage.js";
+import type { PreferenceStorage } from "../storage/preferenceStorage.js";
 import { clampPanelWidth } from "./panelGeometry.js";
 import {
   createEmptyPanel,
@@ -146,40 +148,6 @@ function normalizedTree(node: GroupNode): GroupNode {
     ],
     sizes: normalizeSizes(node.sizes),
   };
-}
-
-interface PreferenceStorage {
-  getItem(key: string): unknown;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
-function storageMethods(value: object): PreferenceStorage | null {
-  if (
-    !("getItem" in value) ||
-    !("setItem" in value) ||
-    !("removeItem" in value)
-  )
-    return null;
-  const { getItem, setItem, removeItem } = value;
-  if (
-    typeof getItem !== "function" ||
-    typeof setItem !== "function" ||
-    typeof removeItem !== "function"
-  )
-    return null;
-  return {
-    getItem: getItem.bind(value) as (key: string) => unknown,
-    setItem: setItem.bind(value) as (key: string, stored: string) => void,
-    removeItem: removeItem.bind(value) as (key: string) => void,
-  };
-}
-
-function preferenceStorage(): PreferenceStorage | null {
-  const storage: unknown = globalThis.localStorage;
-  return typeof storage === "object" && storage !== null
-    ? storageMethods(storage)
-    : null;
 }
 
 // How deeply a stored record may nest. The panel's tree costs two JSON
