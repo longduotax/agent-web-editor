@@ -18,8 +18,27 @@ import {
   writeDraft,
 } from "./drafts.js";
 import type { PaneId } from "./layoutTree.js";
+import { isReleaseKey, releaseFocusToPane } from "./paneFocus.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
+
+/**
+ * Example first messages, written for what this tool actually is: a coding
+ * agent pointed at a local git checkout. They are deliberately things you
+ * would only ask an agent that can read the tree, run commands and read
+ * history — not generic "ask me anything" filler, which would tell a first-
+ * time user nothing about what the box in front of them is for.
+ *
+ * The base branch is interpolated so the third one names this project's real
+ * branch rather than a placeholder.
+ */
+function starterPrompts(baseBranch: string): readonly string[] {
+  return [
+    "Walk the repository and tell me how it is laid out. Do not change anything yet.",
+    "Run the test suite, then fix whatever fails.",
+    `Summarise the last ten commits on ${baseBranch || "this branch"} and what they were for.`,
+  ];
+}
 
 export interface NewChatPaneProps {
   projectId: ProjectId;
@@ -143,6 +162,9 @@ export function NewChatPane(props: NewChatPaneProps) {
       className={`pane new-chat-pane ${focused ? "focused" : "dim"}`}
       aria-label="New chat"
       aria-current={focused ? "true" : undefined}
+      // Escape in the composer parks focus here (see paneFocus.ts). Not in
+      // the tab order -- this is a landing site, not a stop.
+      tabIndex={-1}
       onClick={() => {
         props.onFocus();
       }}
@@ -166,6 +188,85 @@ export function NewChatPane(props: NewChatPaneProps) {
         }}
       />
       <main className="center new-chat">
+        {sentPrompt === null && (
+          // ~450px of empty white sat here: a header, a composer, and nothing
+          // in between, on the screen where a first-time user decides what
+          // this tool is. Two things fill it, and both are things the pane
+          // could not say any other way -- the examples show what a good
+          // first message to a coding agent looks like, and the second block
+          // explains the three selects, whose options are otherwise invisible
+          // until you open each dropdown. Both go away the moment a message
+          // is sent; they are orientation, not chrome.
+          <div className="new-chat-intro">
+            <section
+              className="new-chat-block"
+              aria-labelledby={`new-chat-examples-${paneId}`}
+            >
+              <h2
+                className="new-chat-block-title"
+                id={`new-chat-examples-${paneId}`}
+              >
+                Example first messages
+              </h2>
+              <ul className="new-chat-examples">
+                {starterPrompts(baseBranch).map((example) => (
+                  <li key={example}>
+                    <button
+                      type="button"
+                      className="new-chat-example"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setText(example);
+                        setCreationKey(commandId());
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      {example}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="new-chat-block-note">
+                Clicking one fills the box below. Nothing is sent until you
+                press Enter.
+              </p>
+            </section>
+            <section
+              className="new-chat-block"
+              aria-labelledby={`new-chat-choices-${paneId}`}
+            >
+              <h2
+                className="new-chat-block-title"
+                id={`new-chat-choices-${paneId}`}
+              >
+                The three choices below
+              </h2>
+              <dl className="new-chat-choices">
+                <dt>New worktree</dt>
+                <dd>
+                  A second checkout of this project in its own directory, cut
+                  from the base branch you pick. Pi&apos;s edits never touch the
+                  files you have open.
+                </dd>
+                <dt>Local checkout</dt>
+                <dd>
+                  The directory you added. Pi edits the same files you do.
+                </dd>
+                <dt>Clean start</dt>
+                <dd>
+                  Begins at the last commit on the base branch. Nothing
+                  uncommitted comes across.
+                </dd>
+                <dt>Include local changes</dt>
+                <dd>
+                  Copies your uncommitted tracked and untracked files in first.
+                  Offered only when the base branch is the one you have checked
+                  out and there is something to copy.
+                </dd>
+              </dl>
+            </section>
+          </div>
+        )}
         {sentPrompt !== null && (
           // Sits on the same reading column as the card below it, so the
           // echoed message lands where the transcript will render it a moment
@@ -338,6 +439,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                 setCreationKey(commandId());
               }}
               onKeyDown={(event) => {
+                if (isReleaseKey(event)) {
+                  event.preventDefault();
+                  releaseFocusToPane(event.currentTarget);
+                  return;
+                }
                 if (
                   event.key !== "Enter" ||
                   event.shiftKey ||
@@ -352,7 +458,7 @@ export function NewChatPane(props: NewChatPaneProps) {
               <span>
                 {create.isPending
                   ? "Naming and preparing workspace…"
-                  : "Enter to send · Shift + Enter for a new line"}
+                  : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
               </span>
               <button
                 type="submit"

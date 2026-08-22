@@ -44,6 +44,13 @@ import { MIN_PANE_WIDTH_PX, TilingSurface } from "./TilingSurface.js";
 // ".transcript {") from the stylesheet source. Used to assert on the actual
 // shipped CSS properties (not just a class name) since jsdom does not apply
 // external stylesheets, so computed styles in tests can't reflect them.
+async function stylesheet(): Promise<string> {
+  return await readFile(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../styles.css"),
+    "utf8",
+  );
+}
+
 function ruleBody(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`\\n${escaped}\\s*\\{([^}]*)\\}`).exec(css);
@@ -584,7 +591,8 @@ describe("TilingSurface", () => {
       expect(MIN_PANE_WIDTH_PX).toBe(360);
     });
 
-    it("gives the surface a horizontal scroll container whose content never shrinks panes below MIN_PANE_WIDTH_PX", () => {
+    it("gives the surface a horizontal scroll container whose content never shrinks panes below MIN_PANE_WIDTH_PX", async () => {
+      const css = await stylesheet();
       const { getController, container } = renderSurface();
 
       // Split repeatedly to build up more panes than would comfortably fit
@@ -600,13 +608,38 @@ describe("TilingSurface", () => {
 
       const surface = container.querySelector(":scope > .tiling-surface");
       if (surface === null) throw new Error("surface container not found");
-      expect(getComputedStyle(surface).overflowX).toBe("auto");
+      expect(ruleBody(css, ".tiling-surface")).toMatch(/overflow-x:\s*auto/);
 
       const tiles = surface.querySelector(":scope > .tiling-tiles");
       if (tiles === null) throw new Error("tiles container not found");
       expect(getComputedStyle(tiles).minWidth).toBe(
         `${String(paneCount * MIN_PANE_WIDTH_PX)}px`,
       );
+    });
+
+    // The total floor above says the surface is WIDE enough for every pane at
+    // the minimum; it says nothing about how the width is divided. Measured
+    // in the browser: three panes at a 0.5 / 0.25 / 0.25 split and 1080px of
+    // tiles came out 540 / 270 / 270 -- two panes 25% under the minimum
+    // CWS-07 promises they never go below. The clamp is per region, and the
+    // ancestors must carry `min-width: auto` or a clamped region simply
+    // overflows its split-child and paints over the neighbouring pane.
+    it("clamps every pane to MIN_PANE_WIDTH_PX individually, not just in total", async () => {
+      const css = await stylesheet();
+      const { container } = renderSurface();
+
+      const surface = container.querySelector(":scope > .tiling-surface");
+      if (surface === null) throw new Error("surface container not found");
+      // One source for the number: the stylesheet reads it from the element.
+      expect(
+        (surface as HTMLElement).style.getPropertyValue("--pane-min-width"),
+      ).toBe(`${String(MIN_PANE_WIDTH_PX)}px`);
+
+      expect(ruleBody(css, ".tiling-region")).toMatch(
+        /min-width:\s*var\(--pane-min-width/,
+      );
+      expect(ruleBody(css, ".tiling-split")).toMatch(/min-width:\s*auto/);
+      expect(ruleBody(css, ".tiling-split-child")).toMatch(/min-width:\s*auto/);
     });
 
     it("keeps the surface's min-width at exactly one pane's worth when only one pane is open", async () => {

@@ -12,7 +12,13 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
-import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId, ThreadSnapshot } from "@pi-web/contracts";
 
@@ -120,6 +126,13 @@ function ThreadLinks({ ids }: { ids: ThreadId[] }) {
   );
 }
 
+// Surfaces the current route so a test can assert what the URL says the
+// workspace is showing.
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location">{location.pathname}</p>;
+}
+
 function renderWorkspace(
   initialEntry: string,
   options?: {
@@ -177,6 +190,7 @@ function renderWorkspace(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
         {links}
+        <LocationProbe />
         <Routes>
           <Route
             path="/projects/:projectId"
@@ -404,6 +418,109 @@ describe("WorkspaceView", () => {
       await screen.findByRole("region", { name: "Example thread" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("No panes are open.")).not.toBeInTheDocument();
+  });
+
+  // N2. Closing a pane left the URL describing it. Reloading then re-resolved
+  // that URL and brought the pane back, so "close" and "reload" cancelled each
+  // other out and the URL was not a truthful description of the workspace.
+  describe("the route after a pane is closed", () => {
+    it("leaves /new for the remaining pane's thread when the new-chat pane is closed", async () => {
+      renderWorkspace(`/projects/${projectId}/new`, {
+        seedStore: (store) => {
+          store.set(
+            `pi-workspace:layout:${projectId}`,
+            JSON.stringify({
+              version: 2,
+              root: {
+                type: "split",
+                id: "seeded-split",
+                axis: "row",
+                children: [
+                  { type: "pane", id: "seeded-thread" },
+                  { type: "pane", id: "seeded-new" },
+                ],
+                sizes: [0.5, 0.5],
+              },
+              panes: {
+                "seeded-thread": { threadId },
+                "seeded-new": { threadId: null },
+              },
+              focusedPaneId: "seeded-new",
+              boundPaneId: null,
+            }),
+          );
+        },
+      });
+      await screen.findByRole("region", { name: "New chat" });
+      expect(screen.getByTestId("location")).toHaveTextContent(
+        `/projects/${projectId}/new`,
+      );
+
+      fireEvent.click(closeButtonFor("New chat"));
+
+      expect(await screen.findByTestId("location")).toHaveTextContent(
+        `/projects/${projectId}/threads/${threadId}`,
+      );
+      expect(screen.queryByRole("region", { name: "New chat" })).toBeNull();
+    });
+
+    // Not a new-chat quirk: the same thing happened to a thread pane the URL
+    // named, so the fix is keyed on "did the route address the closed pane",
+    // not on the pane's kind.
+    it("leaves a thread route for the remaining pane's thread when that thread's pane is closed", async () => {
+      renderWorkspace(`/projects/${projectId}/threads/${threadId}`, {
+        seedStore: seedTwoPaneLayout,
+        snapshots: {
+          [threadId]: snapshot,
+          [otherThreadId]: otherSnapshot,
+        },
+      });
+      await screen.findByRole("region", { name: "Example thread" });
+
+      fireEvent.click(closeButtonFor("Example thread"));
+
+      expect(await screen.findByTestId("location")).toHaveTextContent(
+        `/projects/${projectId}/threads/${otherThreadId}`,
+      );
+    });
+
+    // Closing a pane the URL was never about must not renavigate underneath
+    // the user.
+    it("leaves the route alone when the closed pane is not the one the URL names", async () => {
+      renderWorkspace(`/projects/${projectId}/threads/${threadId}`, {
+        seedStore: seedTwoPaneLayout,
+        snapshots: {
+          [threadId]: snapshot,
+          [otherThreadId]: otherSnapshot,
+        },
+      });
+      await screen.findByRole("region", { name: "Other thread" });
+
+      fireEvent.click(closeButtonFor("Other thread"));
+
+      expect(screen.getByTestId("location")).toHaveTextContent(
+        `/projects/${projectId}/threads/${threadId}`,
+      );
+      expect(
+        screen.getByRole("region", { name: "Example thread" }),
+      ).toBeInTheDocument();
+    });
+
+    // With nothing left open the URL is the only record of where the user
+    // was. It is deliberately kept: the empty surface offers its own way
+    // back in, and NEW-R3-3's sidebar-relink behaviour depends on the route
+    // still naming that thread.
+    it("keeps the route when the last pane is closed", async () => {
+      renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+      await screen.findByRole("region", { name: "Example thread" });
+
+      fireEvent.click(closeButtonFor("Example thread"));
+
+      expect(screen.getByText("No panes are open.")).toBeInTheDocument();
+      expect(screen.getByTestId("location")).toHaveTextContent(
+        `/projects/${projectId}/threads/${threadId}`,
+      );
+    });
   });
 
   it("focuses/creates a pane for the thread named in the route on mount", async () => {

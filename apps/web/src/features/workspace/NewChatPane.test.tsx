@@ -215,3 +215,123 @@ describe("NewChatPane while the workspace is being prepared", () => {
     expect(screen.queryByText("Preparing")).toBeNull();
   });
 });
+
+// F8. The pane had a header, a composer, and ~450px of nothing in between --
+// on the screen where a first-time user decides what this tool is. The empty
+// space now carries the two things the pane could not say any other way.
+describe("NewChatPane's starter block", () => {
+  it("offers example first messages that put themselves in the composer", async () => {
+    const user = userEvent.setup();
+    renderNewChat();
+
+    const composer = await screen.findByRole("textbox", {
+      name: "First message",
+    });
+    const examples = screen.getAllByRole("button", {
+      name: /^(Walk the repository|Run the test suite|Summarise the last)/,
+    });
+    expect(examples).toHaveLength(3);
+
+    const example = examples[1];
+    if (example === undefined) throw new Error("expected an example");
+    const text = example.textContent;
+    await user.click(example);
+
+    // Filled and focused, but NOT sent -- clicking an example is a way to
+    // start writing, not a way to launch a run.
+    expect(composer).toHaveValue(text);
+    expect(composer).toHaveFocus();
+    expect(api.startThread).not.toHaveBeenCalled();
+  });
+
+  // The third example names the project's real base branch, so it reads as a
+  // thing to ask about THIS repository rather than a placeholder.
+  it("names the real base branch in the history example", async () => {
+    renderNewChat();
+    // The branch arrives with the preflight query, so the example starts on
+    // the neutral "this branch" and adopts the real one when it lands.
+    expect(
+      await screen.findByRole("button", { name: /Summarise the last ten/ }),
+    ).toHaveTextContent("the last ten commits on this branch");
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Summarise the last ten/ }),
+      ).toHaveTextContent("the last ten commits on master");
+    });
+  });
+
+  // The explanation must describe options that actually exist. The option
+  // labels are read from the rendered selects rather than restated here, so
+  // the copy cannot advertise a mode the app does not offer.
+  it("explains every option the two mode selects actually offer", async () => {
+    renderNewChat();
+    await screen.findByRole("textbox", { name: "First message" });
+
+    const optionLabels = ["Execution location", "Starting state"].flatMap(
+      (name) =>
+        [
+          ...screen.getByRole("combobox", { name }).querySelectorAll("option"),
+        ].map((option) => option.textContent),
+    );
+    expect(optionLabels).toEqual([
+      "New worktree",
+      "Local checkout",
+      "Clean start",
+      "Include local changes",
+    ]);
+
+    const terms = [...document.querySelectorAll(".new-chat-choices dt")].map(
+      (term) => term.textContent,
+    );
+    for (const label of optionLabels) expect(terms).toContain(label);
+  });
+
+  it("gets out of the way once a message is sent", async () => {
+    const user = userEvent.setup();
+    api.startThread.mockImplementation(
+      async () => await new Promise<never>(() => undefined),
+    );
+    renderNewChat();
+
+    const composer = await screen.findByRole("textbox", {
+      name: "First message",
+    });
+    await user.type(composer, "Go");
+    await user.keyboard("{Enter}");
+
+    expect(
+      screen.queryByRole("button", { name: /^Walk the repository/ }),
+    ).toBeNull();
+    expect(document.querySelector(".new-chat-intro")).toBeNull();
+  });
+});
+
+// F9. Escape used to leave both the value and document.activeElement
+// untouched, so once you were in a composer Tab was the only way out and
+// every pane shortcut the Settings page advertises was unreachable.
+describe("NewChatPane's composer on Escape", () => {
+  it("hands focus to the pane and keeps the draft", async () => {
+    const user = userEvent.setup();
+    renderNewChat();
+
+    const composer = await screen.findByRole("textbox", {
+      name: "First message",
+    });
+    await user.click(composer);
+    await user.paste("draft line one\ndraft line two");
+    expect(composer).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    const pane = screen.getByRole("region", { name: "New chat" });
+    expect(pane).toHaveFocus();
+    // The pane is a landing site for Escape, not a Tab stop.
+    expect(pane).toHaveAttribute("tabindex", "-1");
+    // Escape releases focus; it does not discard work.
+    expect(composer).toHaveValue("draft line one\ndraft line two");
+    expect(readDraft(newChatDraftKey(projectId, paneId))).toBe(
+      "draft line one\ndraft line two",
+    );
+  });
+});

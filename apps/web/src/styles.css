@@ -668,6 +668,13 @@ a:focus-visible {
   min-height: 0;
   flex-direction: column;
 }
+/* Escape in a composer parks focus on the pane shell (paneFocus.ts). The ring
+   is inset because the pane is flush against its neighbour and an outset one
+   would be clipped by .tiling-surface's scroll box. */
+.pane:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
 .pane > .center {
   flex: 1;
   min-height: 0;
@@ -675,6 +682,14 @@ a:focus-visible {
 /* The pane's ONE header: a title row plus an optional quiet detail line.
    Nothing below it restates the title, the run status or the trust note. */
 .pane-head {
+  /* A query container so the header responds to the PANE's width, not the
+     window's. At 1280px the same viewport holds a 964px pane or three 360px
+     ones, so a viewport media query cannot tell the two apart. Scoped to the
+     header rather than the whole pane: the smallest box that answers the
+     question, and nothing inside it is absolutely positioned, so the layout
+     containment this turns on cannot move anything. */
+  container-type: inline-size;
+  container-name: pane-head;
   display: flex;
   /* Pinned, not content-derived: every pane header and the panel's own
      top row share --header-h, so their bottom hairlines land on one line in
@@ -933,9 +948,22 @@ a:focus-visible {
 .tiling-tiles > .tiling-split-child {
   flex: 1;
 }
+/* CWS-07's minimum usable pane width, enforced PER PANE.
+   `--pane-min-width` is set on .tiling-surface from MIN_PANE_WIDTH_PX so the
+   number has one source (TilingSurface.tsx).
+
+   It used to be enforced only as a total (a min-width of paneCount x 360 on
+   .tiling-tiles), which is the right floor but says nothing about how the
+   space is divided. With three panes at a 0.5 / 0.25 / 0.25 split and 1080px
+   of tiles, the flex distribution handed out 540 / 270 / 270 -- two panes 25%
+   BELOW the minimum the spec guarantees they never go under. A min-width on
+   the region makes the flex algorithm clamp each pane instead, and the
+   ancestors carry `min-width: auto` so that clamp propagates up the split
+   tree into the surface's own scroll width rather than overflowing a
+   split-child and painting over its neighbour. */
 .tiling-region {
   display: flex;
-  min-width: 0;
+  min-width: var(--pane-min-width, 22.5rem);
   min-height: 0;
   flex: 1;
 }
@@ -944,7 +972,7 @@ a:focus-visible {
 }
 .tiling-split {
   display: flex;
-  min-width: 0;
+  min-width: auto;
   min-height: 0;
   flex: 1;
 }
@@ -956,7 +984,7 @@ a:focus-visible {
 }
 .tiling-split-child {
   display: flex;
-  min-width: 0;
+  min-width: auto;
   min-height: 0;
 }
 .tiling-divider {
@@ -1054,10 +1082,19 @@ a:focus-visible {
 }
 /* A block container, not a flex one: `text-overflow: ellipsis` only applies
    to a block container's own inline content, and this line must ellipsise
-   inside the single-row pane header rather than clip mid-word. */
+   inside the single-row pane header rather than clip mid-word.
+
+   `flex: none` because the note never shrinks. Both halves of the detail
+   line shrank proportionally by default, which ellipsised the WARNING as
+   readily as the branch name beside it -- at a 942px pane the full sentence
+   still lost its last 59px. A truncated identifier is recoverable (you
+   recognise a branch from its first characters); a truncated warning is
+   not. So the note takes the width it needs and .pane-meta absorbs the
+   difference. */
 .trust-note {
   display: block;
   min-width: 0;
+  flex: none;
   margin: 0;
   color: var(--muted);
 }
@@ -1069,6 +1106,41 @@ a:focus-visible {
 .trust-note strong {
   color: var(--muted);
   font-weight: 650;
+}
+/* The trust note is the one line in this header that must never be read
+   half-way. At a 360px pane the full sentence (587px of text) was ellipsised
+   to "Pi tools run with your user permissions, without appl..." -- a security
+   notice cut off exactly before the part that matters. It gets a short form
+   instead: still a whole sentence, still true, with the full wording on the
+   header's title attribute and in the accessibility tree either way.
+
+   Short is the DEFAULT and the long form is the enhancement, so a browser
+   without container query support shows the complete short notice rather
+   than a truncated long one. 48rem is where the full 587px sentence fits
+   with enough left over for the workspace label to stay readable
+   (measured). */
+.trust-note-long {
+  display: none;
+}
+.trust-note-short {
+  display: inline;
+}
+@container pane-head (min-width: 48rem) {
+  .trust-note-long {
+    display: inline;
+  }
+  .trust-note-short {
+    display: none;
+  }
+}
+/* The project chip repeats what the sidebar already says, and at a narrow
+   pane it was costing ~110px that the thread title needed to stay readable
+   ("Reply with ex..."). The title is the only thing in this row that
+   identifies the pane, so the chip yields to it. */
+@container pane-head (max-width: 30rem) {
+  .pane-head .repo {
+    display: none;
+  }
 }
 .trust-dot {
   width: 5px;
@@ -2465,6 +2537,30 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.82rem;
 }
+/* Sixteen of the nineteen shortcuts are pane or panel management, and the
+   three keys every user needs were the LAST rows of one flat nineteen-row
+   table. The list is grouped by the surface that owns the chord, Composer
+   first, so the common keys are the ones you land on. The subheadings match
+   .add-project-title -- the app already has one micro-label style and this
+   does not invent a second. */
+.shortcut-group + .shortcut-group,
+.settings-section h2 + .shortcut-group {
+  margin-top: 1.35rem;
+}
+.shortcut-group-heading {
+  display: block;
+  margin: 0 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.shortcut-group-note {
+  margin: 0 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
 .shortcut-list {
   display: grid;
   gap: 0.1rem;
@@ -2626,14 +2722,100 @@ a:focus-visible {
   white-space: nowrap;
   border: 0;
 }
+/* `justify-content: flex-end` used to hold the card at the bottom of an
+   otherwise empty pane. Now that there is content above the card, flex-end
+   would clip the TOP of any overflow (the classic flex-end scroll bug), so
+   the spare space is claimed by an auto margin on the first child instead:
+   identical when everything fits, scrollable from the top when it does not.
+   Everything stays bottom-anchored -- the starter block explains the card
+   directly below it and reads wrong floating at the far end of the pane. */
 .new-chat {
   align-items: stretch;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  overflow-y: auto;
   padding: 1.5rem 1.25rem 1rem;
+}
+.new-chat > :first-child {
+  margin-top: auto;
+}
+.new-chat-intro {
+  display: flex;
+  width: 100%;
+  max-width: var(--surface-measure);
+  flex: none;
+  flex-direction: column;
+  gap: 1.4rem;
+  margin-inline: auto;
+  padding-bottom: 1.5rem;
+}
+/* Same micro-label as .add-project-title: one style for section labels. */
+.new-chat-block-title {
+  display: block;
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.new-chat-examples {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.new-chat-example {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.6rem;
+  color: var(--text-2);
+  background: var(--card);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+.new-chat-example:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.new-chat-example:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.new-chat-block-note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+/* Term over description rather than two columns: "Include local changes" is
+   long enough that a term column would either wrap badly or eat a third of a
+   360px pane. */
+.new-chat-choices {
+  margin: 0;
+}
+.new-chat-choices dt {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.new-chat-choices dd {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.new-chat-choices dd:last-child {
+  margin-bottom: 0;
 }
 .new-chat-card {
   width: 100%;
   max-width: var(--surface-measure);
+  flex: none;
   margin-inline: auto;
   overflow: hidden;
   border: 1px solid var(--hairline-2);

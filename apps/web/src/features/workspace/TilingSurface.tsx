@@ -1,6 +1,7 @@
 import {
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -50,7 +51,19 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   const paneCount = tiledPaneIds(controller.layout).length;
 
   return (
-    <div className="tiling-surface" style={{ overflowX: "auto" }}>
+    // `--pane-min-width` is the one number behind CWS-07's minimum: the
+    // stylesheet clamps each .tiling-region to it, so the constant lives here
+    // and cannot drift from the CSS. The total floor on .tiling-tiles is kept
+    // as a backstop -- it is what guarantees the surface can still SCROLL to
+    // reach every pane if a future rule ever relaxes a region's minimum.
+    <div
+      className="tiling-surface"
+      style={
+        {
+          "--pane-min-width": `${String(MIN_PANE_WIDTH_PX)}px`,
+        } as CSSProperties
+      }
+    >
       <div
         className="tiling-tiles"
         style={{ minWidth: paneCount * MIN_PANE_WIDTH_PX }}

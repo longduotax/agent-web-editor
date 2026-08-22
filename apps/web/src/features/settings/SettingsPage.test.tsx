@@ -18,6 +18,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 });
 
 import {
+  asPanelCommand,
   detectPlatform,
   shortcutKeys,
   WORKSPACE_KEYBINDINGS,
@@ -120,6 +121,70 @@ describe("SettingsPage", () => {
     expect(within(shortcuts).queryByText(/bind/i)).not.toBeInTheDocument();
     // The composer hints live here too, so this is the one place to look.
     expect(within(shortcuts).getByText("Send a message")).toBeVisible();
+  });
+
+  // F14. Nineteen rows in one undifferentiated table, sixteen of them pane or
+  // panel management, and the three keys every user needs were the LAST rows.
+  it("groups the shortcuts by surface, with the composer's keys first", () => {
+    stubMatchMedia();
+    renderSettings();
+
+    const shortcuts = screen.getByRole("heading", {
+      name: "Keyboard shortcuts",
+    }).parentElement;
+    if (shortcuts === null) throw new Error("expected a shortcuts section");
+
+    expect(
+      [...shortcuts.querySelectorAll(".shortcut-group-heading")].map(
+        (heading) => heading.textContent,
+      ),
+    ).toEqual(["Composer", "Panes", "Workspace panel"]);
+
+    const groups = [
+      ...shortcuts.querySelectorAll<HTMLElement>(".shortcut-group"),
+    ];
+    const [composer, panes, panel] = groups;
+    if (composer === undefined || panes === undefined || panel === undefined)
+      throw new Error("expected three shortcut groups");
+
+    // The keys a user needs on day one, in the first group.
+    for (const label of [
+      "Send a message",
+      "New line in a message",
+      "Leave the composer, keeping the draft",
+    ])
+      expect(within(composer).getByText(label)).toBeVisible();
+
+    // Every chord is filed under the surface that actually handles it, and
+    // the split is derived from the command rather than restated, so it
+    // cannot drift from resolveCommand.
+    for (const binding of WORKSPACE_KEYBINDINGS) {
+      const owner = asPanelCommand(binding.command) === null ? panes : panel;
+      expect(
+        within(owner).getByText(binding.label),
+        `${binding.label} is filed under the wrong surface`,
+      ).toBeVisible();
+    }
+  });
+
+  // Bare ⇞ / ⇟ are unreadable to most people, and this list is the only place
+  // these chords are documented at all.
+  it("spells out Page Up and Page Down instead of printing the glyphs", () => {
+    stubMatchMedia();
+    renderSettings();
+
+    const shortcuts = screen.getByRole("heading", {
+      name: "Keyboard shortcuts",
+    }).parentElement;
+    if (shortcuts === null) throw new Error("expected a shortcuts section");
+
+    const keyLabels = [...shortcuts.querySelectorAll("kbd")].map(
+      (key) => key.textContent,
+    );
+    expect(keyLabels).toContain("Page Down");
+    expect(keyLabels).toContain("Page Up");
+    expect(keyLabels).not.toContain("⇟");
+    expect(keyLabels).not.toContain("⇞");
   });
 
   it("has no axe violations", async () => {

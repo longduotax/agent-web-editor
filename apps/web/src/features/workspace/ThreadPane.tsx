@@ -24,6 +24,7 @@ import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
+import { isReleaseKey, releaseFocusToPane } from "./paneFocus.js";
 import {
   mergeLiveTurn,
   reduceLiveTurn,
@@ -64,6 +65,14 @@ const LIVE_FLUSH_MS = 40;
  * firing one HTTP request each.
  */
 const LIVE_REFETCH_MS = 200;
+
+/**
+ * The trust notice, in full. One constant because it is said in three places
+ * that must not drift: the header's tooltip, the accessibility tree, and the
+ * wide-pane visual form.
+ */
+const TRUST_NOTICE =
+  "Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.";
 
 /**
  * Subscribes to the thread's live channel and returns the in-progress
@@ -410,6 +419,11 @@ export function Composer({
             setText(event.target.value);
           }}
           onKeyDown={(event) => {
+            if (isReleaseKey(event)) {
+              event.preventDefault();
+              releaseFocusToPane(event.currentTarget);
+              return;
+            }
             if (
               event.key !== "Enter" ||
               event.shiftKey ||
@@ -421,7 +435,10 @@ export function Composer({
           }}
         />
         <div className="composer-actions">
-          <span>Enter to send · Shift + Enter for a new line</span>
+          <span>
+            Enter to send · Shift + Enter for a new line · Esc to leave the
+            composer
+          </span>
           {active && (
             <button
               type="button"
@@ -510,7 +527,7 @@ export function ThreadPane(props: ThreadPaneProps) {
   }${threadWorkspace.branchName === null ? "" : ` · ⑂ ${threadWorkspace.branchName}`}`;
   // The header clamps its detail line to one row, so the full text lives on
   // the tooltip rather than being lost.
-  const detailTitle = `${workspaceLabel} · Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.`;
+  const detailTitle = `${workspaceLabel} · ${TRUST_NOTICE}`;
   // A failed run used to be a red dot and nothing else. Run.failureMessage /
   // Run.failureCode have always been in the contract and sent by the server;
   // surface whichever the server gave us so the failure path does not dead
@@ -530,6 +547,9 @@ export function ThreadPane(props: ThreadPaneProps) {
       className={`pane thread-pane ${focused ? "focused" : "dim"}`}
       aria-label={snapshot.data?.thread.title ?? "Thread"}
       aria-current={focused ? "true" : undefined}
+      // Escape in the composer parks focus here (see paneFocus.ts). Not in
+      // the tab order -- this is a landing site, not a stop.
+      tabIndex={-1}
       onClick={() => {
         props.onFocus();
       }}
@@ -546,8 +566,22 @@ export function ThreadPane(props: ThreadPaneProps) {
             <span className="pane-meta">{workspaceLabel}</span>
             <span className="trust-note">
               <span className="trust-dot" aria-hidden="true" />
-              <strong>Direct execution:</strong> Pi tools run with your user
-              permissions, without application approval or an OS sandbox.
+              {/* The complete notice, always in the accessibility tree
+                  regardless of which visual form the pane is wide enough
+                  for. The two visible forms are hidden from it so the
+                  warning is never announced twice, and never announced in
+                  its shortened form. */}
+              <span className="sr-only">{TRUST_NOTICE}</span>
+              <span aria-hidden="true">
+                <strong>Direct execution:</strong>{" "}
+                <span className="trust-note-long">
+                  Pi tools run with your user permissions, without application
+                  approval or an OS sandbox.
+                </span>
+                <span className="trust-note-short">
+                  no sandbox, no approvals.
+                </span>
+              </span>
             </span>
           </>
         }

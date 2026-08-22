@@ -33,6 +33,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { isTextEntryTarget } from "./keybindings.js";
 import { ThreadPane } from "./ThreadPane.js";
 
 afterEach(() => {
@@ -684,5 +685,64 @@ describe("live streaming", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // F9. The composer was a one-way door: Escape changed neither the value nor
+  // document.activeElement, so Tab was the only exit and every pane shortcut
+  // was unreachable once you started typing.
+  it("hands focus from the composer to the pane on Escape, keeping the draft", async () => {
+    const user = userEvent.setup();
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+
+    const composer = await screen.findByRole("textbox", {
+      name: "Message Pi",
+    });
+    await user.click(composer);
+    await user.paste("half a message");
+    expect(composer).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    const pane = screen.getByRole("region", { name: "Example thread" });
+    expect(pane).toHaveFocus();
+    expect(pane).toHaveAttribute("tabindex", "-1");
+    expect(composer).toHaveValue("half a message");
+    // The pane the shortcuts will now act on is the one focus landed in, and
+    // it is not a text-entry target, so the window handler stops suppressing
+    // them (see isTextEntryTarget).
+    expect(isTextEntryTarget(document.activeElement)).toBe(false);
+  });
+
+  // F10. At a 360px pane the full sentence was ellipsised to "...without
+  // appl..." -- a security notice cut off exactly before the part that
+  // matters. Both visible forms are hidden from assistive technology and the
+  // complete wording is carried separately, so the notice is never SAID in
+  // its shortened form.
+  it("offers a short visual trust notice while always exposing the full one", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    const { container } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const full =
+      "Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.";
+    const note = container.querySelector(".trust-note");
+    if (note === null) throw new Error("expected a trust note");
+
+    const spoken = note.querySelector(".sr-only");
+    expect(spoken).toHaveTextContent(full);
+    expect(spoken?.closest("[aria-hidden='true']")).toBeNull();
+
+    // Neither visible form is announced; only the complete one above is.
+    for (const selector of [".trust-note-long", ".trust-note-short"]) {
+      const form = note.querySelector(selector);
+      expect(form).not.toBeNull();
+      expect(form?.closest("[aria-hidden='true']")).not.toBeNull();
+    }
+
+    // The header's tooltip carries the same complete wording.
+    expect(
+      container.querySelector(".pane-head-detail")?.getAttribute("title"),
+    ).toContain(full);
   });
 });

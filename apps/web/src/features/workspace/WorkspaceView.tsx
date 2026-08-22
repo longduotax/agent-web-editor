@@ -14,6 +14,7 @@ import {
   type KeyEventLike,
 } from "./keybindings.js";
 import { newChatDraftKey, removeDraft } from "./drafts.js";
+import { closePane } from "./layoutTree.js";
 import type { PaneId } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
@@ -117,6 +118,7 @@ export function WorkspaceView(props: {
     };
   }, []);
 
+  const params = useParams();
   // Closing a pane is a PURE LAYOUT OPERATION. It used to archive the pane's
   // thread as a side effect, behind a button labelled only "Close", via a
   // fire-and-forget archiveThread() with no .catch and no error surface --
@@ -133,12 +135,39 @@ export function WorkspaceView(props: {
   const handleClose = useCallback(
     (paneId: PaneId) => {
       removeDraft(newChatDraftKey(projectId, paneId));
+      const before = controllerRef.current.layout;
+      const closedThreadId = before.panes[paneId]?.threadId ?? null;
       controllerRef.current.close(paneId);
+      // Closing a pane is an instruction, and the URL has to stop describing
+      // what was closed -- otherwise a reload re-resolves that URL and brings
+      // the pane straight back (N2). This is NOT specific to the new-chat
+      // pane: the same thing happens to a thread pane whose thread the URL
+      // names. The route only moves when it actually addressed the closed
+      // pane; closing a split that the URL was never about must not
+      // renavigate underneath the user.
+      const routeAddressedClosedPane =
+        closedThreadId === null
+          ? isNewChatRoute
+          : params.threadId === closedThreadId;
+      if (!routeAddressedClosedPane) return;
+      const after = closePane(before, paneId);
+      const nextPaneId = after.focusedPaneId;
+      // Nothing is left open. The URL is then the ONLY record of where the
+      // user was, so it is deliberately left alone: the empty surface offers
+      // its own "Open a pane", and a reload resolving the last thread is
+      // deep-link resolution, not a resurrected pane.
+      if (nextPaneId === null) return;
+      const nextThreadId = after.panes[nextPaneId]?.threadId ?? null;
+      void navigate(
+        nextThreadId === null
+          ? `/projects/${projectId}/new`
+          : `/projects/${projectId}/threads/${nextThreadId}`,
+        { replace: true },
+      );
     },
-    [projectId],
+    [isNewChatRoute, navigate, params.threadId, projectId],
   );
 
-  const params = useParams();
   // Depends on `location.key` as well as the thread id (NEW-R3-3). Clicking a
   // sidebar row for the thread the URL ALREADY addresses navigates to the
   // same path, so `params.threadId` does not change and an effect keyed only
