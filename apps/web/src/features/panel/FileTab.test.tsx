@@ -477,6 +477,69 @@ describe("FileTab: copying", () => {
 
     expect(writeText).toHaveBeenCalledWith(content);
   });
+
+  it("says so when a copy succeeds, in the panel's own live region", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    api.getFile.mockResolvedValue(preview());
+    const { actions } = renderTab();
+    await screen.findByText("const answer = 42;");
+
+    await user.click(screen.getByRole("button", { name: "Copy path" }));
+    await waitFor(() => {
+      expect(actions.announce).toHaveBeenCalledWith(
+        "Copied the file path to the clipboard.",
+      );
+    });
+
+    await user.click(screen.getByRole("button", { name: "Copy contents" }));
+    await waitFor(() => {
+      expect(actions.announce).toHaveBeenCalledWith(
+        "Copied the file's contents to the clipboard.",
+      );
+    });
+  });
+
+  it("says so when a copy fails, rather than dropping the rejection", async () => {
+    const user = userEvent.setup();
+    // What the reporter actually produced: an `unhandledrejection`, and
+    // nothing on screen changed. `void navigator.clipboard.writeText(…)`
+    // with no `.catch` swallows every refusal there is — a denied
+    // permission, a document that is not focused, an insecure context.
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    api.getFile.mockResolvedValue(preview());
+    const { actions } = renderTab();
+    await screen.findByText("const answer = 42;");
+
+    await user.click(screen.getByRole("button", { name: "Copy path" }));
+
+    await waitFor(() => {
+      expect(actions.announce).toHaveBeenCalledWith(
+        "Could not copy the file path: the browser refused access to the clipboard.",
+      );
+    });
+  });
+
+  it("says so when the browser offers no clipboard at all", async () => {
+    const user = userEvent.setup();
+    // An insecure context has no `navigator.clipboard`, and reading
+    // `.writeText` off it would throw inside the click handler instead of
+    // rejecting a promise. Both routes end in the same sentence.
+    vi.stubGlobal("navigator", {});
+    api.getFile.mockResolvedValue(preview());
+    const { actions } = renderTab();
+    await screen.findByText("const answer = 42;");
+
+    await user.click(screen.getByRole("button", { name: "Copy contents" }));
+
+    await waitFor(() => {
+      expect(actions.announce).toHaveBeenCalledWith(
+        "Could not copy the file's contents: the browser refused access to the clipboard.",
+      );
+    });
+  });
 });
 
 describe("FileTab: accessibility", () => {

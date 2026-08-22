@@ -1109,6 +1109,46 @@ test("panel file tab: a long path ellipsises to its file name at every panel wid
   }
 });
 
+test("panel file tab: a copy that works and a copy that fails both say so", async ({
+  page,
+  context,
+}) => {
+  // J4. Reported from the running application: a failing `writeText`
+  // produced an `unhandledrejection` and NOTHING on screen changed, and a
+  // succeeding one changed nothing either. Both halves are checked here
+  // rather than only in jsdom, because "nothing on screen changed" is a
+  // claim about the screen.
+  await context.grantPermissions(["clipboard-write"]);
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "notes.txt");
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const status = page.locator(".panel-announcement");
+  await page.getByRole("button", { name: "Copy path" }).click();
+  await expect(status).toHaveText("Copied the file path to the clipboard.");
+  // The panel's ONE live region, shared with the split refusal and the drag
+  // narration rather than a second one competing with it.
+  await expect(status).toHaveAttribute("role", "status");
+
+  // A clipboard that refuses, which is an ordinary state: a denied
+  // permission, an unfocused document, an insecure context.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error("denied")),
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Copy contents" }).click();
+  await expect(status).toHaveText(
+    "Could not copy the file's contents: the browser refused access to the clipboard.",
+  );
+});
+
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
   page,
 }) => {

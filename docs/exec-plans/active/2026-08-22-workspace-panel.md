@@ -2356,6 +2356,25 @@ blocks agree**, because `styles.css` writes the dark theme twice — once under
 for the pinned one — so a palette edited in one and not the other would ship
 two different dark themes (CWS-02).
 
+**J4 — Copy path and Copy contents had no outcome at all.** Both were
+`void navigator.clipboard.writeText(…)` with no `.catch`, which swallows every
+way a clipboard write refuses: a denied permission, a document that is not
+focused, an insecure context. Driven in the browser, a failing write produced
+an `unhandledrejection` and **nothing on screen changed**; a succeeding one
+changed nothing either, and `document.querySelectorAll('[aria-live]')` returned
+0 elements. WSP-10 requires defined states, and "it worked" and "it did not"
+are two of them.
+
+Both outcomes now say so in the panel's existing `role="status"` region — the
+one the split refusal and the drag narration already share. A second live
+region on one surface interrupts the first, which is why this reuses it rather
+than adding one, and it is a visible bar as well as an announced one, so the
+signal is not carried by assistive technology alone. The insecure-context route
+is handled separately from the rejection route because it **throws** on
+property access rather than rejecting a promise, and both land on the same
+sentence. Pinned in jsdom for all three routes, and end to end for the two that
+are claims about the screen.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

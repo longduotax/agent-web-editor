@@ -108,6 +108,40 @@ export const FileTab = memo(function FileTab({
     };
   }, [visible, language, text, highlighted?.text]);
 
+  // Copying, with both of its outcomes said out loud (J4, WSP-10).
+  //
+  // This was `void navigator.clipboard.writeText(…)` with no `.catch`: a
+  // refusal — a denied permission, an unfocused document, an insecure
+  // context — produced an `unhandledrejection` and nothing on screen
+  // changed, and a copy that worked said nothing either. The panel already
+  // has exactly one `role="status"`, which the split refusal and the drag
+  // narration share; a second live region on one surface interrupts the
+  // first, so this uses that one.
+  const copy = useCallback(
+    (text: string, what: "the file path" | "the file's contents") => {
+      const failed = () => {
+        actions.announce(
+          `Could not copy ${what}: the browser refused access to the clipboard.`,
+        );
+      };
+      let written: Promise<void>;
+      try {
+        // In a `try` rather than behind an optional chain: an insecure
+        // context has no `clipboard` at all, and the type says otherwise, so
+        // this call THROWS there instead of rejecting. Both routes have to
+        // reach the same sentence, and only one of them is a promise.
+        written = navigator.clipboard.writeText(text);
+      } catch {
+        failed();
+        return;
+      }
+      void written.then(() => {
+        actions.announce(`Copied ${what} to the clipboard.`);
+      }, failed);
+    },
+    [actions],
+  );
+
   const openFile = useCallback(
     (path: string) => {
       if (context === null) return;
@@ -141,7 +175,7 @@ export const FileTab = memo(function FileTab({
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard.writeText(path);
+              copy(path, "the file path");
             }}
           >
             Copy path
@@ -154,7 +188,7 @@ export const FileTab = memo(function FileTab({
               // The whole file, not the bounded portion painted below: the
               // budget is about what this panel renders, and copying is how a
               // reader takes the file somewhere that has no budget.
-              void navigator.clipboard.writeText(file.content);
+              copy(file.content, "the file's contents");
             }}
           >
             Copy contents
