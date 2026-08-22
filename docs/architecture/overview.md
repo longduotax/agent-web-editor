@@ -21,13 +21,15 @@ The browser receives only parsed DTOs and opaque application identifiers.
 | `packages/contracts/`     | Executable wire schemas and inferred DTO types                                          | Zod                                              |
 | `packages/agent-runtime/` | SDK-neutral persistent-session and run interfaces                                       | TypeScript                                       |
 | `packages/pi-adapter/`    | Pi session discovery/opening, transcript translation, and live runtime ownership        | Pi SDK 0.84.2                                    |
+| `packages/codex-adapter/` | Codex session discovery/opening, transcript translation, and live runtime ownership     | Codex app-server protocol (Codex CLI 0.149.0)    |
 
 Dependency direction remains:
 
 ```text
 apps/web -> packages/contracts
-apps/server -> packages/contracts + packages/agent-runtime + packages/pi-adapter
+apps/server -> packages/contracts + packages/agent-runtime + packages/pi-adapter + packages/codex-adapter
 packages/pi-adapter -> packages/agent-runtime + packages/contracts + Pi SDK
+packages/codex-adapter -> packages/agent-runtime + packages/contracts + codex app-server
 packages/agent-runtime -> packages/contracts
 packages/contracts -> no workspace package
 ```
@@ -80,6 +82,12 @@ exclude it while its thread, run, receipt, and Pi history remain retained.
 `WorkspaceService` resolves project/thread ownership and owns open runtime
 instances. `ThreadExecutionContextResolver` constructs the trusted cwd for each
 thread from either the registered checkout or a verified managed worktree.
+The server holds a `RuntimeRegistry` mapping a thread's persisted `runtime`
+discriminator (`pi` | `codex`) to the adapter that runs it, so both backends
+coexist in one project and the browser never learns backend internals. A
+backend absent from the registry is not installed on this machine, which is an
+ordinary recoverable state rather than an error.
+
 `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;

@@ -269,11 +269,11 @@ the failing test, watch it fail, implement, watch it pass, commit.
       precedence rung, a malformed stored value, and storage being unavailable.
       Verify: `pnpm --filter @pi-web/web exec vitest run src/features/settings`.
 
-- [ ] **Task 12 — End-to-end coverage.** A Playwright spec creating a Codex chat
+- [x] **Task 12 — End-to-end coverage.** A Playwright spec creating a Codex chat
       and a Pi chat in one project against the fake-runtime harness, asserting the
       badge, the default, and transcript parity.
 
-- [ ] **Task 13 — Documentation.** `packages/codex-adapter/README.md`; add it to
+- [x] **Task 13 — Documentation.** `packages/codex-adapter/README.md`; add it to
       `REQUIRED_COMPONENT_DOCS` in `scripts/check_docs.py` and link it from
       `docs/README.md`; record the implemented structure in
       `docs/architecture/overview.md`; document the three new variables and the
@@ -364,6 +364,10 @@ checkboxes above for the current position.
 - 2026-08-22: Tasks 10 and 11 complete. Composer picker, pane badge,
   device preference store, and the Settings "Default agent" control.
   453 unit tests green.
+- 2026-08-22: Tasks 12 and 13 complete. End-to-end spec covering a Pi and a
+  Codex chat side by side in one project; adapter README, front-door and
+  architecture entries, README backend section, and `.env.example`.
+  `pnpm check` and `pnpm test:e2e` both green (458 unit tests, 5 e2e).
 
 ## Discoveries and blockers
 
@@ -420,6 +424,14 @@ Discovered while implementing Tasks 1 and 2:
   `workspace-write` is confined, so the notice now branches on the thread's
   backend and a standing test asserts a Codex pane does not show Pi's
   wording. Not called out in the plan; found while adding the badge.
+- **A second Pi-specific string was hiding in the thread composer.** Its
+  textarea was labelled "Message Pi" with placeholder "Ask Pi to work in
+  this project…" regardless of backend. Now derived from the thread's
+  backend, with a test asserting a Codex chat is not addressed to Pi.
+- **Two existing e2e specs assert Pi's execution disclosure**, so they now
+  pin `PI_WEB_DEFAULT_RUNTIME=pi` rather than riding on the default, which
+  is Codex. Pinning states their intent instead of coupling them to a
+  default that has now changed once and could change again.
 - **Codex timestamps are Unix milliseconds, not ISO strings**, so every mapped
   timestamp is converted and an unparseable one becomes `null` rather than
   failing the item.

@@ -23,7 +23,7 @@ import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
-import { PaneHeader } from "./PaneHeader.js";
+import { BACKEND_LABEL, PaneHeader } from "./PaneHeader.js";
 import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
 
@@ -242,13 +242,17 @@ export function Composer({
     if (text.trim() === "") return;
     mutation.mutate();
   };
+  // The composer names the agent that will actually read the message; a Codex
+  // chat inviting you to "Ask Pi" would be simply wrong.
+  const agentLabel = BACKEND_LABEL[snapshot.thread.runtime];
+
   return (
     <form className="composer" onSubmit={submit}>
       <div className="composer-input">
         <textarea
           ref={textareaRef}
-          aria-label="Message Pi"
-          placeholder="Ask Pi to work in this project…"
+          aria-label={`Message ${agentLabel}`}
+          placeholder={`Ask ${agentLabel} to work in this project…`}
           rows={1}
           value={text}
           onChange={(event) => {

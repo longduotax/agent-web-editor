@@ -115,7 +115,13 @@ test.beforeAll(async () => {
   const port = await availablePort();
   const config = parseConfig({
     argv: ["--port", String(port)],
-    environment: { NODE_ENV: "production", PI_WEB_STATE_DIR: state },
+    environment: {
+      NODE_ENV: "production",
+      PI_WEB_STATE_DIR: state,
+      // This spec asserts Pi's own execution disclosure, so it pins the
+      // backend rather than riding on whatever the default happens to be.
+      PI_WEB_DEFAULT_RUNTIME: "pi",
+    },
   });
   server = await buildServer({
     config,

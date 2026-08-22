@@ -434,6 +434,20 @@ describe("a continued chat exposes no backend control", () => {
     expect(screen.getByText("Pi")).toBeInTheDocument();
   });
 
+  it("addresses the composer to the agent that will read it", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtime: "codex" as const },
+    });
+    renderPane();
+    expect(
+      await screen.findByRole("textbox", { name: "Message Codex" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Message Pi" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("describes Codex execution as confined rather than as Pi's", async () => {
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
