@@ -17,6 +17,7 @@ import { useEffect, type JSX } from "react";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  getFile: vi.fn(),
   getFiles: vi.fn(),
   getStatus: vi.fn(),
 }));
@@ -82,10 +83,52 @@ function renderPanel(focusedContext: TabContext | null = context) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <Harness focusedContext={focusedContext} />
-    </QueryClientProvider>,
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <Harness focusedContext={focusedContext} />
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
+}
+
+// A device-local record as `panelStorage` writes it (WSP-04), so a test can
+// start from a panel the user already had rather than building one by
+// clicking. Three tabs, one of them active.
+function seedPanelRecord(store: Map<string, string>) {
+  store.set(
+    "pi-workspace:panel",
+    JSON.stringify({
+      version: 2,
+      root: { type: "group", id: "group-1" },
+      groups: {
+        "group-1": {
+          id: "group-1",
+          tabIds: ["tab-changes", "tab-files", "tab-file"],
+          activeTabId: "tab-files",
+        },
+      },
+      tabs: {
+        "tab-changes": { id: "tab-changes", type: "changes", context },
+        "tab-files": {
+          id: "tab-files",
+          type: "files",
+          context,
+          search: "",
+        },
+        "tab-file": {
+          id: "tab-file",
+          type: "file",
+          context,
+          path: "src/main.ts",
+          view: "preview",
+        },
+      },
+      focusedGroupId: "group-1",
+      width: 400,
+      open: true,
+    }),
   );
 }
 
@@ -96,6 +139,21 @@ async function openPanel(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
     screen.getByRole("button", { name: "Open workspace panel" }),
   );
+}
+
+// Shift + primary + Alt is the panel's chord group; ctrlKey stands in for the
+// primary modifier on the non-mac platform jsdom reports.
+function panelChord(key: string) {
+  fireEvent.keyDown(window, {
+    key,
+    shiftKey: true,
+    ctrlKey: true,
+    altKey: true,
+  });
+}
+
+function tabIdOf(name: string): string {
+  return screen.getByRole("tab", { name }).id.replace("panel-tab-", "");
 }
 
 describe("WorkspacePanel", () => {
@@ -235,7 +293,44 @@ describe("WorkspacePanel does only the visible tab's work", () => {
     await user.click(screen.getByRole("menuitem", { name: "Files" }));
   }
 
-  it("never queries for a tab that has not been activated", async () => {
+  // The claim WSP-09 actually makes about ten open tabs costing one body.
+  // This is measured from a RESTORED panel, because that is the only way to
+  // hold a tab that has never been activated: opening one activates it, so a
+  // test that clicks its way to two tabs has activated both and can only
+  // measure something else.
+  it("mounts and queries only the tab a restored panel shows", async () => {
+    const store = stubStorage();
+    seedPanelRecord(store);
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getFile.mockResolvedValue({
+      available: true,
+      kind: "text",
+      content: "",
+      truncated: false,
+      message: null,
+    });
+    renderPanel();
+
+    expect(await screen.findAllByRole("tab")).toHaveLength(3);
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(1);
+    });
+    // One body for three tabs, and it is the active one's.
+    expect(document.querySelectorAll('[role="tabpanel"]')).toHaveLength(1);
+    expect(document.querySelector('[role="tabpanel"]')).toHaveAttribute(
+      "id",
+      "panel-tabpanel-tab-files",
+    );
+    expect(api.getStatus).not.toHaveBeenCalled();
+    expect(api.getFile).not.toHaveBeenCalled();
+  });
+
+  it("issues nothing further when the panel is toggled shut and open", async () => {
     const user = userEvent.setup();
     stubStorage();
     api.getStatus.mockResolvedValue({
@@ -250,27 +345,67 @@ describe("WorkspacePanel does only the visible tab's work", () => {
       expect(api.getStatus).toHaveBeenCalledTimes(1);
     });
 
-    // Opening a tab activates it, so open one and switch away from it: the
-    // Changes tab is now mounted but hidden.
     await user.click(screen.getByRole("button", { name: "New panel tab" }));
     await user.click(screen.getByRole("menuitem", { name: "Files" }));
     await waitFor(() => {
       expect(api.getFiles).toHaveBeenCalledTimes(1);
     });
 
-    // A hidden body issues nothing further, however much the panel around it
-    // re-renders.
-    fireEvent.keyDown(window, {
-      key: " ",
-      shiftKey: true,
-      ctrlKey: true,
-      altKey: true,
-    });
+    // The panel-toggle chord, twice: shut, then open again.
+    panelChord(" ");
+    panelChord(" ");
     expect(api.getStatus).toHaveBeenCalledTimes(1);
     expect(api.getFiles).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a hidden tab mounted and inert, and refetches nothing on the way back", async () => {
+  // `enabled: visible && …` is what this measures, and it measures it: an
+  // invalidated query with a mounted observer refetches immediately unless it
+  // is disabled, so this fails the moment the visibility gate is deleted.
+  // (The previous version of this test passed on `staleTime` alone — its
+  // whole 30-second window fitted inside the test.)
+  it("keeps a hidden tab mounted and inert, and issues nothing for it even when its data is invalidated", async () => {
+    const user = userEvent.setup();
+    stubStorage();
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [{ path: "src/main.ts", kind: "modified" }],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    const { queryClient } = renderPanel();
+    await openBothTabs(user);
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(1);
+    });
+
+    const changesBody = document.getElementById(
+      `panel-tabpanel-${tabIdOf("Changes")}`,
+    );
+    expect(changesBody).toHaveAttribute("hidden");
+    expect(changesBody).toHaveAttribute("inert");
+    // Still mounted: its content is retained, not rebuilt.
+    expect(document.querySelectorAll('[role="tabpanel"]')).toHaveLength(2);
+    expect(api.getStatus).toHaveBeenCalledTimes(1);
+
+    await queryClient.invalidateQueries({ queryKey: ["git"] });
+    await Promise.resolve();
+    expect(api.getStatus).toHaveBeenCalledTimes(1);
+
+    // Coming back does refetch — the data was invalidated — but the content
+    // it already had never leaves the screen while that happens (WSP-09).
+    await user.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(screen.getByText("src/main.ts")).toBeVisible();
+    await waitFor(() => {
+      expect(api.getStatus).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText("src/main.ts")).toBeVisible();
+  });
+
+  // D2. Every panel chord acts on `focusedGroupId`, and the only thing that
+  // wrote it was a pointer press on a tab strip — so a keyboard user who
+  // moved focus into another group had their chords act on the group they
+  // had left.
+  it("acts on the group the keyboard is in, not the one the pointer last touched", async () => {
     const user = userEvent.setup();
     stubStorage();
     api.getStatus.mockResolvedValue({
@@ -281,24 +416,59 @@ describe("WorkspacePanel does only the visible tab's work", () => {
     api.getFiles.mockResolvedValue({ entries: [], truncated: false });
     renderPanel();
     await openBothTabs(user);
+
+    // Split: the Files tab moves to a new group, and focus follows it there.
+    panelChord("ArrowRight");
+    await screen.findByRole("separator", { name: "Resize panel groups" });
+    expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
+
+    // Focus the OTHER group's tab with the keyboard alone, then close.
+    screen.getByRole("tab", { name: "Changes" }).focus();
+    panelChord("Backspace");
+
     await waitFor(() => {
-      expect(api.getFiles).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByRole("tab", { name: "Changes" }),
+      ).not.toBeInTheDocument();
     });
+    expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
+  });
 
-    const changesBody = document.querySelector(
-      '[role="tabpanel"][aria-labelledby^="panel-tab-"]',
-    );
-    expect(changesBody).toHaveAttribute("hidden");
-    expect(changesBody).toHaveAttribute("inert");
-    // Still mounted: its content is retained, not rebuilt.
-    expect(document.querySelectorAll('[role="tabpanel"]')).toHaveLength(2);
+  // D9. Two landmarks called "Panel tab group" and two tablists called
+  // "Panel tabs" are indistinguishable to a screen reader (WSP-10).
+  it("names each group and each tab strip distinctly once the panel is split", async () => {
+    const user = userEvent.setup();
+    stubStorage();
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    renderPanel();
+    await openBothTabs(user);
 
-    await user.click(screen.getByRole("tab", { name: "Changes" }));
-    await user.click(screen.getByRole("tab", { name: "Files" }));
-    await user.click(screen.getByRole("tab", { name: "Changes" }));
+    // One group: nothing to tell apart, so it keeps the plain name.
+    expect(
+      screen.getByRole("region", { name: "Panel tab group" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("tablist", { name: "Panel tabs" }),
+    ).toBeInTheDocument();
 
-    expect(api.getStatus).toHaveBeenCalledTimes(1);
-    expect(api.getFiles).toHaveBeenCalledTimes(1);
+    panelChord("ArrowRight");
+    await screen.findByRole("separator", { name: "Resize panel groups" });
+
+    const names = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-label"));
+    expect(names).toEqual(["Panel tab group 1 of 2", "Panel tab group 2 of 2"]);
+    expect(
+      screen.getByRole("tablist", { name: "Panel tabs, group 1 of 2" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("tablist", { name: "Panel tabs, group 2 of 2" }),
+    ).toBeInTheDocument();
   });
 
   it("has no axe violations with two tabs open", async () => {
