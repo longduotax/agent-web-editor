@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
@@ -57,7 +63,7 @@ function actionsSpy(): PanelActions {
 }
 
 // A drag that is not happening. The drag itself is exercised against a whole
-// panel in TabDrag.test.tsx, where there are two groups to drop between.
+// panel in useTabDrag.test.tsx, where there are two groups to drop between.
 function idleDrag(): TabDragController {
   return {
     drag: null,
@@ -208,6 +214,27 @@ describe("TabStrip", () => {
     expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus();
     await user.keyboard("{End}");
     expect(screen.getByRole("tab", { name: /main\.ts/ })).toHaveFocus();
+  });
+
+  // The panel's split chords are Shift + primary + Alt + an arrow, and the
+  // panel leaves focus on a tab after every structural chord (F5). The strip
+  // used to take those arrows as its own as well, so a split chord moved the
+  // selection first and then split with whatever tab the arrow had landed
+  // on. A tablist's arrow keys are the unmodified ones.
+  it("leaves a chorded arrow to the panel's own chords", () => {
+    const actions = renderStrip();
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    changes.focus();
+
+    fireEvent.keyDown(changes, {
+      key: "ArrowRight",
+      shiftKey: true,
+      ctrlKey: true,
+      altKey: true,
+    });
+
+    expect(actions.activateTab).not.toHaveBeenCalled();
+    expect(changes).toHaveFocus();
   });
 
   it("activates a tab on click", async () => {

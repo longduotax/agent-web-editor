@@ -139,6 +139,7 @@ test.afterAll(async () => {
 // This spec's tsconfig has no "dom" lib (e2e/**/*.ts is type-checked as Node
 // code), so the page globals get precise local types rather than `any`.
 interface ProbeElement {
+  id: string;
   clientWidth: number;
   clientHeight: number;
   offsetHeight: number;
@@ -146,8 +147,16 @@ interface ProbeElement {
   scrollHeight: number;
   scrollLeft: number;
   className: string;
+  textContent: string | null;
   parentElement: ProbeElement | null;
-  getBoundingClientRect(): { x: number; y: number; height: number };
+  querySelector(selector: string): ProbeElement | null;
+  querySelectorAll(selector: string): Iterable<ProbeElement>;
+  getBoundingClientRect(): {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 declare const document: {
   head: { appendChild(node: unknown): void };
@@ -885,4 +894,338 @@ test("panel tab strip: an overflowing strip scrolls under a plain wheel", async 
   await expect
     .poll(async () => (await page.evaluate(stripScroll)).scrollLeft)
     .toBeGreaterThan(0);
+});
+
+// WSP-03's drag. jsdom has no layout, so every one of these behaviours is
+// geometric in a way the unit suite cannot see at all: which rectangle a
+// point is in, which band of it, and where the resulting split lands. The
+// arithmetic is unit-tested against stated rectangles in tabDrag.test.ts;
+// what is measured here is that the page really has those rectangles.
+
+/** Where each group's five drop targets are, in viewport coordinates. */
+function dropPoints() {
+  return [...document.querySelectorAll(".panel-group")].map((group) => {
+    const rect = group.getBoundingClientRect();
+    const strip = group.querySelector(".panel-tabstrip");
+    // The strip is its own drop target, so the four edges divide what is
+    // left below it — which is exactly how the drag resolves them.
+    const stripHeight =
+      strip === null ? 0 : strip.getBoundingClientRect().height;
+    const top = rect.y + stripHeight;
+    const height = rect.height - stripHeight;
+    return {
+      id: group.id,
+      centre: { x: rect.x + rect.width / 2, y: top + height / 2 },
+      left: { x: rect.x + 6, y: top + height / 2 },
+      right: { x: rect.x + rect.width - 6, y: top + height / 2 },
+      top: { x: rect.x + rect.width / 2, y: top + 6 },
+      bottom: { x: rect.x + rect.width / 2, y: top + height - 6 },
+    };
+  });
+}
+
+/** Every group's box and tab titles, plus how the panel is split. */
+function panelLayout() {
+  return {
+    groups: [...document.querySelectorAll(".panel-group")].map((group) => {
+      const rect = group.getBoundingClientRect();
+      return {
+        id: group.id,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        tabs: [...group.querySelectorAll("[data-panel-tab]")].map(
+          (tab) => tab.textContent ?? "",
+        ),
+      };
+    }),
+    rowSplits: [...document.querySelectorAll(".panel-split-row")].length,
+    columnSplits: [...document.querySelectorAll(".panel-split-column")].length,
+    dropZones: [...document.querySelectorAll(".panel-drop-zones")].length,
+  };
+}
+
+interface DragPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Presses a tab, crosses the drag threshold, and moves to `to` — leaving the
+ * button DOWN, so a case can look at the drop targets or press Escape.
+ */
+async function dragTabOver(page: Page, tabName: string, to: DragPoint) {
+  const tab = page.getByRole("tab", { name: tabName }).first();
+  const box = await tab.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // A press is not a drag: the threshold has to be crossed first.
+  await page.mouse.move(box.x + box.width / 2 + 8, box.y + box.height / 2);
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+}
+
+async function dropTabOn(page: Page, tabName: string, to: DragPoint) {
+  await dragTabOver(page, tabName, to);
+  await page.mouse.up();
+}
+
+/**
+ * Widens the panel to what the viewport can carry, so two groups fit side by
+ * side without the tree scrolling. A scrolled tree is a real case — the drag
+ * re-measures on scroll — but it moves the groups out from under points
+ * measured before the drag began, which is an artifact of measuring from
+ * this side rather than anything the product does.
+ */
+async function widenPanel(page: Page) {
+  await page.getByRole("separator", { name: "Resize workspace panel" }).focus();
+  await page.keyboard.press("End");
+  await page.waitForTimeout(300);
+}
+
+/** A group's drop points, by position in reading order. */
+async function pointsOfGroup(page: Page, index: number) {
+  const points = await page.evaluate(dropPoints);
+  const group = points[index];
+  expect(group, `no group ${String(index)}`).toBeDefined();
+  if (group === undefined) throw new Error("missing group");
+  return group;
+}
+
+/** How many times the page has opened a terminal socket and attached. */
+async function attachFrameCount(page: Page): Promise<number> {
+  const frames = await page.evaluate(() => window.__sentFrames ?? []);
+  return frames.filter((frame) => {
+    const parsed: unknown = JSON.parse(frame);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { type?: unknown }).type === "attach"
+    );
+  }).length;
+}
+
+test("panel drag: a tab dropped on another group's centre moves into it", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("button", { name: "notes.txt" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+
+  // Split, so the drag has a second group to aim at: the active tab
+  // (notes.txt) goes into the new half.
+  await panelChord(page, "ArrowRight");
+  await expect(
+    page.getByRole("separator", { name: "Resize panel groups" }),
+  ).toBeVisible();
+
+  const second = await pointsOfGroup(page, 1);
+  await dropTabOn(page, "Changes", second.centre);
+
+  const layout = await page.evaluate(panelLayout);
+  expect(layout.groups).toHaveLength(2);
+  expect(layout.groups[0]?.tabs.map((tab) => tab.replace("×", ""))).toEqual([
+    "Files",
+  ]);
+  expect(layout.groups[1]?.tabs.map((tab) => tab.replace("×", ""))).toEqual([
+    "notes.txt",
+    "Changes",
+  ]);
+  // WSP-03: a centre drop activates the tab in the group it lands in.
+  await expect(page.getByRole("tab", { name: "Changes" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // And the drop targets are gone with the drag.
+  expect(layout.dropZones).toBe(0);
+});
+
+// Each of WSP-03's four edges, and both halves of the claim: the axis the
+// split takes, and which side of the target group the tab ends up on.
+const EDGE_CASES = [
+  { edge: "left", axis: "row", side: "before" },
+  { edge: "right", axis: "row", side: "after" },
+  { edge: "top", axis: "column", side: "before" },
+  { edge: "bottom", axis: "column", side: "after" },
+] as const;
+
+for (const { edge, axis, side } of EDGE_CASES) {
+  test(`panel drag: dropping on the ${edge} edge splits ${axis === "row" ? "side by side" : "stacked"}, ${side}`, async ({
+    page,
+  }) => {
+    await openProjectWithThread(page);
+    await openPanelTab(page, "Files");
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    expect((await page.evaluate(panelLayout)).groups).toHaveLength(1);
+
+    const only = await pointsOfGroup(page, 0);
+    await dragTabOver(page, "Changes", only[edge]);
+    // The target under the pointer is announced as it changes (WSP-10),
+    // before anything has been dropped.
+    await expect(page.getByRole("status")).toContainText("Split");
+    await page.mouse.up();
+
+    const layout = await page.evaluate(panelLayout);
+    expect(layout.groups).toHaveLength(2);
+    expect(layout.rowSplits).toBe(axis === "row" ? 1 : 0);
+    expect(layout.columnSplits).toBe(axis === "column" ? 1 : 0);
+
+    const moved = layout.groups.find((group) =>
+      group.tabs.some((tab) => tab.startsWith("Changes")),
+    );
+    const stayed = layout.groups.find(
+      (group) => !group.tabs.some((tab) => tab.startsWith("Changes")),
+    );
+    expect(moved).toBeDefined();
+    expect(stayed).toBeDefined();
+    if (moved === undefined || stayed === undefined) return;
+    if (axis === "row")
+      expect(side === "before" ? moved.x < stayed.x : moved.x > stayed.x).toBe(
+        true,
+      );
+    else
+      expect(side === "before" ? moved.y < stayed.y : moved.y > stayed.y).toBe(
+        true,
+      );
+  });
+}
+
+test("panel drag: a tab dragged along its own strip is reordered", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  const files = page.getByRole("tab", { name: "Files" });
+  const box = await files.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+
+  // Past the middle of the Files tab, which is where an insertion after it
+  // is resolved.
+  await dropTabOn(page, "Changes", {
+    x: box.x + box.width - 4,
+    y: box.y + box.height / 2,
+  });
+
+  const layout = await page.evaluate(panelLayout);
+  // Still one group: a strip drop reorders, it does not split.
+  expect(layout.groups).toHaveLength(1);
+  expect(layout.groups[0]?.tabs.map((tab) => tab.replace("×", ""))).toEqual([
+    "Files",
+    "Changes",
+  ]);
+});
+
+test("panel drag: Escape leaves the layout exactly as it was", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  const before = await page.evaluate(panelLayout);
+  const only = await pointsOfGroup(page, 0);
+  await dragTabOver(page, "Changes", only.right);
+
+  // Drop targets are shown only while a drag is in progress, and there are
+  // five of them on the one group.
+  const during = await page.evaluate(panelLayout);
+  expect(during.dropZones).toBe(1);
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => [...document.querySelectorAll(".panel-drop-edge.active")].length,
+      ),
+    )
+    .toBe(1);
+
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+
+  const after = await page.evaluate(panelLayout);
+  expect(after).toEqual({ ...before, dropZones: 0 });
+  await expect(page.getByRole("status")).toContainText("Drag cancelled");
+});
+
+test("panel drag: releasing outside every drop target changes nothing", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+
+  const before = await page.evaluate(panelLayout);
+  const panelBox = await page.locator(".panel").boundingBox();
+  expect(panelBox).not.toBeNull();
+  if (panelBox === null) return;
+
+  // Over the chat surface, which is left of the panel. Splits stay inside
+  // the panel and a tab never lands anywhere else.
+  await dropTabOn(page, "Changes", {
+    x: panelBox.x / 2,
+    y: panelBox.y + panelBox.height / 2,
+  });
+
+  expect(await page.evaluate(panelLayout)).toEqual(before);
+});
+
+// WSP-03's explicit "a moved tab keeps its process" clause, for the drag
+// rather than for the chord: the previous round proved a PROGRAMMATIC move
+// preserves a body, which is a different code path from a dropped one only
+// in how it is triggered — and that is exactly the part a test can get
+// wrong by never exercising it.
+test("panel drag: a dragged terminal keeps its shell and its scrollback", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.locator(".terminal-surface").click();
+  await page.keyboard.type("echo dragged-marker-6620");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".xterm-rows")).toContainText(
+    "dragged-marker-6620",
+    { timeout: 15_000 },
+  );
+
+  // Two groups, with the terminal alone in the second one. The tab is
+  // clicked first because the keyboard is inside the shell's textarea, and
+  // no chord is stolen from something the user is typing into.
+  await page.getByRole("tab", { name: "Terminal" }).click();
+  await panelChord(page, "ArrowRight");
+  await expect(
+    page.getByRole("separator", { name: "Resize panel groups" }),
+  ).toBeVisible();
+  const attachesBefore = await attachFrameCount(page);
+  expect(attachesBefore).toBeGreaterThan(0);
+
+  const first = await pointsOfGroup(page, 0);
+  await dropTabOn(page, "Terminal", first.centre);
+
+  // One group again, holding both tabs: the terminal's group emptied and
+  // its sibling was promoted.
+  const layout = await page.evaluate(panelLayout);
+  expect(layout.groups).toHaveLength(1);
+  expect(layout.groups[0]?.tabs.map((tab) => tab.replace("×", ""))).toEqual([
+    "Changes",
+    "Terminal",
+  ]);
+
+  // The same process, with the same screen: a body that had been torn down
+  // and rebuilt would have opened a second socket and attached again.
+  await expect(page.getByText("Terminal running")).toBeVisible();
+  await expect(page.locator(".xterm-rows")).toContainText(
+    "dragged-marker-6620",
+  );
+  expect(await attachFrameCount(page)).toBe(attachesBefore);
 });

@@ -83,6 +83,14 @@ export function TabStrip(props: TabStripProps): JSX.Element {
   }, [activeTabId]);
 
   const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // A CHORDED arrow is not this tablist's to handle. The panel's split
+    // chords are Shift+primary+Alt plus an arrow, and the panel puts focus
+    // on a tab after every structural chord (F5) — so without this the strip
+    // moved the selection first and the chord then split with whichever tab
+    // the arrow had just landed on, rather than the one the user was
+    // looking at. Found while driving the drag end to end.
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
+      return;
     const order = group.tabIds;
     if (order.length === 0 || activeTabId === null) return;
     const current = order.indexOf(activeTabId);
