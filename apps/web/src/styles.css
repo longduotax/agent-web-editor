@@ -62,6 +62,31 @@
   --term-cursor: var(--accent);
 }
 
+/* Syntax highlighting for the File tab (WSP-05: "derived from the active
+   theme's tokens"). The highlighter's theme names these variables instead of
+   carrying colours of its own, so a highlighted file re-maps on a theme
+   switch with no re-highlight, no listener, and no reload — the same
+   mechanism the terminal's tokens above rely on.
+
+   Most are aliases of tokens this page already uses, so they follow the
+   palette wherever it goes. The two that are not — a keyword hue and a type
+   hue the palette has no member for — are literals, and are therefore
+   redefined in both dark blocks below like every other literal in this
+   file. */
+:root {
+  --code-plain: var(--text-2);
+  --code-comment: var(--muted);
+  --code-punctuation: var(--muted);
+  --code-string: var(--green);
+  --code-number: var(--amber);
+  --code-constant: var(--red);
+  --code-function: var(--accent);
+  --code-tag: var(--red);
+  --code-attribute: var(--amber);
+  --code-keyword: #9a3fbd;
+  --code-type: #0f7b8a;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -96,6 +121,8 @@
        reads as the panel sitting above — the same direction of separation,
        carried by the opposite colour. */
     --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+    --code-keyword: #cba6f7;
+    --code-type: #4dc3d4;
   }
 }
 :root[data-theme="dark"] {
@@ -126,6 +153,8 @@
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+  --code-keyword: #cba6f7;
+  --code-type: #4dc3d4;
 }
 body {
   min-width: 320px;
