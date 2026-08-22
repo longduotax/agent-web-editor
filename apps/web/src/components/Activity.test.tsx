@@ -108,6 +108,46 @@ describe("worked-for run grouping", () => {
     expect(screen.getAllByText("runtime.md")).toHaveLength(2);
   });
 
+  // F3: the step list is the only detailed progress the app has, and it used
+  // to be sealed behind a collapsed disclosure until the run ended -- a
+  // 96-second run showed a blank transcript and then revealed fourteen steps
+  // at the moment they stopped mattering.
+  it("opens itself while the run is live and shows the steps as they land", () => {
+    render(
+      <ActivityGroup items={[runningRead]} live projectPath="/workspace" />,
+    );
+
+    const disclosure = screen.getByText("Working…").closest("details");
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getByText("runtime.md")).toBeInTheDocument();
+    expect(screen.queryByText(/^Worked for/)).toBeNull();
+  });
+
+  it("collapses back to its Worked-for summary once the run settles", () => {
+    const view = render(
+      <ActivityGroup
+        items={[runningRead, completedRead]}
+        live
+        projectPath="/workspace"
+      />,
+    );
+    expect(screen.getByText("Working…").closest("details")).toHaveAttribute(
+      "open",
+    );
+
+    view.rerender(
+      <ActivityGroup
+        items={[completedRead, { ...completedRead, id: "second" }]}
+        live={false}
+        projectPath="/workspace"
+      />,
+    );
+
+    const summary = screen.getByText("Worked for <1s");
+    expect(summary.closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText("Working…")).toBeNull();
+  });
+
   it("keeps the duration slot filled when tool timestamps do not establish a duration", () => {
     render(
       <ActivityGroup

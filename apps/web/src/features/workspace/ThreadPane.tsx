@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LiveEventSchema,
   LiveSnapshotRequiredSchema,
+  TranscriptItemSchema,
   type ProjectId,
   type ThreadId,
   type ThreadSnapshot,
@@ -23,6 +24,7 @@ import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
+import { applyLiveTranscript, STREAMING_ITEM_ID } from "./liveTranscript.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
@@ -36,47 +38,157 @@ export interface ThreadPaneProps {
   onSplit(): void;
 }
 
+/**
+ * How long streamed transcript frames are pooled before one cache write.
+ *
+ * Measured against the running server: a 2,583 character answer arrived as
+ * 494 `transcript` frames in 14.5s, median 7ms apart. Applying each one
+ * separately would re-render the transcript ~140 times a second and make
+ * typing in the composer stutter. 40ms is 25 writes a second — under a paint
+ * budget, and far above the rate at which text stops reading as "streaming".
+ */
+const LIVE_FLUSH_MS = 40;
+
+/**
+ * The floor between authoritative refetches.
+ *
+ * Tool activity never travels on the live channel — the adapter maps Pi's
+ * tool events to "unsupported event" diagnostics, so steps reach the client
+ * only through the snapshot route. Settled turns, run transitions and
+ * diagnostics therefore still refetch, but Pi emits those in bursts (eight
+ * diagnostics inside 20ms is normal), so they are throttled instead of
+ * firing one HTTP request each.
+ */
+const LIVE_REFETCH_MS = 200;
+
 function useLive(
   projectId: ProjectId,
   threadId: ThreadId,
-  snapshot: ThreadSnapshot | undefined,
+  ready: boolean,
 ): void {
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (snapshot === undefined) return;
+    if (!ready) return;
+    const queryKey = ["snapshot", projectId, threadId];
     let closed = false;
     let retry: number | undefined;
     let socket: WebSocket | undefined;
+    // Where this client has read up to. Held here rather than in the query
+    // data on purpose: making the effect depend on the snapshot's cursor tore
+    // the socket down and rebuilt it after every refetch.
+    let cursor: { epoch: string; sequence: number } | null = null;
+    const pending: TranscriptItem[] = [];
+    let flushTimer: number | undefined;
+    let refetchTimer: number | undefined;
+    let lastRefetch = 0;
+
+    const flush = () => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      if (pending.length === 0) return;
+      const batch = pending.splice(0, pending.length);
+      queryClient.setQueryData<ThreadSnapshot>(queryKey, (current) =>
+        current === undefined
+          ? current
+          : applyLiveTranscript(
+              current,
+              batch,
+              cursor?.sequence ?? current.highWaterSequence,
+            ),
+      );
+    };
+    const scheduleFlush = () => {
+      flushTimer ??= window.setTimeout(flush, LIVE_FLUSH_MS);
+    };
+    const refetch = () => {
+      if (refetchTimer !== undefined) {
+        clearTimeout(refetchTimer);
+        refetchTimer = undefined;
+      }
+      lastRefetch = Date.now();
+      void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    };
+    const scheduleRefetch = () => {
+      if (refetchTimer !== undefined) return;
+      refetchTimer = window.setTimeout(
+        refetch,
+        Math.max(0, LIVE_REFETCH_MS - (Date.now() - lastRefetch)),
+      );
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      let value: unknown;
+      try {
+        value = JSON.parse(String(event.data));
+      } catch {
+        return;
+      }
+      // The server cannot replay from where we are: everything we hold may be
+      // stale, so drop the queue and take a full snapshot.
+      if (LiveSnapshotRequiredSchema.safeParse(value).success) {
+        cursor = null;
+        pending.length = 0;
+        refetch();
+        return;
+      }
+      const parsed = LiveEventSchema.safeParse(value);
+      if (!parsed.success) return;
+      const live = parsed.data;
+      const contiguous =
+        cursor !== null &&
+        live.epoch === cursor.epoch &&
+        live.sequence === cursor.sequence + 1;
+      cursor = { epoch: live.epoch, sequence: live.sequence };
+      // A gap or a new epoch means events we never saw. The frame in hand is
+      // still applied (payloads are whole items, not deltas), but the
+      // snapshot is re-fetched to close whatever was missed.
+      if (!contiguous) scheduleRefetch();
+      if (live.eventType === "transcript") {
+        const item = TranscriptItemSchema.safeParse(live.payload);
+        if (!item.success) {
+          scheduleRefetch();
+          return;
+        }
+        pending.push(item.data);
+        if (item.data.id === STREAMING_ITEM_ID) {
+          scheduleFlush();
+          return;
+        }
+        // The turn settled. Paint it immediately, then reconcile with the
+        // server for the tool steps and canonical ids the live channel does
+        // not carry.
+        flush();
+        scheduleRefetch();
+        return;
+      }
+      scheduleRefetch();
+    };
+
     const connect = () => {
       socket = new WebSocket(webSocketUrl("/api/live"));
-      socket.addEventListener("open", () =>
+      socket.addEventListener("open", () => {
+        const cached = queryClient.getQueryData<ThreadSnapshot>(queryKey);
+        const resume =
+          cursor ??
+          (cached === undefined
+            ? null
+            : { epoch: cached.epoch, sequence: cached.highWaterSequence });
+        cursor = resume;
         socket?.send(
           JSON.stringify({
             version: 1,
             type: "subscribe",
             threadId,
-            epoch: snapshot.epoch,
-            cursor: snapshot.highWaterSequence,
+            ...(resume === null
+              ? {}
+              : { epoch: resume.epoch, cursor: resume.sequence }),
           }),
-        ),
-      );
-      socket.addEventListener("message", (event) => {
-        let value: unknown;
-        try {
-          value = JSON.parse(String(event.data));
-        } catch {
-          return;
-        }
-        if (
-          LiveEventSchema.safeParse(value).success ||
-          LiveSnapshotRequiredSchema.safeParse(value).success
-        ) {
-          void queryClient.invalidateQueries({
-            queryKey: ["snapshot", projectId, threadId],
-          });
-          void queryClient.invalidateQueries({ queryKey: ["workspace"] });
-        }
+        );
       });
+      socket.addEventListener("message", onMessage);
       socket.addEventListener("close", () => {
         if (!closed) retry = window.setTimeout(connect, 1_000);
       });
@@ -85,15 +197,11 @@ function useLive(
     return () => {
       closed = true;
       if (retry !== undefined) clearTimeout(retry);
+      if (flushTimer !== undefined) clearTimeout(flushTimer);
+      if (refetchTimer !== undefined) clearTimeout(refetchTimer);
       socket?.close();
     };
-  }, [
-    projectId,
-    queryClient,
-    snapshot?.epoch,
-    snapshot?.highWaterSequence,
-    threadId,
-  ]);
+  }, [projectId, queryClient, ready, threadId]);
 }
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
@@ -144,6 +252,8 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
     snapshot.thread.id,
     transcriptContentKey(items, snapshot.diagnostics),
   );
+  const running = snapshot.currentRun?.state === "running";
+  const groups = groupTranscriptItems(items);
   return (
     <div className="transcript" aria-label="Conversation" ref={scrollRef}>
       <div className="transcript-column">
@@ -155,12 +265,19 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
             </span>
           </div>
         )}
-        {groupTranscriptItems(items).map((group) => {
+        {groups.map((group, index) => {
           if (group.kind === "tool-run") {
+            // A group is live while its run is: either it is the newest thing
+            // in the transcript, or one of its steps is still running.
+            const live =
+              running &&
+              (index === groups.length - 1 ||
+                group.items.some((item) => item.status === "running"));
             return (
               <ActivityGroup
                 items={group.items}
                 key={group.items[0]?.id}
+                live={live}
                 projectPath={snapshot.project.displayPath}
               />
             );
@@ -312,7 +429,7 @@ export function ThreadPane(props: ThreadPaneProps) {
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
   });
-  useLive(projectId, threadId, snapshot.data);
+  useLive(projectId, threadId, snapshot.data !== undefined);
   useEffect(() => {
     const lastRun = snapshot.data?.lastRun;
     if (snapshot.data?.thread.unread === true && lastRun?.state === "completed")

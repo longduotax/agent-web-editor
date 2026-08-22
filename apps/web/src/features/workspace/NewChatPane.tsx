@@ -9,6 +9,7 @@ import {
   startThread,
 } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
+import { Markdown } from "../../components/Markdown.js";
 import {
   newChatDraftKey,
   readDraft,
@@ -48,12 +49,18 @@ export function NewChatPane(props: NewChatPaneProps) {
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
   const [text, setText] = useState(() => readDraft(draftKey));
+  // The prompt the user has already committed to but that has no thread yet.
+  // Starting the first thread creates a git worktree, which takes 1.6-2.6s;
+  // leaving the text sitting in the composer for that long reads as "Enter
+  // did not register", so the message is echoed here the moment it is sent.
+  const [sentPrompt, setSentPrompt] = useState<string | null>(null);
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   useEffect(() => {
     setMode("worktree");
     setSourceChanges("none");
     setBaseBranch("");
     setCreationKey(commandId());
+    setSentPrompt(null);
     setText(readDraft(newChatDraftKey(projectId, paneId)));
   }, [paneId, projectId]);
   useEffect(() => {
@@ -64,10 +71,10 @@ export function NewChatPane(props: NewChatPaneProps) {
     writeDraft(draftKey, text);
   }, [draftKey, text]);
   const create = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (promptText: string) =>
       await startThread(
         projectId,
-        text,
+        promptText,
         mode === "shared"
           ? { mode: "shared" }
           : {
@@ -91,15 +98,29 @@ export function NewChatPane(props: NewChatPaneProps) {
   const project = workspace.data?.projects.find(
     (candidate) => candidate.id === projectId,
   );
-  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const send = (value: string) => {
     if (
-      text.trim() === "" ||
+      value.trim() === "" ||
       (mode === "worktree" &&
         (!preflight.data?.worktreeAvailable || baseBranch === ""))
     )
       return;
-    create.mutate();
+    setSentPrompt(value);
+    setText("");
+    create.mutate(value, {
+      onError: () => {
+        // A failed submit must never eat what was typed: the composer gets
+        // the text back byte for byte, draft included, and the echo goes
+        // away so there is only one copy of it on screen.
+        setSentPrompt(null);
+        setText(value);
+        writeDraft(draftKey, value);
+      },
+    });
+  };
+  const submit = (event: SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    send(text);
   };
   return (
     <section
@@ -129,6 +150,53 @@ export function NewChatPane(props: NewChatPaneProps) {
         }}
       />
       <main className="center new-chat">
+        {sentPrompt !== null && (
+          // Sits on the same reading column as the card below it, so the
+          // echoed message lands where the transcript will render it a moment
+          // later. Worktree preparation is a step in that transcript now, not
+          // an 11px grey hint in the corner of the composer.
+          <div className="transcript-column" aria-label="Conversation">
+            <div className="u-row">
+              <div className="u-bubble">
+                <span className="sr-only">You</span>
+                <div className="markdown">
+                  <Markdown>{sentPrompt}</Markdown>
+                </div>
+              </div>
+            </div>
+            <details className="activity activity-running">
+              <summary>
+                <span className="activity-state" aria-label="Running">
+                  <span aria-hidden="true">◌</span>
+                </span>
+                <span className="activity-action">Preparing</span>
+                <span className="activity-target">
+                  {mode === "worktree"
+                    ? "new git worktree"
+                    : (project?.displayPath ?? "local checkout")}
+                </span>
+                <span className="activity-meta">naming the thread</span>
+                <span className="activity-chevron" aria-hidden="true">
+                  ›
+                </span>
+              </summary>
+              <div className="activity-details">
+                <section>
+                  <h3>Input</h3>
+                  <pre>
+                    {mode === "worktree"
+                      ? `git worktree add  (base ${baseBranch || "HEAD"}, ${
+                          sourceChanges === "none"
+                            ? "clean start"
+                            : "including local changes"
+                        })`
+                      : "Running in the existing local checkout."}
+                  </pre>
+                </section>
+              </div>
+            </details>
+          </div>
+        )}
         <form className="new-chat-card" onSubmit={submit}>
           <div className="new-chat-toolbar" aria-label="New chat configuration">
             <label>
@@ -287,7 +355,7 @@ export function NewChatPane(props: NewChatPaneProps) {
             <ErrorNotice
               error={create.error}
               onRetry={() => {
-                create.mutate();
+                send(text);
               }}
             />
           )}

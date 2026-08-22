@@ -12,7 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProjectId,
   RunId,
@@ -403,5 +403,220 @@ describe("failed run reporting", () => {
 
     await screen.findByRole("heading", { name: "Example thread" });
     expect(document.querySelector(".run-failure")).toBeNull();
+  });
+});
+
+// The pane used to receive every live frame, validate it, throw the payload
+// away and invalidate the snapshot query instead. That could not stream: the
+// snapshot route reads Pi's PERSISTED session branch, which does not contain
+// the in-progress message at all, so no amount of refetching could show a
+// partial answer. Measured against the running server, a 2,583 character
+// answer arrived as 494 live frames and landed on screen in exactly one DOM
+// mutation, 17s after the question.
+describe("live streaming", () => {
+  class FakeWebSocket {
+    public static instances: FakeWebSocket[] = [];
+    public readonly sent: string[] = [];
+    private readonly listeners = new Map<string, Set<(event: never) => void>>();
+    public constructor(public readonly url: string) {
+      FakeWebSocket.instances.push(this);
+    }
+    public addEventListener(type: string, handler: (event: never) => void) {
+      const set = this.listeners.get(type) ?? new Set();
+      set.add(handler);
+      this.listeners.set(type, set);
+    }
+    public removeEventListener(type: string, handler: (event: never) => void) {
+      this.listeners.get(type)?.delete(handler);
+    }
+    public send(data: string) {
+      this.sent.push(data);
+    }
+    public close() {
+      this.emit("close", {});
+    }
+    public openSocket() {
+      this.emit("open", {});
+    }
+    public deliver(payload: unknown) {
+      this.emit("message", { data: JSON.stringify(payload) });
+    }
+    private emit(type: string, event: unknown) {
+      for (const handler of [...(this.listeners.get(type) ?? [])])
+        (handler as (value: unknown) => void)(event);
+    }
+  }
+
+  let originalWebSocket: unknown;
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    originalWebSocket = globalThis.WebSocket;
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: FakeWebSocket,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: originalWebSocket,
+    });
+  });
+
+  const epoch = "40000000-0000-4000-8000-000000000001";
+  function frame(sequence: number, payload: unknown) {
+    return {
+      version: 1,
+      type: "event",
+      threadId,
+      epoch,
+      sequence,
+      eventId: `60000000-0000-4000-8000-00000000000${String(sequence % 10)}`,
+      eventType: "transcript",
+      payload,
+    };
+  }
+  function streamed(text: string) {
+    return {
+      id: "streaming-assistant",
+      kind: "message",
+      role: "assistant",
+      text,
+      timestamp: "2026-01-01T00:00:01.000Z",
+    };
+  }
+
+  /** Opens the pane's live socket and returns it, subscription already sent. */
+  async function connect() {
+    const socket = FakeWebSocket.instances.at(-1);
+    if (socket === undefined) throw new Error("no live socket was opened");
+    await act(async () => {
+      socket.openSocket();
+      await Promise.resolve();
+    });
+    return socket;
+  }
+  /** Delivers frames and lets the pane's coalescing window elapse. */
+  async function deliver(socket: FakeWebSocket, ...payloads: unknown[]) {
+    await act(async () => {
+      for (const payload of payloads) socket.deliver(payload);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+  }
+
+  it("resumes from the snapshot's cursor when the socket opens", async () => {
+    api.getSnapshot.mockResolvedValue({ ...snapshot, highWaterSequence: 7 });
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const socket = await connect();
+    expect(JSON.parse(socket.sent[0] ?? "{}")).toMatchObject({
+      type: "subscribe",
+      threadId,
+      epoch: snapshot.epoch,
+      cursor: 7,
+    });
+  });
+
+  it("paints each streamed frame from the event payload, without refetching the thread", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+    api.getSnapshot.mockClear();
+
+    await deliver(socket, frame(1, streamed("The Pomodoro")));
+    expect(screen.getByText("The Pomodoro")).toBeInTheDocument();
+
+    await deliver(socket, frame(2, streamed("The Pomodoro technique")));
+    expect(screen.getByText("The Pomodoro technique")).toBeInTheDocument();
+
+    await deliver(socket, frame(3, streamed("The Pomodoro technique splits")));
+    expect(
+      screen.getByText("The Pomodoro technique splits"),
+    ).toBeInTheDocument();
+
+    // The regression this test exists for: the answer reached the screen
+    // three separate times and the thread was never re-fetched to do it.
+    expect(api.getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("replaces the streaming placeholder with the settled turn instead of showing both", async () => {
+    const settled = {
+      id: "live-0e4bf4e4-6c2e-4b2f-9f2b-0f4b0f4b0f4b",
+      kind: "message",
+      role: "assistant",
+      text: "Work in 25 minute blocks.",
+      timestamp: "2026-01-01T00:00:02.000Z",
+    } as const;
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(socket, frame(1, streamed("Work in 25 minute")));
+    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [settled] });
+    await deliver(socket, frame(2, settled));
+
+    expect(screen.getAllByText("Work in 25 minute blocks.")).toHaveLength(1);
+    expect(screen.queryByText("Work in 25 minute")).toBeNull();
+    // A settled turn still reconciles with the server: tool steps never
+    // travel on the live channel.
+    await waitFor(() => {
+      expect(api.getSnapshot).toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to a full refetch when the server cannot replay from our cursor", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+    api.getSnapshot.mockClear();
+
+    await deliver(socket, {
+      version: 1,
+      type: "snapshot_required",
+      threadId,
+    });
+    await waitFor(() => {
+      expect(api.getSnapshot).toHaveBeenCalled();
+    });
+  });
+
+  it("refetches when a sequence gap says frames were missed, and still paints the frame it has", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+    api.getSnapshot.mockClear();
+
+    await deliver(socket, frame(1, streamed("first")));
+    expect(api.getSnapshot).not.toHaveBeenCalled();
+
+    // Sequence 5 after sequence 1: three events never arrived. The snapshot
+    // route still has nothing to add mid-turn (Pi's session branch does not
+    // hold the in-progress message), so the streamed frame is what keeps the
+    // answer on screen while the resync runs.
+    await deliver(socket, frame(5, streamed("first second third")));
+    expect(screen.getByText("first second third")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.getSnapshot).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps one socket across refetches instead of reconnecting on every snapshot change", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    await connect();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TranscriptItem } from "@pi-web/contracts";
 
 type ToolActivity = Extract<TranscriptItem, { kind: "tool" }>;
@@ -254,16 +254,36 @@ export function Activity({
 export function ActivityGroup({
   items,
   projectPath,
+  live = false,
 }: {
   items: readonly ToolActivity[];
   projectPath: string;
+  /**
+   * Whether these steps belong to a run that is still going.
+   *
+   * The step list is the only detailed progress the app has, and it used to
+   * be sealed behind a collapsed disclosure until the run ended — so a
+   * 96-second run showed a blank transcript and then revealed fourteen steps
+   * at the moment they stopped mattering. A live group opens itself and
+   * collapses back to its "Worked for Nm" summary when the run settles. The
+   * user may still fold it away by hand while it runs; that choice survives
+   * until the group's live state flips.
+   */
+  live?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const label = runLabel(items);
+  const [expanded, setExpanded] = useState(live);
+  const wasLive = useRef(live);
+  useEffect(() => {
+    if (wasLive.current === live) return;
+    wasLive.current = live;
+    setExpanded(live);
+  }, [live]);
+  const label = live ? "Working…" : runLabel(items);
 
   return (
     <details
       className="worked-group"
+      open={expanded}
       onToggle={(event) => {
         setExpanded(event.currentTarget.open);
       }}
