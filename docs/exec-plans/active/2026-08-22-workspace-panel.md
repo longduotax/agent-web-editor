@@ -2444,6 +2444,17 @@ itself: 110ms to activate, down to 29ms, and a DOM node a quarter the size.
 WSP-09's bounded-render requirement is about what is rendered, not about what
 it happens to cost on one machine.
 
+**J9 — the binary and oversized notices contradicted each other.** A 4.9 MB PDF
+rendered "Only its first 2 MiB were read." directly above "Binary file preview
+is unavailable.": one sentence saying there is a readable portion, the other
+saying there is nothing to read. Copy contents was correctly disabled
+throughout. The truncation notice is now suppressed for a binary file and the
+size is folded into the one statement that is true — "Binary file preview is
+unavailable. This file is also larger than the 2 MiB preview limit, so only its
+first 2 MiB were examined." The size is still worth naming, because it is why
+Copy contents is disabled for a file the reader may believe is small enough to
+copy.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

@@ -320,6 +320,33 @@ describe("FileTab: every state it can be in", () => {
     expect(screen.getByText("const answer = 42;")).toBeVisible();
   });
 
+  it("shows one coherent statement for a file that is both binary and oversized (J9)", async () => {
+    // A 4.9 MB PDF rendered "Only its first 2 MiB were read." directly above
+    // "Binary file preview is unavailable." — two notices that disagree
+    // about whether there is anything here to read at all.
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "docs/manual.pdf",
+        language: null,
+        content: "",
+        binary: true,
+        truncated: true,
+      }),
+    );
+    renderTab({ path: "docs/manual.pdf" });
+
+    expect(
+      await screen.findByText(
+        /Binary file preview is unavailable\. This file is also larger than the 2 MiB preview limit/,
+      ),
+    ).toBeVisible();
+    // And not the text-file truncation notice as well.
+    expect(screen.queryByText(/Only its first 2 MiB were read/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Copy contents" }),
+    ).toBeDisabled();
+  });
+
   it("says a file is empty rather than showing an empty box", async () => {
     api.getFile.mockResolvedValue(preview({ content: "" }));
     renderTab();

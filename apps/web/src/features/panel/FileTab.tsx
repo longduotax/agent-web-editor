@@ -245,7 +245,7 @@ export const FileTab = memo(function FileTab({
           }}
         />
       )}
-      {file?.truncated === true && (
+      {file?.truncated === true && !file.binary && (
         <p className="panel-state">
           This file is larger than the 2 MiB preview limit. Only its first 2 MiB
           were read, so everything below is about that portion and not about the
@@ -264,8 +264,18 @@ export const FileTab = memo(function FileTab({
         <div className="empty">
           {/* Invalid UTF-8 arrives here too, and that is deliberate at the
               boundary: text that cannot be decoded is never handed over as
-              if it were text. */}
-          Binary file preview is unavailable.
+              if it were text.
+
+              ONE statement, because two were contradictory (J9): a 4.9 MB PDF
+              read "Only its first 2 MiB were read." directly above "Binary
+              file preview is unavailable.", which says both that there is a
+              readable portion and that there is nothing to read. The size is
+              still worth naming — it is why Copy contents is disabled for a
+              file the reader may know is small enough to copy — so it is said
+              here, once, in the sentence that is true. */}
+          {file.truncated
+            ? "Binary file preview is unavailable. This file is also larger than the 2 MiB preview limit, so only its first 2 MiB were examined."
+            : "Binary file preview is unavailable."}
         </div>
       )}
       {file !== undefined && !file.binary && file.content === "" && (
