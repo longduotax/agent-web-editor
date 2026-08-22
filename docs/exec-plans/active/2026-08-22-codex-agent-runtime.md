@@ -201,7 +201,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       so tests drive a scripted in-memory duplex — no real Codex process, no
       network. Verify: `pnpm --filter @pi-web/codex-adapter exec vitest run`.
 
-- [ ] **Task 4 — Protocol schemas and the transcript mapping.** Hand-written Zod
+- [x] **Task 4 — Protocol schemas and the transcript mapping.** Hand-written Zod
       schemas for the message set in the assumptions, plus pure
       `mapThreadItem(item): TranscriptItem | null` and
       `mapNotification(n): RuntimeEvent | null`. Mapping: `agentMessage` and
@@ -347,6 +347,9 @@ checkboxes above for the current position.
   `spawnCodexTransport` land with 14 tests: the client against a scripted
   in-memory transport, the spawn path against a real `node` child so line
   fragmentation and exit reporting are exercised without needing Codex.
+- 2026-08-22: Task 4 complete. Pure protocol schemas and mapping with 21
+  tests; every mapped value is asserted against `TranscriptItemSchema`
+  itself rather than merely resembling it.
 
 ## Discoveries and blockers
 
@@ -389,6 +392,17 @@ Discovered while implementing Tasks 1 and 2:
   migration tests asserted `user_version` 7 or used 8 as "a newer schema";
   two also downgrade by dropping columns, which SQLite refuses once `runtime`
   participates in a constraint. All were updated to rebuild instead.
+
+- **Reasoning has no home of its own in the transcript contract.** The
+  contract's three kinds are message, tool, and diagnostic, so Codex reasoning
+  is rendered as an assistant message from its `summary` (what Codex itself
+  surfaces; raw `content` is dropped), and empty reasoning is skipped entirely.
+  A Codex chat therefore shows reasoning and final answers in the same visual
+  register, which Codex's own UI distinguishes. Accepted for v1; a distinct
+  transcript kind would be a contract change well beyond this plan.
+- **Codex timestamps are Unix milliseconds, not ISO strings**, so every mapped
+  timestamp is converted and an unparseable one becomes `null` rather than
+  failing the item.
 
 No blockers.
 
