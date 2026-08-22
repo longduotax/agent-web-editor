@@ -4,7 +4,7 @@
 
 **Subsystem:** Project files, Git changes, diffs, and interactive PTYs
 
-**Last verified:** 2026-08-22
+**Last verified:** 2026-08-23
 
 **Related documents:** [Initial agent workspace](../product-specs/initial-workspace.md), [initial workspace execution plan](../exec-plans/active/2026-08-15-initial-agent-workspace.md), [Workspace panel](../product-specs/workspace-panel.md), [workspace panel implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md), [local-client security](local-client-security.md), and [Parse, Don't Validate](../architecture/data-boundaries.md)
 
@@ -42,7 +42,9 @@ The browser tab that embeds a web page does not proxy it. The server offers one 
 - Symlinks may be displayed. Directory traversal does not follow symlinked directories by default. A symlinked file preview is allowed only when its canonical target remains inside the project.
 - Copy-path returns the normalized project-relative display path. Absolute server paths never appear in browser DTOs.
 - File previews are read-only, at most 2 MiB, and explicitly report binary, truncated, missing, or inaccessible states. Invalid UTF-8 is not silently decoded as trusted text.
-- Tree traversal excludes `.git`, does not imply Git ownership, caps results at 20,000 entries, and supports bounded server-side search with at most 500 matches. Ignore behavior is explicit and can later incorporate parsed ignore files.
+- Tree traversal excludes `.git`, does not imply Git ownership, caps results at 20,000 entries, and supports bounded server-side search with at most 500 matches.
+- Traversal is depth-bounded on request: `depth=1` lists one directory's own children and `depth=full` walks the subtree, defaulting to `full`. Entry paths are relative to the execution root whichever directory is listed, and a directory's children are ordered directories first, then files, each case-insensitively by name with a case-sensitive tie-break, so two listings of one directory never disagree.
+- Ignore behavior is no longer deferred. The working tree's own ignore files — the execution root's `.gitignore`, `.git/info/exclude`, and each visited directory's `.gitignore` — are parsed at the boundary and filter **both** the listing and the search. Their contents are untrusted input: at most 256 KiB is read per file, a line over 1,024 bytes is dropped, at most 4,000 patterns are kept per file, and any line that cannot be represented is discarded rather than approximated. Every bound degrades towards showing **more**: a rule that does not fit is dropped and the file it named stays visible, because a user who cannot see a file is worse off than one who sees an ignored file. A missing, unreadable, or non-regular ignore file contributes no patterns and never fails a listing. Matching is a pure predicate over already-normalized, already-contained relative paths — it touches no filesystem, so it cannot follow a symlink or leave the root — and is a linear segment walk rather than a compiled regular expression, because a glob built from untrusted text and compiled to a regex is a backtracking hazard. An explicit `showIgnored` opt-in reveals ignored paths and the response reports `ignoredHidden` so a browser never under-reports silently. `.git` is excluded in both modes and is not an ignore rule. The user's global `core.excludesFile`, nested-repository scoping, and shelling out to `git check-ignore` are all deliberately out of scope: the last costs a process per listing on a hot path and answers nothing for a non-Git project, which these routes do not require.
 
 Read-only filesystem races cannot be eliminated portably without an OS sandbox. Opening the already resolved canonical target narrows the symlink race. Any remaining replacement/disappearance becomes a scoped read error, never a fallback to the browser path.
 

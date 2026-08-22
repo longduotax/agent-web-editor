@@ -56,7 +56,7 @@ change.
 [Architecture overview](../../architecture/overview.md),
 [Parse, Don't Validate](../../architecture/data-boundaries.md).
 
-**Last updated:** 2026-08-22
+**Last updated:** 2026-08-23
 
 ## Working specification and approval context
 
@@ -1184,8 +1184,14 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 - [ ] Milestone 2 — panel shell, ported tabs, inspector deleted
 - [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
       verification, close-control question confirmed
-- [ ] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
-      search (blocked on approval of specification version 2)
+- [x] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
+      search. Shipped 2026-08-23: `apps/server/src/inspector/ignoreRules.ts`
+      and its 36 cases, the `depth`/`showIgnored` query parameters and
+      `ignoredHidden` response field, `apps/web/src/features/panel/FileTree.tsx`
+      and its 22 cases, panel record version 3, and five end-to-end specs
+      against a real working tree. The deferral in
+      [Inspector and terminal boundaries](../../design/inspector-and-terminal.md)
+      is retired and that bullet rewritten, as this milestone required.
 - [ ] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
       fixed
 - [ ] Milestone 6 — Diff tab, structured unified diff
@@ -1195,6 +1201,25 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       recorded
 
 ## Discoveries and blockers
+
+- **A `treeitem` takes its name from its children too** (2026-08-23, milestone
+  4, found by the component suite). The tree's first shape put the row's name
+  in a `span` beside the nested `ul role="group"`, which is the ARIA
+  authoring-practices layout. Querying `getByRole("treeitem", { name: "src" })`
+  then matched nothing, and `/Could not list src/` matched two elements: an
+  expanded `src` computed as "src features main.ts". The row now carries
+  `aria-labelledby` pointing at the one element holding its own name. Recorded
+  because the natural markup is wrong in a way an axe pass does not report —
+  the name is non-empty, just not the row's — and because it is the second
+  time on this plan that a naming question needed the name **computed** rather
+  than eyeballed.
+- **Clicking an expanded directory row hit its children** (2026-08-23,
+  milestone 4, found by the end-to-end pass, invisible to jsdom). With the
+  click handler on the `li`, a pointer click at the element's centre landed
+  wherever the centre happened to be — which, once the directory was open, was
+  a child row. The component suite passed throughout, because
+  `user.click(element)` dispatches at the element rather than at a point. The
+  handler moved to the row's own line, which is the row as the user sees it.
 
 - **`PtyProcess` exposes no pid.** The adapter interface in
   `apps/server/src/terminal/manager.ts` is `write`/`resize`/`kill`/`onData`/
@@ -1663,6 +1688,49 @@ tool produces, so "no real pointer does this" is not the whole population.
   than an obstacle.
 
 ## Decision and revision log
+
+- 2026-08-23 (milestone 4): **A directory's children are ordered directories
+  first, then files, each case-insensitively by name, with a case-sensitive
+  tie-break.** The requirement is only that the order be deterministic, and
+  the shipped flat listing met that with one global `localeCompare` over the
+  full path. A tree cannot: it lists one directory at a time, so the order has
+  to be decidable from one directory's own entries. Case-insensitive because a
+  listing that separates `Docs` from `apps` reads as unsorted; the
+  case-sensitive tie-break after it keeps the comparison total, so two
+  listings of a directory holding both `README` and `readme` never disagree
+  about which came first.
+- 2026-08-23 (milestone 4): **The 256 KiB ignore-file bound truncates and
+  keeps, and discards the partial final line.** The plan states both "at most
+  256 KiB per ignore file … anything beyond a bound is dropped with the rest
+  of the file's parsed patterns kept" and "a missing, unreadable, or oversized
+  ignore file contributes no patterns", which are different behaviours for an
+  oversized file. Truncate-and-keep was chosen because it is the only reading
+  under which all three bounds behave the same way, and both readings satisfy
+  the governing rule that a bound degrades towards showing MORE. What the
+  bound must never do is honour half a rule: a line straddling the bound is a
+  rule nobody wrote and could hide a file, so the partial final line is
+  dropped. `loadRootIgnoreLayers` still contributes no patterns at all for a
+  missing, unreadable, or non-regular ignore file.
+- 2026-08-23 (milestone 4): **Ignore patterns are matched by a linear segment
+  walk, not by a compiled regular expression.** Compiling a glob to a regex is
+  the obvious implementation and is what most ignore libraries do; it is also
+  a backtracking hazard on exactly this input. A `.gitignore` is arbitrary
+  bytes from the user's working tree, and `*a*a*a…b` against a long name is
+  the classic exponential shape — reachable here in a 1,024-byte line. The
+  classic wildcard walk with one remembered backtrack point answers the same
+  grammar in O(pattern x path) steps and constant memory, and is pinned by two
+  timing cases rather than by this paragraph.
+- 2026-08-23 (milestone 4): **Each tree row is labelled by the element holding
+  its own name, and the row's pointer target is its line rather than the whole
+  `treeitem`.** Both follow from the same structural fact: a directory's
+  `treeitem` element contains its children. Name-from-content therefore
+  announced an expanded `src` as "src features main.ts" — verified in the
+  component suite, which is why acceptance criterion 14 is asserted by
+  querying rows _by name_ rather than by class — and a click on the middle of
+  that element landed on whichever child was there, which the end-to-end pass
+  caught and jsdom could not. `aria-labelledby` on the row and the click
+  handler on the row's own line answer both, and keep the accessible name
+  exactly the text the row displays.
 
 - 2026-08-22: **The drag's keyboard equivalent is the chord set, not a move
   mode.** Milestone 3 as written proposed a mode — a key on a focused tab
