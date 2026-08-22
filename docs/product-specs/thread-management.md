@@ -2,17 +2,17 @@
 
 **Current version:** 2
 
-**Proposed version:** None
+**Proposed version:** 3
 
-**Proposal status:** None
+**Proposal status:** Draft
 
-**Implementation status:** Current
+**Implementation status:** In progress
 
-**Product approval:** Not applicable — no proposed revision
+**Product approval:** Pending for specification version 3
 
 **Subsystem:** Thread sidebar actions, archival, and run-state indicators
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-22
 
 **Related ExecPlans:** [Codex-style thread actions](../exec-plans/completed/2026-08-16-thread-actions.md)
 
@@ -63,6 +63,25 @@ to that project's most recently active unarchived thread. If no unarchived
 thread remains, the project's empty-thread state is shown. Archival does not
 change source files, project registration, or Pi history.
 
+### TM-05 — Archival is reversible (proposed version 3)
+
+Archiving is no longer a one-way door. Every project's sidebar section carries a
+collapsed **Archived** disclosure listing that project's archived threads, and
+each row offers **Restore**. Restoring returns the thread to normal project
+navigation with its metadata, run history and native Pi session intact, and
+without changing its position in the list (it is not promoted to most-recent)
+or the project's last-opened thread. Restore is idempotent: replaying the same
+command, or restoring a thread that is already active, succeeds without a second
+write. A failed restore surfaces the server's reason rather than doing nothing.
+
+The archived list is not fetched until the disclosure is opened, so the ordinary
+sidebar costs nothing extra.
+
+Version 2 deferred this deliberately ("an archived-thread browser … or restore
+UI in version 2" was a non-goal). It is promoted here because archival with no
+inverse made an ordinary mis-click unrecoverable from the product: the only
+remedy was editing the metadata database by hand.
+
 ### TM-03 — Inline compact thread status
 
 The sidebar places the status signal on the same row as the thread title. A
@@ -94,11 +113,24 @@ viewed, clears its blue thread signal, and updates the aggregate project signal.
 7. Malformed archive requests and malformed or legacy persisted archive values
    fail or migrate at their owning boundaries without exposing unrelated
    records.
+8. A project's Archived disclosure lists exactly that project's archived threads
+   and nothing else, fetches nothing until it is opened, and Restore returns the
+   thread to the active sidebar list — leaving its ordering position and the
+   project's last-opened thread unchanged — while a failed restore shows the
+   server's reason.
+9. Restoring is idempotent and rejects an unknown thread with a not-found error
+   rather than inventing one; malformed unarchive commands are rejected at the
+   contract boundary.
+10. Archiving several threads in quick succession stages each one independently:
+    starting a second archive neither commits nor cancels a first that is still
+    inside its undo window, and a failure on any of them names its thread and is
+    visible.
 
 ### Non-goals
 
 - Permanent deletion of application metadata or native Pi history.
-- An archived-thread browser, search, bulk archive, or restore UI in version 2.
+- Search, bulk archive, or bulk restore. (A per-project archived list with a
+  per-thread Restore arrives in version 3; a full archive browser does not.)
 - Automatically archiving completed threads or stopping work in order to
   archive it.
 - Changing run-state, completion-viewed, project-removal, or thread-ordering
@@ -112,3 +144,6 @@ viewed, clears its blue thread signal, and updates the aggregate project signal.
 - The user approved version 2 on 2026-08-16. Version 2 makes archival
   non-destructive while deferring a restore UI; retained metadata remains
   available for a future archive manager.
+- Version 3 (proposed 2026-08-22) spends that retained metadata: it adds TM-05,
+  a per-project Archived list and a per-thread Restore, and makes concurrent
+  archive staging independent so no undo window is cut short.

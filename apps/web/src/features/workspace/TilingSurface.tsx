@@ -19,8 +19,9 @@ export const MIN_PANE_WIDTH_PX = 360;
 export interface TilingSurfaceProps {
   projectId: ProjectId;
   controller: WorkspaceLayoutController;
-  // caller archives if threadId set, then removes the pane
-  onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  // Removes the pane from the layout. Purely a layout operation: closing a
+  // pane never archives, deletes or otherwise mutates its thread (R2-5).
+  onClosePane: (paneId: PaneId) => void;
   // caller assigns the thread to the pane and decides whether to navigate
   // (e.g. only when the pane started as the new-chat route's entry pane)
   onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
@@ -37,7 +38,13 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   const { root } = controller.layout;
 
   if (root === null) {
-    return <EmptyState />;
+    return (
+      <EmptyState
+        onOpenPane={() => {
+          controller.newPane();
+        }}
+      />
+    );
   }
 
   const paneCount = tiledPaneIds(controller.layout).length;
@@ -61,11 +68,21 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   );
 }
 
-function EmptyState() {
+// The empty surface must offer its own way out: closing the last pane leaves
+// the URL on a thread, and a sidebar row is not always within reach (below
+// 900px the sidebar is a drawer).
+function EmptyState({ onOpenPane }: { onOpenPane: () => void }) {
   return (
     <div className="tiling-empty" role="status">
       <p>No panes are open.</p>
-      <p>Start a new chat from the sidebar to open a pane here.</p>
+      <p>Open an empty pane here, or pick a thread in the sidebar.</p>
+      <button
+        type="button"
+        className="tiling-empty-action"
+        onClick={onOpenPane}
+      >
+        Open a pane
+      </button>
     </div>
   );
 }
@@ -74,7 +91,7 @@ interface LayoutNodeViewProps {
   node: LayoutNode;
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
-  onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onClosePane: (paneId: PaneId) => void;
   onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }
 
@@ -112,7 +129,7 @@ function PaneRegion({
   paneId: PaneId;
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
-  onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onClosePane: (paneId: PaneId) => void;
   onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }) {
   const focused = paneId === controller.layout.focusedPaneId;
@@ -128,7 +145,7 @@ function PaneRegion({
             controller.focus(paneId);
           }}
           onClose={() => {
-            onClosePane(paneId, threadId);
+            onClosePane(paneId);
           }}
           onSplit={() => {
             controller.focus(paneId);
@@ -138,12 +155,13 @@ function PaneRegion({
       ) : (
         <NewChatPane
           projectId={projectId}
+          paneId={paneId}
           focused={focused}
           onFocus={() => {
             controller.focus(paneId);
           }}
           onClose={() => {
-            onClosePane(paneId, null);
+            onClosePane(paneId);
           }}
           onSplit={() => {
             controller.focus(paneId);
@@ -168,7 +186,7 @@ function SplitRegion({
   node: SplitNode;
   controller: WorkspaceLayoutController;
   projectId: ProjectId;
-  onClosePane: (paneId: PaneId, threadId: ThreadId | null) => void;
+  onClosePane: (paneId: PaneId) => void;
   onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);

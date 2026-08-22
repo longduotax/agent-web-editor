@@ -11,6 +11,7 @@ import {
   splitPane,
 } from "./layoutTree.js";
 import type { PaneId, SplitId, WorkspaceLayout } from "./layoutTree.js";
+import { pruneNewChatDrafts } from "./drafts.js";
 import { readLayout, writeLayout } from "./layoutStorage.js";
 import type { WorkspaceCommand } from "./keybindings.js";
 
@@ -51,11 +52,6 @@ function applyCommand(
       if (focusedPaneId === null) return layout;
       return closePane(layout, focusedPaneId);
     }
-    case "bind": {
-      const { focusedPaneId } = layout;
-      if (focusedPaneId === null) return layout;
-      return bindPane(layout, focusedPaneId);
-    }
     case "focus":
       return moveFocus(layout, command.direction);
     default:
@@ -80,6 +76,9 @@ export function useWorkspaceLayout(
 
   useEffect(() => {
     writeLayout(projectId, layout);
+    // Panes are the only owners of new-chat draft keys, so the set of live
+    // pane ids is also the set of keys that may legitimately exist.
+    pruneNewChatDrafts(projectId, Object.keys(layout.panes));
   }, [projectId, layout]);
 
   const dispatch = useCallback((command: WorkspaceCommand) => {

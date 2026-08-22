@@ -255,6 +255,18 @@ export const ArchiveThreadRequestSchema = z
 export const ArchiveThreadResponseSchema = z
   .object({ archived: z.literal(true) })
   .strict();
+// Archiving is reversible: a thread that leaves the sidebar can be listed
+// under the project's Archived section and restored. Without this, archive
+// was a one-way door whose only recovery was editing the database by hand.
+export const UnarchiveThreadRequestSchema = z
+  .object({ idempotencyKey: IdempotencyKeySchema })
+  .strict();
+export const UnarchiveThreadResponseSchema = z
+  .object({ archived: z.literal(false) })
+  .strict();
+export const ArchivedThreadsResponseSchema = z
+  .object({ threads: z.array(ThreadSummarySchema) })
+  .strict();
 export const ImportThreadRequestSchema = z
   .object({
     runtimeSessionId: SessionIdSchema,

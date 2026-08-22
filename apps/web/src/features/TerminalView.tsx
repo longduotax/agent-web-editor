@@ -11,6 +11,46 @@ import {
 
 import { webSocketUrl } from "../api/client.js";
 
+// The terminal is the one surface xterm paints itself, so it cannot inherit
+// the app's CSS tokens. Read them off the document instead of hardcoding a
+// palette that is only correct in one theme (styles.css defines --term-bg /
+// --term-fg / --term-cursor for light and dark alike).
+interface TerminalTheme {
+  background: string;
+  foreground: string;
+  cursor: string;
+}
+
+function readTerminalTheme(): TerminalTheme {
+  const styles = getComputedStyle(document.documentElement);
+  const token = (name: string, fallback: string) => {
+    const value = styles.getPropertyValue(name).trim();
+    return value === "" ? fallback : value;
+  };
+  return {
+    background: token("--term-bg", "#ffffff"),
+    foreground: token("--term-fg", "#1d1d1f"),
+    cursor: token("--term-cursor", token("--term-fg", "#1d1d1f")),
+  };
+}
+
+// Fires whenever the effective theme could have changed: an explicit choice
+// stamps/removes data-theme on <html>, and the "system" choice follows
+// prefers-color-scheme with no attribute change at all.
+function observeThemeChanges(onChange: () => void): () => void {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  media.addEventListener("change", onChange);
+  return () => {
+    observer.disconnect();
+    media.removeEventListener("change", onChange);
+  };
+}
+
 export function TerminalView({
   projectId,
   threadId,
@@ -21,6 +61,9 @@ export function TerminalView({
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);
   const terminalId = useRef<TerminalId | null>(null);
+  // Mirrors terminalId for rendering. Reading the ref during render made the
+  // "Start terminal" button's visibility depend on an unrelated re-render.
+  const [attached, setAttached] = useState(false);
   const [status, setStatus] = useState("Starting terminal…");
 
   useEffect(() => {
@@ -30,7 +73,10 @@ export function TerminalView({
       convertEol: true,
       cursorBlink: true,
       fontSize: 13,
-      theme: { background: "#0d0f13", foreground: "#d8dce5" },
+      theme: readTerminalTheme(),
+    });
+    const stopWatchingTheme = observeThemeChanges(() => {
+      terminal.options.theme = readTerminalTheme();
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -39,6 +85,7 @@ export function TerminalView({
     const ws = new WebSocket(webSocketUrl("/api/terminal"));
     socket.current = ws;
     terminalId.current = null;
+    setAttached(false);
     ws.addEventListener("open", () => {
       ws.send(
         JSON.stringify({ version: 1, type: "attach", projectId, threadId }),
@@ -59,11 +106,13 @@ export function TerminalView({
       }
       if (parsed.data.type === "ready") {
         terminalId.current = parsed.data.terminalId;
+        setAttached(true);
         setStatus("Terminal running");
       } else if (parsed.data.type === "output")
         terminal.write(parsed.data.data);
       else if (parsed.data.type === "exit") {
         terminalId.current = null;
+        setAttached(false);
         terminal.writeln(
           `\r\n[process exited ${String(parsed.data.exitCode)}]`,
         );
@@ -78,6 +127,7 @@ export function TerminalView({
     });
     ws.addEventListener("close", () => {
       terminalId.current = null;
+      setAttached(false);
       setStatus("Terminal disconnected");
     });
     const input = terminal.onData((data) => {
@@ -112,6 +162,7 @@ export function TerminalView({
     });
     resize.observe(element);
     return () => {
+      stopWatchingTheme();
       resize.disconnect();
       input.dispose();
       ws.close();
@@ -148,9 +199,7 @@ export function TerminalView({
     <div className="terminal-panel">
       <div className="terminal-toolbar">
         <span>{status}</span>
-        {terminalId.current === null && (
-          <button onClick={attach}>Start terminal</button>
-        )}
+        {!attached && <button onClick={attach}>Start terminal</button>}
         <button
           onClick={() => {
             send("restart");

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   ArchiveThreadRequestSchema,
   ArchiveThreadResponseSchema,
+  UnarchiveThreadRequestSchema,
+  UnarchiveThreadResponseSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
   ProjectIdSchema,
@@ -91,6 +93,25 @@ describe("wire contracts", () => {
     });
     expect(
       ArchiveThreadResponseSchema.safeParse({ archived: false }).success,
+    ).toBe(false);
+  });
+
+  it("parses strict unarchive commands and acknowledgements", () => {
+    expect(UnarchiveThreadRequestSchema.parse({ idempotencyKey: id })).toEqual({
+      idempotencyKey: id,
+    });
+    expect(
+      UnarchiveThreadRequestSchema.safeParse({
+        idempotencyKey: id,
+        archived: false,
+      }).success,
+    ).toBe(false);
+    expect(UnarchiveThreadResponseSchema.parse({ archived: false })).toEqual({
+      archived: false,
+    });
+    // The two acknowledgements are not interchangeable in either direction.
+    expect(
+      UnarchiveThreadResponseSchema.safeParse({ archived: true }).success,
     ).toBe(false);
   });
 

@@ -157,9 +157,14 @@ function runLabel(items: readonly ToolActivity[]): string {
     .filter((value): value is string => value !== null)
     .map((value) => new Date(value).getTime())
     .filter((value) => Number.isFinite(value));
-  if (timestamps.length < 2) return "Worked";
+  // Always name the duration slot: a bare "Worked" next to a sibling group's
+  // "Worked for 27s" reads as a different kind of row rather than as the same
+  // row with an unknown duration.
+  if (timestamps.length < 2) return "Worked for <1s";
   const duration = Math.max(...timestamps) - Math.min(...timestamps);
-  return duration <= 0 ? "Worked" : `Worked for ${formatDuration(duration)}`;
+  return duration <= 0
+    ? "Worked for <1s"
+    : `Worked for ${formatDuration(duration)}`;
 }
 
 export function displayTranscript(

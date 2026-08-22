@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,8 @@ import type {
 
 const api = vi.hoisted(() => ({
   archiveThread: vi.fn(),
+  unarchiveThread: vi.fn(),
+  getArchivedThreads: vi.fn(),
   discoverSessions: vi.fn(),
   getFiles: vi.fn(),
   getSnapshot: vi.fn(),
@@ -50,6 +53,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("safe and accessible workspace rendering", () => {
@@ -793,13 +797,11 @@ describe("safe and accessible workspace rendering", () => {
       ),
     };
     await queryClient.invalidateQueries({ queryKey: ["workspace"] });
-    expect(
-      await screen.findByRole("button", {
-        name: "Archive Renamed thread (unavailable while running)",
-      }),
-    ).toBeDisabled();
-    fireEvent.contextMenu(
-      screen.getByRole("link", { name: /Renamed thread.*Working/ }),
+    await screen.findByRole("link", { name: /Renamed thread.*Working/ });
+    // R2-6: the per-row overflow control is persistently visible and is the
+    // one route to Rename/Archive; Archive stays disabled while running.
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Renamed thread" }),
     );
     expect(
       screen.getByRole("menuitem", {
@@ -816,12 +818,17 @@ describe("safe and accessible workspace rendering", () => {
     };
     await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     await user.click(
-      await screen.findByRole("button", { name: "Archive Renamed thread" }),
+      await screen.findByRole("button", { name: "Actions for Renamed thread" }),
     );
-    await waitFor(() => {
-      expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
-    });
+    await user.click(screen.getByRole("menuitem", { name: "Archive" }));
+    // The row leaves the list at once, but the request itself is deferred
+    // behind the undo toast (R2-5); the timing is covered by the dedicated
+    // "sidebar archive" suite below.
     expect(screen.queryByText("Renamed thread")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: 'Undo archiving "Renamed thread"' }),
+    ).toBeInTheDocument();
+    expect(api.archiveThread).not.toHaveBeenCalled();
   });
 });
 
@@ -898,5 +905,894 @@ describe("sidebar run status", () => {
     });
     const results = await axe.run(sidebar);
     expect(results.violations).toEqual([]);
+  });
+});
+
+// R2-1. The single workspace inspector (Changes | Files | Terminal) is the
+// only panel left after UX-1, and the spec describes it as following the
+// FOCUSED PANE. It used to derive from useParams().threadId instead, so
+// focusing a threadless pane while the route pointed at a thread left the
+// inspector showing a pane the user was not looking at, and focusing a
+// thread pane while the route was /new made the whole column vanish.
+describe("inspector follows the focused pane", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+
+  const project = {
+    id: projectId,
+    displayName: "Example project",
+    displayPath: "/example",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    available: true,
+    gitAvailable: true,
+    sidebarExpanded: true,
+    unreadCount: 0,
+    lastOpenedThreadId: threadId,
+  };
+  const thread = {
+    id: threadId,
+    projectId,
+    title: "Focused thread",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastActivityAt: "2026-01-01T00:00:00.000Z",
+    runState: null,
+    unread: false,
+    runtimeAvailable: true,
+    workspace: { mode: "shared" as const, branchName: null, available: true },
+  };
+
+  function renderWorkspace() {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        public addEventListener() {
+          return undefined;
+        }
+        public send() {
+          return undefined;
+        }
+        public close() {
+          return undefined;
+        }
+      },
+    );
+    api.getWorkspace.mockResolvedValue({
+      projects: [project],
+      threads: [thread],
+      diagnostics: [],
+    });
+    api.getSnapshot.mockResolvedValue({
+      version: 1,
+      project,
+      thread,
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot);
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getWorkspacePreflight.mockResolvedValue({
+      worktreeAvailable: true,
+      unavailableReason: null,
+      currentBranch: "main",
+      branches: ["main"],
+      changes: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  const inspector = () =>
+    screen.queryByRole("complementary", { name: "Project inspector" });
+
+  it("hides the inspector while a threadless pane is focused and restores it on refocus, without the URL changing", async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    await screen.findByRole("heading", { name: "Focused thread" });
+    await user.click(
+      screen.getByRole("button", { name: "Open inspector panel" }),
+    );
+    expect(inspector()).toBeInTheDocument();
+
+    // Split: the fresh pane owns no thread and takes focus.
+    await user.click(screen.getByRole("button", { name: "Split" }));
+    const newChatPane = await screen.findByRole("region", { name: "New chat" });
+    expect(newChatPane).toBeInTheDocument();
+
+    // A threadless pane has no workspace to inspect, so the column goes away
+    // entirely -- rail included.
+    await waitFor(() => {
+      expect(inspector()).not.toBeInTheDocument();
+    });
+    expect(document.querySelector(".inspector-rail")).toBeNull();
+
+    // Refocusing the thread pane brings its workspace back. The route never
+    // changed at any point in this test.
+    await user.click(screen.getByRole("region", { name: "Focused thread" }));
+    await waitFor(() => {
+      expect(inspector()).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("tab", { name: "Changes", selected: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the inspector once every pane is closed", async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    await screen.findByRole("heading", { name: "Focused thread" });
+    await user.click(
+      screen.getByRole("button", { name: "Open inspector panel" }),
+    );
+    expect(inspector()).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(await screen.findByText("No panes are open.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(inspector()).not.toBeInTheDocument();
+    });
+    expect(document.querySelector(".inspector-rail")).toBeNull();
+  });
+});
+
+// R2-5 / D-9, second half. Archiving is now reachable ONLY through the
+// sidebar's explicitly labelled Archive action. Because there is no unarchive
+// endpoint, undo must PREVENT the archive rather than reverse it: the row
+// leaves the list immediately, the call is deferred behind the toast, and a
+// failure puts the row back with an error the user can see.
+describe("sidebar archive", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+  const secondThreadId = "20000000-0000-4000-8000-000000000002" as ThreadId;
+
+  function renderSidebar(
+    threads: { id: ThreadId; title: string }[] = [
+      { id: threadId, title: "Disposable thread" },
+    ],
+  ) {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: threads.map((thread) => ({
+        id: thread.id,
+        projectId,
+        title: thread.title,
+        runState: null,
+        unread: false,
+      })),
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("defers the archive behind an undo toast and never sends it when undone", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderSidebar();
+    const row = await screen.findByRole("link", { name: "Disposable thread" });
+    expect(row).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Disposable thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+
+    // The row leaves immediately and nothing has been sent yet.
+    expect(
+      screen.queryByRole("link", { name: "Disposable thread" }),
+    ).not.toBeInTheDocument();
+    expect(api.archiveThread).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: 'Undo archiving "Disposable thread"',
+      }),
+    );
+    expect(
+      screen.getByRole("link", { name: "Disposable thread" }),
+    ).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(api.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("sends the archive once the toast times out", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderSidebar();
+    await screen.findByRole("link", { name: "Disposable thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Disposable thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    });
+    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+  });
+
+  it("restores the row and surfaces an error when the archive fails, instead of reporting success", async () => {
+    api.archiveThread.mockRejectedValue(new Error("worktree is locked"));
+    renderSidebar();
+    await screen.findByRole("link", { name: "Disposable thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Disposable thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    expect(
+      screen.queryByRole("link", { name: "Disposable thread" }),
+    ).not.toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    vi.useRealTimers();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "worktree is locked",
+    );
+    expect(
+      screen.getByRole("link", { name: "Disposable thread" }),
+    ).toBeInTheDocument();
+  });
+
+  // NEW-R3-1. Archiving a second thread inside the first's undo window used
+  // to flush the first archive immediately (destroying an undo the user was
+  // still entitled to) and then call mutation.reset(), which detached the
+  // observer before the rejection landed -- so a failed flush produced no
+  // alert at all. Each pending archive now owns its own toast and timer, and
+  // every failure is named and surfaced.
+  it("keeps each pending archive on its own undo window instead of flushing the first", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderSidebar([
+      { id: threadId, title: "First thread" },
+      { id: secondThreadId, title: "Second thread" },
+    ]);
+    await screen.findByRole("link", { name: "First thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for First thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Second thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+
+    // Starting the second archive must not commit the first.
+    expect(api.archiveThread).not.toHaveBeenCalled();
+    // Both rows are staged, and both undo affordances are on screen.
+    expect(
+      screen.getByRole("button", { name: 'Undo archiving "First thread"' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: 'Undo archiving "Second thread"' }),
+    ).toBeInTheDocument();
+
+    // The first thread's own window is still running: undo still works.
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Undo archiving "First thread"' }),
+    );
+    expect(
+      screen.getByRole("link", { name: "First thread" }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    vi.useRealTimers();
+    await waitFor(() => {
+      expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    });
+    expect(api.archiveThread).toHaveBeenCalledWith(projectId, secondThreadId);
+  });
+
+  it("names the failing thread and surfaces its error even when a second archive was requested inside its undo window", async () => {
+    api.archiveThread.mockImplementation((_project: ProjectId, id: ThreadId) =>
+      id === threadId
+        ? Promise.reject(new Error("worktree is locked"))
+        : Promise.resolve({ archived: true as const }),
+    );
+    renderSidebar([
+      { id: threadId, title: "First thread" },
+      { id: secondThreadId, title: "Second thread" },
+    ]);
+    await screen.findByRole("link", { name: "First thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for First thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Second thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    vi.useRealTimers();
+
+    // Exactly one notice, naming the thread that actually failed. The second
+    // archive succeeded and must not produce one.
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent(
+      'Could not archive "First thread": worktree is locked',
+    );
+    expect(
+      screen.getByRole("link", { name: "First thread" }),
+    ).toBeInTheDocument();
+    expect(api.archiveThread).toHaveBeenCalledTimes(2);
+  });
+});
+
+// NEW-R3-1, second half. Archive used to be a one-way door: a committed
+// archive hid the thread from every listing the app had, and the only way
+// back was editing the database by hand. It is now reversible.
+describe("restoring an archived thread", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+
+  function renderSidebar(threads: { id: ThreadId; title: string }[] = []) {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: threads.map((thread) => ({
+        id: thread.id,
+        projectId,
+        title: thread.title,
+        runState: null,
+        unread: false,
+      })),
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("lists archived threads only when asked, and restores one", async () => {
+    api.getArchivedThreads.mockResolvedValue({
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Archived thread",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActivityAt: "2026-01-01T00:00:00.000Z",
+          runState: null,
+          unread: false,
+          runtimeAvailable: true,
+          workspace: { mode: "shared", branchName: null, available: true },
+        },
+      ],
+    });
+    api.unarchiveThread.mockResolvedValue({ archived: false as const });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const toggle = await screen.findByRole("button", {
+      name: "Archived threads in Example project",
+    });
+    // Nothing is fetched until the section is opened.
+    expect(api.getArchivedThreads).not.toHaveBeenCalled();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
+    await user.click(
+      await screen.findByRole("button", { name: "Restore Archived thread" }),
+    );
+
+    await waitFor(() => {
+      expect(api.unarchiveThread).toHaveBeenCalledWith(projectId, threadId);
+    });
+  });
+
+  it("refreshes an open Archived section when an archive commits, so the thread never vanishes from both lists at once", async () => {
+    api.getArchivedThreads.mockResolvedValue({ threads: [] });
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    renderSidebar([{ id: threadId, title: "Disposable thread" }]);
+
+    await screen.findByRole("link", { name: "Disposable thread" });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Archived threads in Example project",
+      }),
+    );
+    await waitFor(() => {
+      expect(api.getArchivedThreads).toHaveBeenCalledTimes(1);
+    });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Disposable thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(api.getArchivedThreads).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("surfaces a failed restore instead of silently doing nothing", async () => {
+    api.getArchivedThreads.mockResolvedValue({
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Archived thread",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastActivityAt: "2026-01-01T00:00:00.000Z",
+          runState: null,
+          unread: false,
+          runtimeAvailable: true,
+          workspace: { mode: "shared", branchName: null, available: true },
+        },
+      ],
+    });
+    api.unarchiveThread.mockRejectedValue(new Error("thread was not found"));
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Archived threads in Example project",
+      }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Restore Archived thread" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "thread was not found",
+    );
+  });
+});
+
+// R2-6. With no pointer over the sidebar, the only visible call to action
+// used to be "Browse…" — a once-ever action — while starting a chat (the
+// app's primary verb) and renaming a thread had no visible control at all.
+describe("sidebar affordances are visible without hovering", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+
+  it("keeps New thread and the per-thread actions menu visible, and hover-gates only the destructive controls", async () => {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Example thread",
+          runState: null,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const newThread = await screen.findByRole("button", {
+      name: "New thread in Example project",
+    });
+    expect(newThread.className).not.toMatch(/hover-only/);
+    const actions = screen.getByRole("button", {
+      name: "Actions for Example thread",
+    });
+    expect(actions.className).not.toMatch(/hover-only/);
+
+    // Destructive / rare controls may still be hover-revealed.
+    expect(
+      screen.getByRole("button", { name: "Remove Example project" }).className,
+    ).toMatch(/hover-only/);
+
+    // The actions menu is the discoverable route to Rename, which previously
+    // existed only on right-click / Shift+F10.
+    fireEvent.click(actions);
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeVisible();
+  });
+});
+
+// R2-13. `queryKey: ["files", …, search]` had no debounce and no
+// placeholderData, so every character started a fresh full-tree listing
+// (~750ms–5s on a real repo) and `files.isPending` replaced the whole list
+// with "Listing files…" between each one.
+describe("inspector Files tab search", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+  const project = {
+    id: projectId,
+    displayName: "Example project",
+    displayPath: "/example",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    available: true,
+    gitAvailable: true,
+    sidebarExpanded: true,
+    unreadCount: 0,
+    lastOpenedThreadId: threadId,
+  };
+  const thread = {
+    id: threadId,
+    projectId,
+    title: "Example thread",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastActivityAt: "2026-01-01T00:00:00.000Z",
+    runState: null,
+    unread: false,
+    runtimeAvailable: true,
+    workspace: { mode: "shared" as const, branchName: null, available: true },
+  };
+
+  it("debounces the query and keeps the previous list visible while the next one loads", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        public addEventListener() {
+          return undefined;
+        }
+        public send() {
+          return undefined;
+        }
+        public close() {
+          return undefined;
+        }
+      },
+    );
+    const values = new Map<string, string>([
+      [
+        "pi-workspace:inspector",
+        JSON.stringify({
+          version: 1,
+          open: true,
+          activeTab: "files",
+          width: 400,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    api.getWorkspace.mockResolvedValue({
+      projects: [project],
+      threads: [thread],
+      diagnostics: [],
+    });
+    api.getSnapshot.mockResolvedValue({
+      version: 1,
+      project,
+      thread,
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot);
+    api.getFiles.mockResolvedValue({
+      entries: [{ path: "src/main.ts", kind: "file" as const }],
+      truncated: false,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const search = await screen.findByRole("textbox", {
+      name: "Search project files",
+    });
+    await screen.findByText("src/main.ts");
+    expect(api.getFiles).toHaveBeenCalledTimes(1);
+
+    await user.type(search, "mai");
+    // Three keystrokes, still one request in flight-or-done: nothing fires
+    // until typing settles.
+    expect(api.getFiles).toHaveBeenCalledTimes(1);
+    // ...and the panel never blanks to its loading state mid-typing.
+    expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
+    expect(screen.getByText("src/main.ts")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(2);
+    });
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, "mai");
+    expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
+  });
+});
+
+// R2-12. The UX-7 Changes-tab states shipped in round 1 with no test at all,
+// and the changes summary rescued from the deleted EnvironmentPanel lost its
+// 308 lines of coverage with it. The pure summary logic is unit-tested in
+// components/changesSummary.test.ts; this covers the rendering.
+describe("inspector Changes tab states", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+  const project = {
+    id: projectId,
+    displayName: "Example project",
+    displayPath: "/example",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    available: true,
+    gitAvailable: true,
+    sidebarExpanded: true,
+    unreadCount: 0,
+    lastOpenedThreadId: threadId,
+  };
+  const thread = {
+    id: threadId,
+    projectId,
+    title: "Example thread",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastActivityAt: "2026-01-01T00:00:00.000Z",
+    runState: null,
+    unread: false,
+    runtimeAvailable: true,
+    workspace: { mode: "shared" as const, branchName: null, available: true },
+  };
+
+  function renderChangesTab() {
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        public addEventListener() {
+          return undefined;
+        }
+        public send() {
+          return undefined;
+        }
+        public close() {
+          return undefined;
+        }
+      },
+    );
+    const values = new Map<string, string>([
+      [
+        "pi-workspace:inspector",
+        JSON.stringify({
+          version: 1,
+          open: true,
+          activeTab: "changes",
+          width: 400,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    });
+    api.getWorkspace.mockResolvedValue({
+      projects: [project],
+      threads: [thread],
+      diagnostics: [],
+    });
+    api.getSnapshot.mockResolvedValue({
+      version: 1,
+      project,
+      thread,
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("shows a pending state, then the empty state for a clean worktree", async () => {
+    let resolveStatus: (value: {
+      available: boolean;
+      message: string | null;
+      files: never[];
+    }) => void = () => undefined;
+    api.getStatus.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+    renderChangesTab();
+
+    expect(await screen.findByText("Reading the worktree…")).toBeVisible();
+    resolveStatus({ available: true, message: null, files: [] });
+    expect(
+      await screen.findByText("No changes in this worktree."),
+    ).toBeVisible();
+    expect(screen.queryByText("Reading the worktree…")).not.toBeInTheDocument();
+  });
+
+  it("carries the changes summary on the scope note and asks for a selection", async () => {
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [
+        {
+          path: "src/added.ts",
+          originalPath: null,
+          indexStatus: "A",
+          worktreeStatus: " ",
+          kind: "added",
+        },
+        {
+          path: "src/changed.ts",
+          originalPath: null,
+          indexStatus: " ",
+          worktreeStatus: "M",
+          kind: "modified",
+        },
+      ],
+    });
+    renderChangesTab();
+
+    expect(
+      await screen.findByText(/Current thread workspace.*1 added, 1 modified/),
+    ).toBeVisible();
+    expect(screen.getByText("Select a file to view its diff.")).toBeVisible();
+    expect(
+      screen.queryByText("No changes in this worktree."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the server's reason when the worktree is unavailable", async () => {
+    api.getStatus.mockResolvedValue({
+      available: false,
+      message: "git is not installed on this machine.",
+      files: [],
+    });
+    renderChangesTab();
+
+    expect(
+      await screen.findByText("git is not installed on this machine."),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("No changes in this worktree."),
+    ).not.toBeInTheDocument();
   });
 });

@@ -148,6 +148,33 @@ describe("metadata persistence", () => {
     );
     expect(store.latestRun(archived.id)?.id).toBe(completed.id);
     expect(store.archiveThread(project.id, archived.id)).toBe(true);
+
+    // Restoring puts the thread back in the live listing without touching its
+    // position (last_activity_at) or promoting it to last_opened_thread_id.
+    now = "2026-08-15T12:03:00.000Z";
+    expect(store.unarchiveThread(project.id, archived.id)).toBe(true);
+    expect(store.getThread(project.id, archived.id)).toMatchObject({
+      id: archived.id,
+      archived_at: null,
+    });
+    expect(store.listThreads(project.id).map((thread) => thread.id)).toEqual([
+      archived.id,
+      remaining.id,
+    ]);
+    expect(store.getThread(project.id, archived.id)?.last_activity_at).toBe(
+      "2026-08-15T12:01:00.000Z",
+    );
+    expect(store.getProject(project.id)?.last_opened_thread_id).toBe(
+      remaining.id,
+    );
+    // Idempotent, and unknown threads are reported rather than invented.
+    expect(store.unarchiveThread(project.id, archived.id)).toBe(true);
+    expect(
+      store.unarchiveThread(
+        project.id,
+        "10000000-0000-4000-8000-0000000000ff" as typeof archived.id,
+      ),
+    ).toBe(false);
     store.close();
   });
 

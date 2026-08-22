@@ -27,9 +27,10 @@ import { parseConfig } from "../apps/server/src/config.js";
 // (apps/web/src/features/workspace/ThreadPane.test.tsx and
 // apps/web/src/components/Activity.test.tsx), which control the transcript
 // items directly. This spec covers what the stub CAN produce end-to-end:
-// pane run-status, split (button + chord), theme persistence, the
-// focus-following Environment panel, the close/undo-toast flow, and the
-// absence of any dock chrome or horizontal page scroll.
+// pane run-status, split (button + chord), theme persistence, the single
+// workspace inspector, the non-destructive close and the sidebar's
+// archive/undo flow, and the absence of any dock chrome or horizontal page
+// scroll.
 class BrowserSession implements OpenRuntimeSession {
   public constructor(public readonly id: string) {}
   public snapshot() {
@@ -193,7 +194,7 @@ async function startThreadInNewChatPane(pane: Locator, message: string) {
   await pane.getByRole("button", { name: "Create chat and send" }).click();
 }
 
-test("codex workspace surface: run status, split (button + chord), environment panel, undo toast, no dock", async ({
+test("codex workspace surface: run status, split (button + chord), single inspector, non-destructive close, visible sidebar actions, no dock", async ({
   page,
 }) => {
   await page.goto(launchUrl);
@@ -257,87 +258,60 @@ test("codex workspace surface: run status, split (button + chord), environment p
   await expect(chordSplitPane).toBeVisible();
 
   // Close the fresh threadless pane immediately via its header's Close
-  // button. With three tiled panes and the environment panel auto-hidden,
-  // that pane's card fills the workspace surface's full remaining width, so
-  // its header sits at the surface's top-right corner, right where the
-  // floating .environment-toggle floats — `.tiling-region`'s reserved
-  // right-hand gutter (styles.css) keeps the header's actions clear of it,
-  // so a real click here both closes the pane and doubles as a regression
-  // guard for that overlap. No undo toast for a new-chat pane either way
-  // (nothing to archive).
+  // button. That pane's card reaches the workspace surface's right edge, so
+  // a real click here also guards CWS-06's "no control overlaps pane
+  // content": nothing floats over the pane header any more. No undo toast
+  // for a new-chat pane either way (nothing to archive).
   await chordSplitPane.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("region", { name: "New chat" })).toHaveCount(0);
   await expect(page.getByRole("region")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
 
-  // Environment panel: with two tiled panes the device-local "auto" default
-  // is hidden, so open it via the toggle in the workspace chrome.
-  const environmentToggle = page.getByRole("button", {
-    name: "Toggle environment panel",
-  });
-  await environmentToggle.click();
-  const environmentPanel = page.getByRole("complementary", {
-    name: "Environment",
-  });
-  await expect(environmentPanel).toBeVisible();
-  await expect(environmentToggle).toHaveAttribute("aria-pressed", "true");
+  // CWS-06: exactly one panel is docked right of the pane surface, and it is
+  // the Changes | Files | Terminal inspector. No standalone Environment
+  // column and no control for one exists at any width.
+  await expect(
+    page.getByRole("complementary", { name: "Environment" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /environment/i })).toHaveCount(
+    0,
+  );
 
-  // Focus-following: capture both panes' accessible titles, confirm the
-  // panel shows the currently-focused one, then click the other pane and
-  // confirm the panel's content swaps to that pane's title instead. Read
-  // attributes through Playwright's typed Locator API (not evaluateAll's
-  // in-page callback) since this spec's tsconfig has no "dom" lib, which
-  // would otherwise leave the callback's element type effectively `any`.
-  const paneCount = await panes.count();
-  expect(paneCount).toBe(2);
-  const paneTitles: (string | null)[] = [];
-  const paneFocus: (string | null)[] = [];
-  for (let index = 0; index < paneCount; index += 1) {
-    paneTitles.push(await panes.nth(index).getAttribute("aria-label"));
-    paneFocus.push(await panes.nth(index).getAttribute("aria-current"));
-  }
-  const [titleA, titleB] = paneTitles;
-  if (
-    titleA === null ||
-    titleA === undefined ||
-    titleB === null ||
-    titleB === undefined
-  )
-    throw new Error("Pane regions were not accessibly labelled");
-
-  const focusedIndex = paneFocus.findIndex((value) => value === "true");
-  expect(focusedIndex).toBeGreaterThanOrEqual(0);
-  const focusedTitle = focusedIndex === 0 ? titleA : titleB;
-  const otherTitle = focusedIndex === 0 ? titleB : titleA;
-  const otherIndex = focusedIndex === 0 ? 1 : 0;
-
-  await expect(environmentPanel.getByText(focusedTitle)).toBeVisible();
-
-  // Click the non-focused pane (not a button/input) to focus it; the
-  // environment panel must follow.
-  await panes.nth(otherIndex).click();
-  await expect(environmentPanel.getByText(otherTitle)).toBeVisible();
-  await expect(environmentPanel.getByText(focusedTitle)).toHaveCount(0);
-
-  // Hide the panel again via its own close control.
-  await environmentPanel
-    .getByRole("button", { name: "Hide environment panel" })
-    .click();
-  await expect(environmentPanel).toHaveCount(0);
-
-  // Close a threaded pane: it disappears immediately and an "Archived —
-  // Undo" toast appears; clicking Undo restores it (splits intact) with no
-  // archive ever having fired.
+  // R2-5 / D-9: closing a threaded pane is a PURE LAYOUT OPERATION. It used
+  // to archive the thread as a side effect behind a button labelled only
+  // "Close". The pane leaves the layout; the thread stays in the sidebar and
+  // nothing is archived.
+  const threadRows = page.locator(".thread-list li");
+  await expect(threadRows).toHaveCount(2);
   await expect(page.getByRole("region")).toHaveCount(2);
   await panes.first().getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("region")).toHaveCount(1);
-  const undoToast = page.getByRole("status").filter({ hasText: "Archived" });
-  await expect(undoToast).toBeVisible();
-  await undoToast.getByRole("button", { name: "Undo" }).click();
-  await expect(page.getByRole("region")).toHaveCount(2);
-  await expect(page.getByRole("textbox", { name: "Message Pi" })).toHaveCount(
-    2,
-  );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Archived" }),
+  ).toHaveCount(0);
+  await expect(threadRows).toHaveCount(2);
+
+  // R2-6: archiving and renaming are reached through a per-thread actions
+  // menu that is visible without hovering (it used to be a hover-only archive
+  // icon plus a right-click-only Rename). No pointer has touched the sidebar
+  // at this point in the test.
+  const actionsButton = page
+    .getByRole("button", { name: /^Actions for / })
+    .first();
+  await expect(actionsButton).toBeVisible();
+  await actionsButton.click();
+  await expect(page.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+  // Both threads are mid-run in this harness (the stub never settles), so
+  // Archive is correctly refused rather than offered.
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Archive (unavailable while running)",
+    }),
+  ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  // Nothing was archived by any of the above.
+  await expect(threadRows).toHaveCount(2);
   await expect(
     page.getByRole("status").filter({ hasText: "Archived" }),
   ).toHaveCount(0);

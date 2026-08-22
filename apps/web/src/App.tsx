@@ -6,7 +6,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   ProjectIdSchema,
   ThreadIdSchema,
@@ -27,6 +32,7 @@ import {
   archiveThread,
   browseProject,
   discoverSessions,
+  getArchivedThreads,
   getDiff,
   getFile,
   getFiles,
@@ -37,12 +43,17 @@ import {
   removeProject,
   renameThread,
   setExpanded,
+  unarchiveThread,
 } from "./api/client.js";
+import { summarizeChanges } from "./components/changesSummary.js";
+import { classifyDiff } from "./components/diffLines.js";
+import { useDebouncedValue } from "./components/useDebouncedValue.js";
 import { ErrorNotice } from "./components/ErrorNotice.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { TerminalView } from "./features/TerminalView.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
+import { UndoToast } from "./features/workspace/UndoToast.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
   deriveRunStatus,
@@ -60,6 +71,16 @@ import {
 } from "./inspectorPreferences.js";
 
 export { Composer } from "./features/workspace/ThreadPane.js";
+
+// A thread whose archive is staged behind its own undo toast, or whose
+// archive has just failed. The title travels with it so both the toast and
+// any error can name the thread without a second lookup — the row is gone
+// from `workspace.data.threads` while the archive is staged.
+interface PendingArchive {
+  projectId: ProjectId;
+  threadId: ThreadId;
+  title: string;
+}
 
 function Sidebar({
   selectedProjectId,
@@ -98,6 +119,22 @@ function Sidebar({
     top: number;
   } | null>(null);
   const threadMenuRef = useRef<HTMLDivElement>(null);
+  // Which project's Archived section is open, if any. One query for the whole
+  // sidebar (the same shape as the session-import section above): archived
+  // threads are a recovery surface, not part of the normal listing, so they
+  // are never fetched until the section is opened.
+  const [archivedProjectId, setArchivedProjectId] = useState<
+    ProjectId | undefined
+  >(undefined);
+  const archivedThreads = useQuery({
+    queryKey: ["archived-threads", archivedProjectId],
+    queryFn: async () => {
+      if (archivedProjectId === undefined)
+        throw new Error("A project must be selected to list archived threads.");
+      return await getArchivedThreads(archivedProjectId);
+    },
+    enabled: archivedProjectId !== undefined,
+  });
   const sessions = useQuery({
     queryKey: ["sessions", discoveringProjectId],
     queryFn: async () => {
@@ -128,19 +165,64 @@ function Sidebar({
       );
     },
   });
+  // Archiving is the app's one destructive thread action, so undo PREVENTS
+  // the call rather than reversing it: the row leaves the list immediately,
+  // the request is deferred until that thread's toast times out, and Undo
+  // cancels it outright. (Archiving is reversible now — see Restore below —
+  // but a prevented archive is still cheaper and keeps the thread's place in
+  // the list.)
+  //
+  // Every staged archive is INDEPENDENT (NEW-R3-1). A single pending slot
+  // meant archiving a second thread flushed the first one's request
+  // immediately, cutting an undo window the user was still inside, and the
+  // mutation.reset() that followed detached the observer before the flushed
+  // request could reject — so that failure surfaced nowhere at all. Each
+  // entry now owns its own toast, its own 6s timer and its own named error.
+  const [pendingArchives, setPendingArchives] = useState<PendingArchive[]>([]);
+  const [archiveFailures, setArchiveFailures] = useState<
+    { thread: PendingArchive; error: unknown }[]
+  >([]);
+  const forgetArchiveFailure = (threadId: ThreadId) => {
+    setArchiveFailures((current) =>
+      current.filter((failure) => failure.thread.threadId !== threadId),
+    );
+  };
   const archive = useMutation({
-    mutationFn: async ({
-      projectId,
-      threadId,
-    }: {
-      projectId: ProjectId;
-      threadId: ThreadId;
-    }) => await archiveThread(projectId, threadId),
+    mutationFn: async ({ projectId, threadId }: PendingArchive) =>
+      await archiveThread(projectId, threadId),
     onSuccess: async (_result, variables) => {
       setThreadMenu(null);
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      forgetArchiveFailure(variables.threadId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        // The Archived section is the newly archived thread's destination. If
+        // it happens to be open, leaving its list stale means the thread has
+        // apparently vanished from both lists at once.
+        queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
+      ]);
       if (selectedThreadId === variables.threadId)
         void navigate(`/projects/${variables.projectId}`);
+    },
+    // Recorded per thread rather than read off the mutation, which only ever
+    // holds the most recent call's error and is the exact hole NEW-R3-1 fell
+    // through.
+    onError: (error, variables) => {
+      setArchiveFailures((current) => [
+        ...current.filter(
+          (failure) => failure.thread.threadId !== variables.threadId,
+        ),
+        { thread: variables, error },
+      ]);
+    },
+  });
+  const unarchive = useMutation({
+    mutationFn: async ({ projectId, threadId }: PendingArchive) =>
+      await unarchiveThread(projectId, threadId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
+      ]);
     },
   });
   const rename = useMutation({
@@ -153,9 +235,17 @@ function Sidebar({
       threadId: ThreadId;
       title: string;
     }) => await renameThread(projectId, threadId, title),
-    onSuccess: async () => {
+    onSuccess: async (_result, variables) => {
       setRenamingThread(null);
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        // The pane header renders the title from its own snapshot query, so
+        // without this the renamed thread keeps its old title in the pane
+        // until the 15s refetch interval comes round.
+        queryClient.invalidateQueries({
+          queryKey: ["snapshot", variables.projectId, variables.threadId],
+        }),
+      ]);
     },
   });
 
@@ -191,9 +281,25 @@ function Sidebar({
     };
   }, [threadMenu]);
 
-  const requestArchive = (projectId: ProjectId, threadId: ThreadId) => {
+  // Stages an archive. Never touches any other staged archive: a second
+  // request runs alongside the first, each on its own timer (NEW-R3-1).
+  const requestArchive = (
+    projectId: ProjectId,
+    threadId: ThreadId,
+    title: string,
+  ) => {
     setThreadMenu(null);
-    archive.mutate({ projectId, threadId });
+    forgetArchiveFailure(threadId);
+    setPendingArchives((current) =>
+      current.some((pending) => pending.threadId === threadId)
+        ? current
+        : [...current, { projectId, threadId, title }],
+    );
+  };
+  const cancelArchive = (threadId: ThreadId) => {
+    setPendingArchives((current) =>
+      current.filter((pending) => pending.threadId !== threadId),
+    );
   };
 
   return (
@@ -218,7 +324,20 @@ function Sidebar({
         </button>
       </div>
       {browse.error !== null && <ErrorNotice error={browse.error} />}
-      {archive.error !== null && <ErrorNotice error={archive.error} />}
+      {/* One notice per failed archive, naming its thread: with several
+          archives in flight an unlabelled message cannot say which one
+          failed, and the row silently reappearing explains nothing. */}
+      {archiveFailures.map((failure) => (
+        <ErrorNotice
+          key={failure.thread.threadId}
+          error={failure.error}
+          context={`Could not archive "${failure.thread.title}"`}
+          onRetry={() => {
+            archive.mutate(failure.thread);
+          }}
+        />
+      ))}
+      {unarchive.error !== null && <ErrorNotice error={unarchive.error} />}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
@@ -228,7 +347,11 @@ function Sidebar({
         )}
         {workspace.data?.projects.map((project) => {
           const threads = workspace.data.threads.filter(
-            (thread) => thread.projectId === project.id,
+            (thread) =>
+              thread.projectId === project.id &&
+              !pendingArchives.some(
+                (pending) => pending.threadId === thread.id,
+              ),
           );
           return (
             <section
@@ -274,7 +397,7 @@ function Sidebar({
                   ＋
                 </button>
                 <button
-                  className="icon-button"
+                  className="icon-button hover-only"
                   aria-expanded={discoveringProjectId === project.id}
                   aria-label={`Import an existing session into ${project.displayName}`}
                   onClick={() => {
@@ -286,7 +409,7 @@ function Sidebar({
                   ⇥
                 </button>
                 <button
-                  className="icon-button danger"
+                  className="icon-button danger hover-only"
                   aria-label={`Remove ${project.displayName}`}
                   onClick={() => {
                     if (
@@ -485,31 +608,23 @@ function Sidebar({
                                 })()}
                               </Link>
                               <button
-                                className="thread-archive-button"
+                                className="thread-actions-button"
                                 type="button"
-                                aria-label={
-                                  running
-                                    ? `Archive ${thread.title} (unavailable while running)`
-                                    : `Archive ${thread.title}`
+                                aria-label={`Actions for ${thread.title}`}
+                                aria-haspopup="menu"
+                                aria-expanded={
+                                  threadMenu?.threadId === thread.id
                                 }
-                                disabled={running || archive.isPending}
-                                title={
-                                  running
-                                    ? "Wait for this thread to finish before archiving it."
-                                    : `Archive ${thread.title}`
-                                }
-                                onClick={() => {
-                                  requestArchive(project.id, thread.id);
+                                title={`Actions for ${thread.title}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  const bounds =
+                                    event.currentTarget.getBoundingClientRect();
+                                  openMenu(bounds.left, bounds.bottom);
                                 }}
                               >
-                                <svg
-                                  aria-hidden="true"
-                                  viewBox="0 0 16 16"
-                                  width="14"
-                                  height="14"
-                                >
-                                  <path d="M2.25 3.25h11.5v2.5H2.25zM3.5 6.75h9v6h-9zM6 8.25h4" />
-                                </svg>
+                                <span aria-hidden="true">…</span>
                               </button>
                             </>
                           )}
@@ -517,6 +632,72 @@ function Sidebar({
                       );
                     })}
                   </ul>
+                  {/* Recovery surface for the one destructive thread action.
+                      Collapsed by default and never fetched until opened, so
+                      it costs nothing in the normal case. */}
+                  <button
+                    type="button"
+                    className="archived-toggle"
+                    aria-expanded={archivedProjectId === project.id}
+                    aria-label={`Archived threads in ${project.displayName}`}
+                    onClick={() => {
+                      setArchivedProjectId((current) =>
+                        current === project.id ? undefined : project.id,
+                      );
+                    }}
+                  >
+                    <span aria-hidden="true">
+                      {archivedProjectId === project.id ? "▾" : "▸"}
+                    </span>
+                    Archived
+                  </button>
+                  {archivedProjectId === project.id && (
+                    <section
+                      className="archived-threads"
+                      aria-label={`Archived threads in ${project.displayName}`}
+                    >
+                      {archivedThreads.isPending && (
+                        <p className="muted">Loading archived threads…</p>
+                      )}
+                      {archivedThreads.error !== null && (
+                        <ErrorNotice
+                          error={archivedThreads.error}
+                          onRetry={() => {
+                            void archivedThreads.refetch();
+                          }}
+                        />
+                      )}
+                      {archivedThreads.data?.threads.length === 0 && (
+                        <p className="empty">No archived threads.</p>
+                      )}
+                      <ul>
+                        {archivedThreads.data?.threads.map((thread) => (
+                          <li key={thread.id}>
+                            <span
+                              className="archived-title"
+                              title={thread.title}
+                            >
+                              {thread.title}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Restore ${thread.title}`}
+                              disabled={unarchive.isPending}
+                              onClick={() => {
+                                unarchive.mutate({
+                                  projectId: project.id,
+                                  threadId: thread.id,
+                                  title: thread.title,
+                                });
+                              }}
+                            >
+                              Restore
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
                 </>
               )}
             </section>
@@ -553,14 +734,18 @@ function Sidebar({
                 ? "Archive (unavailable while running)"
                 : "Archive"
             }
-            disabled={threadMenu.running || archive.isPending}
+            disabled={threadMenu.running}
             title={
               threadMenu.running
                 ? "Wait for this thread to finish before archiving it."
                 : undefined
             }
             onClick={() => {
-              requestArchive(threadMenu.projectId, threadMenu.threadId);
+              requestArchive(
+                threadMenu.projectId,
+                threadMenu.threadId,
+                threadMenu.title,
+              );
             }}
           >
             Archive
@@ -572,6 +757,27 @@ function Sidebar({
           {diagnostic}
         </p>
       ))}
+      {pendingArchives.length > 0 && (
+        <div className="undo-toast-stack">
+          {pendingArchives.map((pending) => (
+            // Keyed by thread: each staged archive owns its own countdown,
+            // and each Undo names its thread so two stacked toasts are
+            // distinguishable by pointer and by screen reader alike.
+            <UndoToast
+              key={pending.threadId}
+              message={`Archived "${pending.title}"`}
+              undoLabel={`Undo archiving "${pending.title}"`}
+              onUndo={() => {
+                cancelArchive(pending.threadId);
+              }}
+              onDismiss={() => {
+                cancelArchive(pending.threadId);
+                archive.mutate(pending);
+              }}
+            />
+          ))}
+        </div>
+      )}
       <footer className="local-only">
         <span className="local-only-note">
           <span aria-hidden="true">⌂</span> Loopback-only server
@@ -583,6 +789,11 @@ function Sidebar({
     </nav>
   );
 }
+
+// How many file rows the Files tab paints at once. The unsearched listing on
+// a real repository is ~20,000 entries; rendering them all is what made the
+// inspector slow to open and to scroll (NEW-R3-4).
+const FILE_LIST_RENDER_LIMIT = 200;
 
 const DESKTOP_SIDEBAR_WIDTH = 272;
 const MIN_THREAD_WIDTH = 360;
@@ -604,6 +815,25 @@ function inspectorMaxWidth(viewportWidth: number): number {
       INSPECTOR_MIN_WIDTH,
       viewportWidth - DESKTOP_SIDEBAR_WIDTH - MIN_THREAD_WIDTH,
     ),
+  );
+}
+
+// Added / removed / hunk-header lines are coloured from theme tokens. The
+// `+`/`-` prefix characters stay in the text, so the distinction is never
+// carried by colour alone.
+function DiffText({ text }: { text: string }) {
+  return (
+    <pre className="diff-text">
+      {classifyDiff(text).map((line, index) => (
+        <span
+          className={`diff-line diff-${line.kind}`}
+          key={`${String(index)}:${line.text}`}
+        >
+          {line.text}
+          {"\n"}
+        </span>
+      ))}
+    </pre>
   );
 }
 
@@ -684,10 +914,16 @@ function Inspector({
     queryFn: () => getStatus(project.id, threadId),
     enabled: tab === "changes",
   });
+  // Debounced + keepPreviousData: a full recursive listing takes hundreds of
+  // milliseconds to seconds on a real repository, so a query per keystroke
+  // both hammered the server and blanked the panel to "Listing files…"
+  // between every character.
+  const debouncedSearch = useDebouncedValue(search);
   const files = useQuery({
-    queryKey: ["files", project.id, threadId, search],
-    queryFn: () => getFiles(project.id, threadId, search),
+    queryKey: ["files", project.id, threadId, debouncedSearch],
+    queryFn: () => getFiles(project.id, threadId, debouncedSearch),
     enabled: tab === "files",
+    placeholderData: keepPreviousData,
   });
   const preview = useQuery({
     queryKey: ["file", project.id, threadId, selectedPath],
@@ -771,10 +1007,24 @@ function Inspector({
       >
         {tab === "changes" && (
           <>
-            <p className="scope-note">Current thread workspace</p>
+            <p className="scope-note">
+              Current thread workspace
+              {status.data?.available === true &&
+                status.data.files.length > 0 &&
+                ` · ${summarizeChanges(status.data.files)}`}
+            </p>
+            {status.isPending && (
+              <p className="panel-state" aria-live="polite">
+                Reading the worktree…
+              </p>
+            )}
             {status.data?.available === false && (
               <div className="empty">{status.data.message}</div>
             )}
+            {status.data?.available === true &&
+              status.data.files.length === 0 && (
+                <div className="empty">No changes in this worktree.</div>
+              )}
             <ul className="file-list">
               {status.data?.files.map((file) => (
                 <li key={file.path}>
@@ -792,6 +1042,14 @@ function Inspector({
                 </li>
               ))}
             </ul>
+            {(status.data?.files.length ?? 0) > 0 && selectedPath === null && (
+              <p className="panel-state">Select a file to view its diff.</p>
+            )}
+            {diff.isPending && selectedPath !== null && (
+              <p className="panel-state" aria-live="polite">
+                Loading diff…
+              </p>
+            )}
             {diff.data !== undefined && (
               <div className="diff-view">
                 <header>
@@ -801,19 +1059,32 @@ function Inspector({
                 {diff.data.staged !== "" && (
                   <>
                     <h4>Staged</h4>
-                    <pre>{diff.data.staged}</pre>
+                    <DiffText text={diff.data.staged} />
                   </>
                 )}
                 {diff.data.unstaged !== "" && (
                   <>
                     <h4>Unstaged</h4>
-                    <pre>{diff.data.unstaged}</pre>
+                    <DiffText text={diff.data.unstaged} />
                   </>
                 )}
               </div>
             )}
-            {(status.error ?? diff.error) !== null && (
-              <ErrorNotice error={status.error ?? diff.error} />
+            {status.error !== null && (
+              <ErrorNotice
+                error={status.error}
+                onRetry={() => {
+                  void status.refetch();
+                }}
+              />
+            )}
+            {diff.error !== null && (
+              <ErrorNotice
+                error={diff.error}
+                onRetry={() => {
+                  void diff.refetch();
+                }}
+              />
             )}
           </>
         )}
@@ -828,21 +1099,54 @@ function Inspector({
                 setSearch(event.target.value);
               }}
             />
+            {files.isPending && (
+              <p className="panel-state" aria-live="polite">
+                Listing files…
+              </p>
+            )}
+            {files.data?.entries.length === 0 && (
+              <div className="empty">
+                {/* Named for the query the RESULT belongs to, not the
+                    keystroke in flight. */}
+                {debouncedSearch === ""
+                  ? "No files in this workspace."
+                  : `No files match "${debouncedSearch}".`}
+              </div>
+            )}
+            {/* Rendered rows are capped (NEW-R3-4). The server returns the
+                whole recursive listing -- 20,000 entries on this repo, node_
+                modules included -- and painting all of them as real DOM made
+                the first paint and every subsequent scroll of the inspector
+                visibly slow. The cap is a render budget, not a filter: the
+                count below always names the true total and points at search,
+                which narrows the result on the server. */}
             <ul className="file-list">
-              {files.data?.entries.map((file) => (
-                <li key={file.path}>
-                  <button
-                    disabled={file.kind !== "file" && file.kind !== "symlink"}
-                    onClick={() => {
-                      setSelectedPath(file.path);
-                    }}
-                  >
-                    <span>{file.kind === "directory" ? "▸" : "·"}</span>
-                    <span>{file.path}</span>
-                  </button>
-                </li>
-              ))}
+              {files.data?.entries
+                .slice(0, FILE_LIST_RENDER_LIMIT)
+                .map((file) => (
+                  <li key={file.path}>
+                    <button
+                      disabled={file.kind !== "file" && file.kind !== "symlink"}
+                      onClick={() => {
+                        setSelectedPath(file.path);
+                      }}
+                    >
+                      <span aria-hidden="true">
+                        {file.kind === "directory" ? "▸" : "·"}
+                      </span>
+                      <span>{file.path}</span>
+                    </button>
+                  </li>
+                ))}
             </ul>
+            {(files.data?.entries.length ?? 0) > FILE_LIST_RENDER_LIMIT && (
+              <p className="panel-state" aria-live="polite">
+                {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(files.data?.entries.length ?? 0)} files. Search to narrow the list.`}
+              </p>
+            )}
+            {(files.data?.entries.length ?? 0) > 0 && selectedPath === null && (
+              <p className="panel-state">Select a file to preview it.</p>
+            )}
             {preview.data !== undefined && (
               <div className="file-preview">
                 <header>
@@ -870,8 +1174,21 @@ function Inspector({
                 )}
               </div>
             )}
-            {(files.error ?? preview.error) !== null && (
-              <ErrorNotice error={files.error ?? preview.error} />
+            {files.error !== null && (
+              <ErrorNotice
+                error={files.error}
+                onRetry={() => {
+                  void files.refetch();
+                }}
+              />
+            )}
+            {preview.error !== null && (
+              <ErrorNotice
+                error={preview.error}
+                onRetry={() => {
+                  void preview.refetch();
+                }}
+              />
             )}
           </>
         )}
@@ -883,30 +1200,37 @@ function Inspector({
   );
 }
 
-function NewChatRoute() {
-  const params = useParams();
-  const projectResult = ProjectIdSchema.safeParse(params.projectId);
-  if (!projectResult.success) return <NotFound />;
-  const projectId = projectResult.data;
-  return (
-    <WorkspaceLayout selectedProjectId={projectId}>
-      <WorkspaceView projectId={projectId} />
-    </WorkspaceLayout>
-  );
-}
-
-function ThreadRoute() {
-  const params = useParams();
-  const projectResult = ProjectIdSchema.safeParse(params.projectId);
-  const threadResult = ThreadIdSchema.safeParse(params.threadId);
+/**
+ * The project's tiling surface plus the ONE workspace inspector docked right
+ * of it (CWS-06).
+ *
+ * The inspector follows the **focused pane**, never the URL. A route can
+ * address at most one thread, but the surface can hold several panes at once
+ * (and, on `/new`, none that own a thread yet); deriving the inspector from
+ * `useParams().threadId` meant it showed a thread the user was not looking
+ * at, or disappeared entirely while a perfectly inspectable pane was
+ * focused. `WorkspaceView` reports whichever thread its focused pane owns —
+ * `null` for a threadless pane or an empty surface — and that is the single
+ * source of truth for what the inspector shows.
+ */
+function ProjectWorkspace({
+  projectId,
+  routeThreadId,
+}: {
+  projectId: ProjectId;
+  routeThreadId?: ThreadId | undefined;
+}) {
   const [inspectorPreferences, setInspectorPreferences] =
     useState<InspectorPreferences>(readInspectorPreferences);
   useEffect(() => {
     writeInspectorPreferences(inspectorPreferences);
   }, [inspectorPreferences]);
-  if (!projectResult.success || !threadResult.success) return <NotFound />;
-  const projectId = projectResult.data;
-  const threadId = threadResult.data;
+  // Seeded from the route so the first paint already has the right workspace
+  // when the surface opens on the addressed thread; from then on the focused
+  // pane drives it.
+  const [focusedThreadId, setFocusedThreadId] = useState<ThreadId | null>(
+    routeThreadId ?? null,
+  );
   const updateInspectorPreferences = (
     update: Partial<Omit<InspectorPreferences, "version">>,
   ) => {
@@ -915,17 +1239,28 @@ function ThreadRoute() {
   // Kept only for the Inspector, which needs the project record and to know
   // whether a snapshot is available; ThreadPane owns its own copy of this
   // query (and the live-update subscription that keeps it fresh) so it stays
-  // self-contained.
+  // self-contained. keepPreviousData means moving focus between two thread
+  // panes swaps the inspector's contents instead of tearing the whole column
+  // down and rebuilding it.
   const snapshot = useQuery({
-    queryKey: ["snapshot", projectId, threadId],
-    queryFn: () => getSnapshot(projectId, threadId),
+    queryKey: ["snapshot", projectId, focusedThreadId],
+    queryFn: async () => {
+      if (focusedThreadId === null)
+        throw new Error("No focused thread to inspect.");
+      return await getSnapshot(projectId, focusedThreadId);
+    },
+    enabled: focusedThreadId !== null,
+    placeholderData: keepPreviousData,
     refetchInterval: 15_000,
   });
+  const inspectable = focusedThreadId !== null && snapshot.data !== undefined;
   return (
     <WorkspaceLayout
       selectedProjectId={projectId}
-      selectedThreadId={threadId}
-      inspectorAvailable={snapshot.data !== undefined}
+      // The sidebar highlights whatever the user is looking at, which is the
+      // focused pane's thread — the route only seeds it.
+      selectedThreadId={focusedThreadId ?? routeThreadId}
+      inspectorAvailable={inspectable}
       inspectorOpen={inspectorPreferences.open}
       inspectorWidth={inspectorPreferences.width}
       onOpenInspector={() => {
@@ -935,10 +1270,13 @@ function ThreadRoute() {
         updateInspectorPreferences({ open: false });
       }}
       inspector={
-        snapshot.data !== undefined ? (
+        inspectable ? (
           <Inspector
+            // Remount on a thread change so the tab's selected file, search
+            // box and in-flight queries never leak across panes.
+            key={focusedThreadId}
             project={snapshot.data.project}
-            threadId={threadId}
+            threadId={focusedThreadId}
             tab={inspectorPreferences.activeTab}
             width={inspectorPreferences.width}
             onTabChange={(activeTab) => {
@@ -955,8 +1293,31 @@ function ThreadRoute() {
         ) : undefined
       }
     >
-      <WorkspaceView projectId={projectId} />
+      <WorkspaceView
+        projectId={projectId}
+        onFocusedThreadChange={setFocusedThreadId}
+      />
     </WorkspaceLayout>
+  );
+}
+
+function NewChatRoute() {
+  const params = useParams();
+  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  if (!projectResult.success) return <NotFound />;
+  return <ProjectWorkspace projectId={projectResult.data} />;
+}
+
+function ThreadRoute() {
+  const params = useParams();
+  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  const threadResult = ThreadIdSchema.safeParse(params.threadId);
+  if (!projectResult.success || !threadResult.success) return <NotFound />;
+  return (
+    <ProjectWorkspace
+      projectId={projectResult.data}
+      routeThreadId={threadResult.data}
+    />
   );
 }
 
@@ -991,11 +1352,7 @@ function ProjectRoute() {
     return (
       <Navigate replace to={`/projects/${project.id}/threads/${target}`} />
     );
-  return (
-    <WorkspaceLayout selectedProjectId={project.id}>
-      <WorkspaceView projectId={project.id} />
-    </WorkspaceLayout>
-  );
+  return <ProjectWorkspace projectId={project.id} />;
 }
 
 function WorkspaceLayout({
@@ -1051,29 +1408,48 @@ function WorkspaceLayout({
   const inspectorVisible = inspectorOpen && inspector !== undefined;
   return (
     <div
-      className={`workspace ${inspector !== undefined ? "inspector-available" : ""} ${inspectorVisible ? "inspector-visible" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
+      className={`workspace ${inspector !== undefined ? "inspector-available" : ""} ${inspectorVisible ? "inspector-visible" : ""} ${inspectorAvailable && !inspectorVisible ? "inspector-railed" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
       style={
         {
           "--inspector-width": `${String(effectiveInspectorWidth)}px`,
         } as CSSProperties
       }
     >
+      {/* The toolbar sits ABOVE the drawers it opens (NEW-R3-6): it used to be
+          covered by the sidebar the moment that sidebar slid in, leaving a
+          visible, enabled control that could not be clicked and did not close
+          what it had opened. Both buttons are toggles. */}
       <div className="mobile-toolbar">
         <button
           onClick={() => {
-            setDrawer("sidebar");
+            setDrawer((current) => (current === "sidebar" ? null : "sidebar"));
           }}
-          aria-label="Open projects drawer"
+          aria-expanded={drawer === "sidebar"}
+          aria-label={
+            drawer === "sidebar"
+              ? "Close projects drawer"
+              : "Open projects drawer"
+          }
         >
           ☰ Projects
         </button>
         {inspectorAvailable && (
           <button
             onClick={() => {
+              if (drawer === "inspector") {
+                onCloseInspector?.();
+                setDrawer(null);
+                return;
+              }
               onOpenInspector?.();
               setDrawer("inspector");
             }}
-            aria-label="Open inspector drawer"
+            aria-expanded={drawer === "inspector"}
+            aria-label={
+              drawer === "inspector"
+                ? "Close inspector drawer"
+                : "Open inspector drawer"
+            }
           >
             Inspector <PanelRightIcon />
           </button>
@@ -1086,15 +1462,19 @@ function WorkspaceLayout({
       {children}
       {inspector}
       {inspectorAvailable && !inspectorVisible && (
-        <button
-          type="button"
-          className="inspector-reopen"
-          aria-label="Open inspector panel"
-          title="Open inspector"
-          onClick={onOpenInspector}
-        >
-          <PanelRightIcon />
-        </button>
+        <div className="inspector-rail">
+          <div className="inspector-rail-head">
+            <button
+              type="button"
+              className="inspector-reopen"
+              aria-label="Open inspector panel"
+              title="Open inspector"
+              onClick={onOpenInspector}
+            >
+              <PanelRightIcon />
+            </button>
+          </div>
+        </div>
       )}
       {drawer !== null && (
         <button

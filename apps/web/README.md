@@ -40,17 +40,21 @@ selected-thread center.
   - Close focused pane: `Shift+Cmd+Backspace` / `Shift+Alt+Backspace`
   - Move focus between panes: `Cmd+Alt+Arrow` / `Ctrl+Alt+Arrow`
   - Bind the focused pane to the right panel: `Cmd+Alt+Enter` / `Ctrl+Alt+Enter`
-- **Run status**: each threaded pane's header shows a labeled, color-plus-text
+- **Run status**: each threaded pane has exactly one header, showing a labeled, color-plus-text
   run-status indicator — Working (with an elapsed timer), Needs approval,
   Done, or Failed — so a user monitoring several panes can tell which one
   needs them from the headers alone; the same statuses appear against each
   thread in the sidebar run list. A status change never steals focus.
-- **Environment panel**: a single, shared, focus-following right-hand column
-  that reflects the focused pane's run environment — changes summary,
-  worktree, branch, and sources (e.g. GitHub) — and updates whenever focus
-  moves between panes. Its visibility is a device-local preference: open by
-  default while the surface is a single pane, hidden once it tiles, and
-  remembered per device after the user toggles it.
+- **One right-hand panel**: the `Changes | Files | Terminal` inspector is the
+  only column docked right of the pane surface. The focused thread's worktree
+  mode and branch appear once, on its own pane header's quiet detail line; the
+  changes summary appears once, in the Changes tab. Neither the inspector nor
+  its reopen control ever overlaps pane content — when closed it collapses to a
+  docked rail. (The earlier standalone "Environment" column is removed; see
+  CWS-06 in `docs/product-specs/codex-workspace-surface.md`.)
+- **One reading column**: the transcript, the composer, and the new-chat card
+  share a single centered measure, `--surface-measure` in `styles.css`. No
+  component carries a width of its own.
 - **Themes**: the app ships complete light and dark themes plus a System
   default that follows the OS `prefers-color-scheme` and updates live; the
   choice is applied before first paint (no flash) and is set from the

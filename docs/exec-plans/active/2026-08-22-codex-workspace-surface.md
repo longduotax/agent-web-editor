@@ -556,6 +556,27 @@ git commit -m "feat(web): shared pane header with run status and split/close act
 
 ### Task 8: Immediate close with an undo toast (deferred archive)
 
+> **Superseded 2026-08-22 (post-implementation).** Two later revisions apply to
+> everything below.
+>
+> 1. **R2-5 / D-9.** Close is a **pure layout operation**: it never archives,
+>    shows no toast, and needs no `replaceLayout` undo. Archiving is reachable
+>    only from the sidebar's explicitly labelled Archive action, where the toast
+>    and the deferred call now live. `WorkspaceView` no longer imports the API.
+> 2. **NEW-R3-1.** "Only one pending close at a time: if a second close happens
+>    while one is pending, flush the first" is **wrong and is removed**.
+>    Flushing cut an undo window the user was still inside and, combined with
+>    `mutation.reset()`, silenced the flushed call's failure. Staged archives
+>    are independent: one toast, one timer and one named error per thread.
+>    Archiving is also reversible now (see `thread-management.md` TM-05), so the
+>    rationale below — "there is no unarchive endpoint, so undo must prevent the
+>    archive rather than reverse it" — no longer holds as stated; undo still
+>    prevents the call, but because that is cheaper and keeps the thread's place
+>    in the list, not because it is the only recourse.
+>
+> `UndoToast`'s interface is as sketched below plus an optional `undoLabel` for
+> the button's accessible name, since several toasts can be on screen at once.
+
 **Files:**
 
 - Modify: `apps/web/src/features/workspace/WorkspaceView.tsx` (replace the current close-then-archive with a deferred-archive + toast flow)
@@ -644,6 +665,15 @@ git commit -m "feat(web): dockless surface with focus ring and sidebar run statu
 ---
 
 ### Task 10: Environment panel — single, shared, focus-following
+
+> **Superseded 2026-08-22 (post-implementation).** This task shipped, and the
+> user then rejected the standalone Environment column as a duplicate of the
+> `Changes | Files | Terminal` inspector. `CWS-06` was rewritten to the
+> single-inspector model, and `EnvironmentPanel.tsx`,
+> `EnvironmentPanel.test.tsx`, `environmentPreferences.ts` and its test were
+> deleted. The worktree/branch text moved to the pane header's detail line and
+> the changes summary to the inspector's Changes tab. The task is kept here as
+> a record of what was built; do not re-implement it.
 
 **Files:**
 
@@ -746,6 +776,10 @@ git commit -m "feat(web): codex transcript reading model and inline trust line"
 ```
 
 ---
+
+> **Note (2026-08-22):** Task 12's full-width clause is superseded — `CWS-07`
+> now specifies one centered reading column on `--surface-measure`. The
+> minimum-pane-width/scroll half of the task stands.
 
 ### Task 12: Full-width transcript, minimum pane width, and scroll
 

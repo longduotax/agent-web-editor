@@ -9,7 +9,7 @@ belong here.
 | ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | ------------------------------------------------------------------------------------------------- |
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)             |
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
-| [Thread management](thread-management.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
+| [Thread management](thread-management.md)                         | 2               | 3                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
@@ -31,7 +31,9 @@ implementation remains paused until that approval is granted.
 
 Thread management version 2 is Current. It provides a Codex-style action menu,
 non-destructive inactive-thread archival, a direct hover/focus Archive action,
-and compact inline run-state signals.
+and compact inline run-state signals. Version 3 is a Draft proposal that makes
+archival reversible: a per-project Archived list with a per-thread Restore, and
+independently staged archives so no undo window is cut short.
 
 Tiling workspace surface is a Draft proposal for version 1, distilled from the
 multi-agent tiling workspace design as its first phase. It turns the project
@@ -47,10 +49,11 @@ the user approves it and the behavior is verified.
 Codex-style workspace surface is a Draft proposal for version 1 that restyles
 the tiling surface to a calm, near-borderless Codex desktop aesthetic; adds
 complete light and dark themes (System default, live OS follow, before-paint
-apply) behind a new Settings page; renders a single shared, focus-following
-Environment right panel; surfaces a four-way pane-header and sidebar run status
-(working / needs-approval / done / failed); reduces pane actions to Split and
-an immediate Close with an undo toast; and removes the tiling surface's
+apply) behind a new Settings page; keeps exactly one right-hand column — the
+`Changes | Files | Terminal` inspector, which follows the focused pane;
+surfaces a four-way pane-header and sidebar run status
+(working / needs-approval / done / failed); reduces pane actions to Split and a
+non-destructive Close; and removes the tiling surface's
 collapse-to-dock pane tier entirely, migrating any persisted docked panes back
 into the tiling tree. Product approval is pending; implementation is in
 progress under the linked plan and the proposal becomes Current only after the

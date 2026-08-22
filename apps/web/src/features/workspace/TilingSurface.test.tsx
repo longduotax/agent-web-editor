@@ -444,34 +444,140 @@ describe("TilingSurface", () => {
     expect(store.get(`pi-draft:${threadC}`) ?? "").not.toBe("draft typed in B");
   });
 
-  describe("full-width transcript and minimum pane width (Task 12)", () => {
-    it("never pins a fixed centered reading measure on pane transcript content, so it tracks the pane's own width", async () => {
+  it("keeps each new-chat pane's draft separate from every other new-chat pane in the same project", async () => {
+    const user = userEvent.setup();
+    const { getController, store } = renderSurface();
+
+    // Two threadless (new-chat) panes side by side in one project.
+    act(() => {
+      getController().dispatch({ type: "split", axis: "row" });
+    });
+    const composers = await screen.findAllByLabelText("First message");
+    expect(composers).toHaveLength(2);
+    const [first, second] = composers;
+    if (first === undefined || second === undefined)
+      throw new Error("expected two new-chat composers");
+
+    await user.click(first);
+    await user.paste("draft for pane one");
+    await user.click(second);
+    await user.paste("draft for pane two");
+
+    expect(first).toHaveValue("draft for pane one");
+    expect(second).toHaveValue("draft for pane two");
+
+    // ...and each pane's text is persisted under its own key, so remounting
+    // one never clobbers the other.
+    const newChatDrafts = [...store.entries()].filter(([key]) =>
+      key.startsWith("pi-new-draft:"),
+    );
+    expect(newChatDrafts).toHaveLength(2);
+    expect(newChatDrafts.map(([, value]) => value).sort()).toEqual([
+      "draft for pane one",
+      "draft for pane two",
+    ]);
+  });
+
+  describe("centered reading column and minimum pane width", () => {
+    // Rewritten from the superseded CWS-07 ("a pane uses its full width, no
+    // centered measure"). Orchestrator decisions D-2/D-3 revert that: the
+    // transcript, composer and new-chat card all share ONE centered reading
+    // column driven by a single custom property, --surface-measure. No
+    // component may hardcode a competing width.
+    it("centers the transcript, composer and new-chat card on the single --surface-measure token", async () => {
       const here = dirname(fileURLToPath(import.meta.url));
       const cssPath = resolve(here, "../../styles.css");
       const css = await readFile(cssPath, "utf8");
 
+      expect(css).toMatch(/--surface-measure:\s*[\d.]+rem;/);
+
       for (const selector of [
-        ".transcript",
-        ".u-row",
-        ".a-block",
-        ".worked-group",
-        ".diagnostic",
+        ".transcript-column",
+        ".composer-input",
+        ".new-chat-card",
       ]) {
         const body = ruleBody(css, selector);
-        const pinsFixedWidth = /max-width:\s*[\d.]+(rem|px|em)/.test(body);
-        const centersWithAutoMargin =
-          /margin(-left|-right)?:\s*[^;]*\bauto\b/.test(body);
-        expect(
-          pinsFixedWidth && centersWithAutoMargin,
-          `${selector} should not pin a centered fixed reading measure`,
-        ).toBe(false);
+        expect(body, `${selector} should size on --surface-measure`).toMatch(
+          /var\(--surface-measure\)/,
+        );
+        expect(body, `${selector} should center itself`).toMatch(
+          /margin(-inline)?:\s*[^;]*\bauto\b/,
+        );
       }
 
-      // The scroll container's own padding must be a comfortable, fixed
-      // amount -- not the old viewport-relative max(1rem, 8%) formula that
-      // produced large side gutters to fake a centered column.
-      const transcriptBody = ruleBody(css, ".transcript");
-      expect(transcriptBody).not.toMatch(/max\(/);
+      // No component may reintroduce one of the three competing widths the
+      // app used to carry (54rem composer / 700px card / 720px mockup).
+      expect(css).not.toMatch(/\b(54rem|700px|720px)\b/);
+
+      // The scroll container's own padding stays a comfortable, fixed amount
+      // -- not the viewport-relative max(1rem, 8%) formula that faked a
+      // centered column with side gutters.
+      expect(ruleBody(css, ".composer")).not.toMatch(/max\(/);
+      expect(ruleBody(css, ".transcript")).not.toMatch(/max\(/);
+    });
+
+    // R2-3 regression. Expanding a "Worked for Ns" step group used to blow
+    // the column apart: `.worked-items` is a grid, its implicit `auto` track
+    // sized to the widest step's max-content, and a single long shell command
+    // stretched the transcript to a 14,641px scrollWidth against a 1,042px
+    // client width. The geometry itself is asserted end-to-end in
+    // e2e/transcript-measure.spec.ts (jsdom has no layout); this locks the
+    // CSS contract that makes it hold.
+    it("never lets transcript content widen the reading column", async () => {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const cssPath = resolve(here, "../../styles.css");
+      const css = await readFile(cssPath, "utf8");
+
+      // Every grid inside the transcript pins its track to the column
+      // instead of letting an implicit `auto` track size to its widest
+      // item's max-content.
+      for (const selector of [".worked-items", ".activity-details"])
+        expect(
+          ruleBody(css, selector),
+          `${selector}'s grid track must be pinned to the column`,
+        ).toMatch(/grid-template-columns:\s*minmax\(\s*0\s*,\s*1fr\s*\)/);
+
+      // A cwd path has no space to break on, so the step footer's spans need
+      // an explicit break opportunity or they are unshrinkable flex items.
+      expect(ruleBody(css, ".activity-details footer span")).toMatch(
+        /overflow-wrap:\s*anywhere/,
+      );
+
+      // Grid/flex descendants must not keep min-width: auto, or they size to
+      // max-content regardless of the track.
+      for (const selector of [".activity", ".activity summary"]) {
+        expect(
+          ruleBody(css, selector),
+          `${selector} needs an explicit zero minimum size`,
+        ).toMatch(/min-width:\s*0/);
+      }
+      expect(ruleBody(css, ".activity")).toMatch(/max-width:\s*100%/);
+
+      // The general rule: every block in the column is capped at the measure
+      // with a zero automatic minimum, so wide content overflows inside its
+      // own container rather than stretching the column.
+      const columnChildren = ruleBody(css, ".transcript-column > *");
+      expect(columnChildren).toMatch(/min-width:\s*0/);
+      expect(columnChildren).toMatch(/max-width:\s*100%/);
+      expect(ruleBody(css, ".transcript-column")).toMatch(/min-width:\s*0/);
+
+      // Wide content scrolls or wraps inside its own box.
+      expect(ruleBody(css, ".markdown table")).toMatch(/overflow-x:\s*auto/);
+      expect(
+        ruleBody(
+          css,
+          ".markdown pre,\n.activity pre,\n.diff-view pre,\n.file-preview pre",
+        ),
+      ).toMatch(/overflow:\s*auto/);
+      expect(ruleBody(css, ".activity-details pre")).toMatch(
+        /overflow-wrap:\s*anywhere/,
+      );
+
+      // R2-9: a classic scrollbar must not shave the centering box on one
+      // side and knock the column off the composer's axis.
+      expect(ruleBody(css, ".transcript")).toMatch(
+        /scrollbar-gutter:\s*stable both-edges/,
+      );
     });
 
     it("exports MIN_PANE_WIDTH_PX as the surface's enforced minimum pane width", () => {

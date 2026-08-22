@@ -10,11 +10,19 @@ import {
   startThread,
 } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
-import { readDraft, removeDraft, writeDraft } from "./drafts.js";
+import {
+  newChatDraftKey,
+  readDraft,
+  removeDraft,
+  writeDraft,
+} from "./drafts.js";
+import type { PaneId } from "./layoutTree.js";
 import { PaneHeader } from "./PaneHeader.js";
+import { useAutoGrow } from "../../components/useAutoGrow.js";
 
 export interface NewChatPaneProps {
   projectId: ProjectId;
+  paneId: PaneId;
   focused: boolean;
   onFocus(): void;
   onClose(): void;
@@ -23,7 +31,8 @@ export interface NewChatPaneProps {
 }
 
 export function NewChatPane(props: NewChatPaneProps) {
-  const { projectId, focused } = props;
+  const { projectId, paneId, focused } = props;
+  const draftKey = newChatDraftKey(projectId, paneId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const workspace = useQuery({
@@ -40,23 +49,22 @@ export function NewChatPane(props: NewChatPaneProps) {
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
-  const [text, setText] = useState(() =>
-    readDraft(`pi-new-draft:${projectId}`),
-  );
+  const [text, setText] = useState(() => readDraft(draftKey));
+  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   useEffect(() => {
     setMode("worktree");
     setSourceChanges("none");
     setBaseBranch("");
     setCreationKey(commandId());
-    setText(readDraft(`pi-new-draft:${projectId}`));
-  }, [projectId]);
+    setText(readDraft(newChatDraftKey(projectId, paneId)));
+  }, [paneId, projectId]);
   useEffect(() => {
     if (preflight.data?.currentBranch !== null && baseBranch === "")
       setBaseBranch(preflight.data?.currentBranch ?? "");
   }, [baseBranch, preflight.data?.currentBranch]);
   useEffect(() => {
-    writeDraft(`pi-new-draft:${projectId}`, text);
-  }, [projectId, text]);
+    writeDraft(draftKey, text);
+  }, [draftKey, text]);
   const create = useMutation({
     mutationFn: async () =>
       await startThread(
@@ -77,7 +85,7 @@ export function NewChatPane(props: NewChatPaneProps) {
         creationKey,
       ),
     onSuccess: async (result) => {
-      removeDraft(`pi-new-draft:${projectId}`);
+      removeDraft(draftKey);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       props.onThreadStarted(result.thread.id);
     },
@@ -110,6 +118,11 @@ export function NewChatPane(props: NewChatPaneProps) {
         title="New chat"
         projectLabel={project?.displayName ?? ""}
         focused={focused}
+        detail={
+          <span className="pane-meta">
+            Pick where Pi runs, then describe the work.
+          </span>
+        }
         onSplit={() => {
           props.onSplit();
         }}
@@ -251,9 +264,10 @@ export function NewChatPane(props: NewChatPaneProps) {
           )}
           <div className="composer-input new-chat-input">
             <textarea
+              ref={textareaRef}
               aria-label="First message"
               placeholder={`Ask Pi to work in ${project?.displayName ?? "this project"}…`}
-              rows={6}
+              rows={1}
               autoFocus
               value={text}
               onChange={(event) => {
@@ -287,7 +301,14 @@ export function NewChatPane(props: NewChatPaneProps) {
               </button>
             </div>
           </div>
-          {create.error !== null && <ErrorNotice error={create.error} />}
+          {create.error !== null && (
+            <ErrorNotice
+              error={create.error}
+              onRetry={() => {
+                create.mutate();
+              }}
+            />
+          )}
         </form>
       </main>
     </section>

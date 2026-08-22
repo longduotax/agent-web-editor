@@ -21,10 +21,11 @@ import { ActivityGroup, displayTranscript } from "../../components/Activity.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
-import { Status } from "../../components/Status.js";
+import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
+import { useStickToBottom } from "./stickToBottom.js";
 
 export interface ThreadPaneProps {
   projectId: ProjectId;
@@ -122,64 +123,85 @@ function groupTranscriptItems(
   return groups;
 }
 
+// Changes whenever the rendered transcript grows or its newest item's text
+// grows (a streaming assistant turn), so the scroll container can follow the
+// newest content without re-pinning on every unrelated re-render.
+function transcriptContentKey(
+  items: readonly TranscriptItem[],
+  diagnostics: readonly string[],
+): string {
+  const last = items.at(-1);
+  const lastLength =
+    last !== undefined && "text" in last ? last.text.length : 0;
+  return [items.length, last?.id ?? "", lastLength, diagnostics.length].join(
+    ":",
+  );
+}
+
 function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
   const items = displayTranscript(snapshot.transcript);
+  const scrollRef = useStickToBottom<HTMLDivElement>(
+    snapshot.thread.id,
+    transcriptContentKey(items, snapshot.diagnostics),
+  );
   return (
-    <div className="transcript" aria-label="Conversation">
-      {items.length === 0 && (
-        <div className="empty conversation-empty">
-          <strong>No messages yet</strong>
-          <span>
-            Ask Pi to inspect, implement, or review something in this project.
-          </span>
-        </div>
-      )}
-      {groupTranscriptItems(items).map((group) => {
-        if (group.kind === "tool-run") {
-          return (
-            <ActivityGroup
-              items={group.items}
-              key={group.items[0]?.id}
-              projectPath={snapshot.project.displayPath}
-            />
-          );
-        }
-        const { item } = group;
-        if (item.kind === "diagnostic") {
-          return (
-            <p className={`diagnostic ${item.level}`} key={item.id}>
-              {item.text}
-            </p>
-          );
-        }
-        if (item.role === "user") {
-          return (
-            <div className="u-row" key={item.id}>
-              <div className="u-bubble">
-                <span className="sr-only">You</span>
-                <div className="markdown">
-                  <Markdown>{item.text}</Markdown>
+    <div className="transcript" aria-label="Conversation" ref={scrollRef}>
+      <div className="transcript-column">
+        {items.length === 0 && (
+          <div className="empty conversation-empty">
+            <strong>No messages yet</strong>
+            <span>
+              Ask Pi to inspect, implement, or review something in this project.
+            </span>
+          </div>
+        )}
+        {groupTranscriptItems(items).map((group) => {
+          if (group.kind === "tool-run") {
+            return (
+              <ActivityGroup
+                items={group.items}
+                key={group.items[0]?.id}
+                projectPath={snapshot.project.displayPath}
+              />
+            );
+          }
+          const { item } = group;
+          if (item.kind === "diagnostic") {
+            return (
+              <p className={`diagnostic ${item.level}`} key={item.id}>
+                {item.text}
+              </p>
+            );
+          }
+          if (item.role === "user") {
+            return (
+              <div className="u-row" key={item.id}>
+                <div className="u-bubble">
+                  <span className="sr-only">You</span>
+                  <div className="markdown">
+                    <Markdown>{item.text}</Markdown>
+                  </div>
                 </div>
+              </div>
+            );
+          }
+          return (
+            <div className="a-block" key={item.id}>
+              <span className="sr-only">
+                {item.role === "assistant" ? "Pi" : "System"}
+              </span>
+              <div className="markdown">
+                <Markdown>{item.text}</Markdown>
               </div>
             </div>
           );
-        }
-        return (
-          <div className="a-block" key={item.id}>
-            <span className="sr-only">
-              {item.role === "assistant" ? "Pi" : "System"}
-            </span>
-            <div className="markdown">
-              <Markdown>{item.text}</Markdown>
-            </div>
-          </div>
-        );
-      })}
-      {snapshot.diagnostics.map((diagnostic) => (
-        <p className="diagnostic warning" key={diagnostic}>
-          {diagnostic}
-        </p>
-      ))}
+        })}
+        {snapshot.diagnostics.map((diagnostic) => (
+          <p className="diagnostic warning" key={diagnostic}>
+            {diagnostic}
+          </p>
+        ))}
+      </div>
     </div>
   );
 }
@@ -195,6 +217,7 @@ export function Composer({
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
+  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   const active = snapshot.currentRun?.state === "running";
   const mutation = useMutation({
     mutationFn: async () =>
@@ -223,9 +246,10 @@ export function Composer({
     <form className="composer" onSubmit={submit}>
       <div className="composer-input">
         <textarea
+          ref={textareaRef}
           aria-label="Message Pi"
           placeholder="Ask Pi to work in this project…"
-          rows={3}
+          rows={1}
           value={text}
           onChange={(event) => {
             setText(event.target.value);
@@ -269,7 +293,14 @@ export function Composer({
           </button>
         </div>
       </div>
-      {mutation.error !== null && <ErrorNotice error={mutation.error} />}
+      {mutation.error !== null && (
+        <ErrorNotice
+          error={mutation.error}
+          onRetry={() => {
+            mutation.mutate();
+          }}
+        />
+      )}
     </form>
   );
 }
@@ -314,6 +345,25 @@ export function ThreadPane(props: ThreadPaneProps) {
     status === "working"
       ? elapsedLabel(snapshot.data?.currentRun?.startedAt ?? null, now)
       : null;
+  const workspaceLabel = `${
+    threadWorkspace.mode === "worktree" ? "↗ Worktree" : "⌂ Local checkout"
+  }${threadWorkspace.branchName === null ? "" : ` · ⑂ ${threadWorkspace.branchName}`}`;
+  // The header clamps its detail line to one row, so the full text lives on
+  // the tooltip rather than being lost.
+  const detailTitle = `${workspaceLabel} · Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.`;
+  // A failed run used to be a red dot and nothing else. Run.failureMessage /
+  // Run.failureCode have always been in the contract and sent by the server;
+  // surface whichever the server gave us so the failure path does not dead
+  // end.
+  const failedRun =
+    snapshot.data?.lastRun?.state === "failed" ? snapshot.data.lastRun : null;
+  const failureText =
+    failedRun === null
+      ? null
+      : (failedRun.failureMessage ??
+        (failedRun.failureCode === null
+          ? "The run failed without reporting a reason."
+          : `The run failed (${failedRun.failureCode}).`));
 
   return (
     <section
@@ -330,6 +380,17 @@ export function ThreadPane(props: ThreadPaneProps) {
         title={snapshot.data?.thread.title ?? "Thread"}
         projectLabel={snapshot.data?.project.displayName ?? ""}
         focused={focused}
+        detailTitle={detailTitle}
+        detail={
+          <>
+            <span className="pane-meta">{workspaceLabel}</span>
+            <span className="trust-note">
+              <span className="trust-dot" aria-hidden="true" />
+              <strong>Direct execution:</strong> Pi tools run with your user
+              permissions, without application approval or an OS sandbox.
+            </span>
+          </>
+        }
         onSplit={() => {
           props.onSplit();
         }}
@@ -341,38 +402,24 @@ export function ThreadPane(props: ThreadPaneProps) {
         <Loading />
       ) : snapshot.error !== null ? (
         <main className="center">
-          <ErrorNotice error={snapshot.error} />
+          <ErrorNotice
+            error={snapshot.error}
+            onRetry={() => {
+              void snapshot.refetch();
+            }}
+          />
         </main>
       ) : (
         <main className="center">
-          <header className="thread-header">
-            <div>
-              <small>
-                {snapshot.data.project.displayName} ·{" "}
-                {threadWorkspace.mode === "worktree"
-                  ? "↗ Worktree"
-                  : "⌂ Local checkout"}
-                {threadWorkspace.branchName === null
-                  ? ""
-                  : ` · ⑂ ${threadWorkspace.branchName}`}
-              </small>
-              <h1>{snapshot.data.thread.title}</h1>
-              <p className="trust-note">
-                <span className="trust-dot" aria-hidden="true" />
-                <strong>Direct execution:</strong> Pi tools run with your user
-                permissions, without application approval or an OS sandbox.
+          <Transcript snapshot={snapshot.data} />
+          {failureText !== null && (
+            <div className="run-failure">
+              <p className="run-failure-body" role="status">
+                <span className="sdot fail" aria-hidden="true" />
+                {failureText}
               </p>
             </div>
-            <Status
-              state={
-                snapshot.data.currentRun?.state ??
-                snapshot.data.lastRun?.state ??
-                null
-              }
-              unread={snapshot.data.thread.unread}
-            />
-          </header>
-          <Transcript snapshot={snapshot.data} />
+          )}
           <Composer
             projectId={projectId}
             threadId={threadId}

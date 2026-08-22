@@ -28,6 +28,15 @@
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* One reading column for the whole surface (D-3). The transcript, the
+   composer and the new-chat card all size on this and nothing else; no
+   component may hardcode its own measure. */
+:root {
+  --surface-measure: 48rem;
+  /* One height for the top-of-column header rows (inspector tabs and the
+     collapsed inspector rail). */
+  --header-h: 3.8rem;
+}
 /* keep the repo's legacy alias names pointing at the new tokens so existing
    rules that reference --surface-0..3/--border/--blue keep working */
 :root {
@@ -38,6 +47,13 @@
   --surface-hover: var(--hover);
   --border: var(--hairline-2);
   --blue: var(--accent);
+  /* xterm paints itself, so it cannot inherit these tokens through CSS.
+     TerminalView reads the computed values instead; because they are
+     defined as var() references they re-resolve in whichever theme is
+     active, in both light and dark. */
+  --term-bg: var(--page);
+  --term-fg: var(--text);
+  --term-cursor: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -149,6 +165,9 @@ a:focus-visible {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 0;
   transition: grid-template-columns 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.workspace.inspector-railed {
+  grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 2.75rem;
+}
 .workspace.inspector-visible {
   grid-template-columns:
     minmax(220px, 17rem) minmax(360px, 1fr)
@@ -257,12 +276,17 @@ a:focus-visible {
   height: 2rem;
 }
 .icon-button {
-  visibility: hidden;
   width: 1.7rem;
   height: 1.8rem;
 }
-.project-row:hover .icon-button,
-.project-row:focus-within .icon-button {
+/* Only the DESTRUCTIVE controls are hover-revealed. The primary verbs --
+   "New thread" above all -- must be visible without a pointer, or the app's
+   main call to action is a secret. */
+.icon-button.hover-only {
+  visibility: hidden;
+}
+.project-row:hover .icon-button.hover-only,
+.project-row:focus-within .icon-button.hover-only {
   visibility: visible;
 }
 .icon-button:hover {
@@ -308,12 +332,85 @@ a:focus-visible {
 .thread-list .selected-thread {
   background: var(--surface-3);
 }
+/* Archive recovery: a quiet disclosure under each project's thread list. It
+   must read as a secondary, rarely-used affordance -- never as another
+   thread row. */
+.archived-toggle {
+  display: flex;
+  width: calc(100% - 1.75rem);
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0 0 0.35rem 1.75rem;
+  padding: 0.2rem 0.35rem;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.archived-toggle:hover {
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+.archived-threads {
+  margin: 0 0 0.5rem 1.75rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.4rem;
+  background: var(--surface-2);
+}
+.archived-threads ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.archived-threads li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  min-width: 0;
+}
+.archived-title {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archived-threads button {
+  flex: none;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.3rem;
+  color: var(--text);
+  background: var(--card);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.archived-threads button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.archived-threads button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
 .thread-link {
   display: flex;
   min-width: 0;
   flex: 1;
   align-items: center;
-  padding: 0.5rem 2.2rem 0.5rem 0.55rem;
+  /* Room for BOTH the run-status dot and the persistently visible actions
+     control, side by side -- the status used to fade out on hover to make
+     way for a hover-only archive icon, which is no longer how either works. */
+  padding: 0.5rem 3.9rem 0.5rem 0.55rem;
   text-decoration: none;
   font-size: 0.84rem;
 }
@@ -327,46 +424,31 @@ a:focus-visible {
 .thread-link > .status {
   position: absolute;
   top: 50%;
-  right: 0.72rem;
+  right: 2.25rem;
   transform: translateY(-50%);
 }
-.thread-row:hover .thread-link > .status,
-.thread-row:focus-within .thread-link > .status {
-  opacity: 0;
-}
-.thread-archive-button {
-  visibility: hidden;
+/* Persistently visible: it is the only route to Rename and Archive, and a
+   hover-only control makes both undiscoverable. */
+.thread-actions-button {
   position: absolute;
   right: 0.22rem;
   display: grid;
   width: 1.75rem;
   height: 1.75rem;
   place-items: center;
+  font-size: 1rem;
+  line-height: 1;
   border: 0;
   border-radius: 0.3rem;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
 }
-.thread-row:hover .thread-archive-button,
-.thread-row:focus-within .thread-archive-button {
-  visibility: visible;
-}
-.thread-archive-button:hover:not(:disabled),
-.thread-archive-button:focus-visible {
+.thread-actions-button:hover:not(:disabled),
+.thread-actions-button:focus-visible,
+.thread-actions-button[aria-expanded="true"] {
   color: var(--text);
   background: var(--active);
-}
-.thread-archive-button:disabled {
-  color: var(--muted);
-  cursor: not-allowed;
-}
-.thread-archive-button svg {
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.25;
 }
 .thread-rename {
   display: grid;
@@ -501,21 +583,69 @@ a:focus-visible {
   flex: 1;
   min-height: 0;
 }
+/* The pane's ONE header: a title row plus an optional quiet detail line.
+   Nothing below it restates the title, the run status or the trust note. */
 .pane-head {
   display: flex;
+  /* Pinned, not content-derived: every pane header and the inspector's own
+     top row share --header-h, so their bottom hairlines land on one line in
+     a multi-pane layout at every width. A wrapping detail line used to make
+     one header 34px taller than its neighbour. */
+  height: var(--header-h);
   flex: none;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.56rem 0.69rem;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.1rem;
+  padding: 0.4rem 0.69rem 0.45rem;
   border-bottom: 1px solid var(--hairline);
 }
+.pane-head-row {
+  display: flex;
+  min-height: 1.85rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* Exactly one line, ellipsised. The full text is on the row's title
+   attribute, so nothing is lost -- it just stops driving the header's
+   height. */
+.pane-head-detail {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+  gap: 0.15rem 0.6rem;
+  flex-wrap: nowrap;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.pane-head-detail > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-meta {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .pane-head .status {
+  /* .status is a fixed 0.75rem square for the sidebar glyph; the header's
+     status carries a dot PLUS a label PLUS an elapsed timer, so it must
+     reset that box or its children overflow and the title is laid out on
+     top of them. */
   display: inline-flex;
+  width: auto;
+  height: auto;
   flex: none;
   align-items: center;
   gap: 0.375rem;
   font-size: 0.78rem;
   font-weight: 550;
+  white-space: nowrap;
 }
 .pane-head .status .sdot {
   width: 0.5rem;
@@ -573,8 +703,9 @@ a:focus-visible {
   overflow: hidden;
   flex: 1;
   min-width: 0;
+  margin: 0;
   color: var(--text);
-  font-size: 0.84rem;
+  font-size: 0.9rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -622,8 +753,14 @@ a:focus-visible {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* Quiet focus indication: a hairline, not a 2px saturated rectangle. The
+   sole pane on the surface needs no indication at all — there is nothing to
+   distinguish it from. */
 .pane.focused {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.tiling-tiles > .tiling-region:only-child > .pane.focused {
+  box-shadow: none;
 }
 .workspace-view {
   position: relative;
@@ -642,155 +779,38 @@ a:focus-visible {
   flex-direction: column;
   overflow: hidden;
 }
-.environment-toggle {
+/* Several archives can be staged at once, each on its own undo timer, so the
+   toasts stack instead of sitting on top of one another. */
+.undo-toast-stack {
   position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 5;
-  display: grid;
-  width: 1.75rem;
-  height: 1.75rem;
-  place-items: center;
-  border: 1px solid var(--hairline);
-  border-radius: 0.5rem;
-  color: var(--muted);
-  background: var(--card);
-  box-shadow: var(--card-shadow);
-  cursor: pointer;
-}
-.environment-toggle:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.environment-toggle[aria-pressed="true"] {
-  color: var(--text);
-  background: var(--active);
-}
-/* Docked right column: reflects the FOCUSED pane's run environment. Exactly
-   one instance for the whole workspace surface (never per-pane, never a
-   floating overlay) — see EnvironmentPanel.tsx. */
-.environment-panel {
-  display: flex;
-  flex: none;
-  width: 316px;
-  min-width: 0;
-  flex-direction: column;
-  border-left: 1px solid var(--hairline);
-  background: var(--sidebar);
-}
-.environment-panel .insp-head {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 0.8rem 0.5rem;
-}
-.environment-panel .insp-head .t {
-  flex: 1;
-  color: var(--text);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-.environment-panel .insp-focus {
-  margin: 0 0.5rem 0.375rem;
-  padding: 0.56rem 0.69rem;
-  border: 1px solid var(--hairline);
-  border-radius: 0.625rem;
-  background: var(--card);
-}
-.environment-panel .insp-focus .fr {
-  display: flex;
-  align-items: center;
-  gap: 0.44rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-.environment-panel .insp-focus .fr .title {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.environment-panel .insp-focus .fs {
-  margin-top: 0.1875rem;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-.environment-panel .insp-body {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  overflow: auto;
-  padding: 0.25rem 0.5rem 0.625rem;
-}
-.environment-panel .insp-sec {
-  display: flex;
-  align-items: center;
-  padding: 0.75rem 0.375rem 0.25rem;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-.environment-panel .insp-row {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  padding: 0.5625rem 0.5rem;
-  border-radius: 0.5625rem;
-  font-size: 0.84rem;
-}
-.environment-panel .insp-row .grow {
-  overflow: hidden;
-  flex: 1;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.environment-panel .insp-row.muted {
-  color: var(--faint);
-}
-.environment-panel .insp-sep {
-  height: 1px;
-  margin: 0.375rem;
-  background: var(--hairline);
-}
-.environment-panel .sdot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  flex: none;
-  background: var(--faint);
-}
-.environment-panel .sdot.run {
-  background: var(--run);
-}
-.environment-panel .sdot.wait {
-  background: var(--wait);
-}
-.environment-panel .sdot.done {
-  background: var(--done);
-}
-.environment-panel .sdot.fail {
-  background: var(--fail);
-}
-.undo-toast {
-  position: absolute;
+  right: 12px;
   bottom: 20px;
-  left: 50%;
+  left: 12px;
   z-index: 10;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.undo-toast {
+  display: flex;
+  max-width: 100%;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  transform: translateX(-50%);
   border-radius: 10px;
   background: var(--send-bg);
   color: var(--send-fg);
   box-shadow: var(--pop-shadow);
 }
 .undo-toast-message {
+  overflow: hidden;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .undo-toast-button {
+  flex: none;
   padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -829,10 +849,6 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  /* Reserve a gutter matching the floating .environment-toggle's footprint
-     (top: .5rem; right: .5rem; width: 1.75rem) so the rightmost pane's
-     header actions (Split/Close) never sit underneath it. */
-  padding-right: 2.25rem;
 }
 .tiling-region > .pane {
   flex: 1;
@@ -907,6 +923,23 @@ a:focus-visible {
   color: var(--muted);
   text-align: center;
 }
+.tiling-empty-action {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.55rem;
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tiling-empty-action:hover {
+  border-color: var(--accent);
+}
+.tiling-empty-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 .center {
   position: relative;
   display: flex;
@@ -915,29 +948,19 @@ a:focus-visible {
   flex-direction: column;
   background: var(--page);
 }
-.thread-header {
-  display: flex;
-  min-height: 3.8rem;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--card);
-}
-.thread-header small {
-  color: var(--muted);
-}
-.thread-header h1 {
-  margin: 0.12rem 0 0;
-  font-size: 1rem;
-}
+/* A block container, not a flex one: `text-overflow: ellipsis` only applies
+   to a block container's own inline content, and this line must ellipsise
+   inside the single-row pane header rather than clip mid-word. */
 .trust-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0.3rem 0 0;
+  display: block;
+  min-width: 0;
+  margin: 0;
   color: var(--muted);
-  font-size: 0.72rem;
+}
+.trust-note .trust-dot {
+  display: inline-block;
+  margin-right: 0.35rem;
+  vertical-align: middle;
 }
 .trust-note strong {
   color: var(--muted);
@@ -953,7 +976,41 @@ a:focus-visible {
 .transcript {
   flex: 1;
   overflow: auto;
-  padding: 0.875rem 1rem;
+  padding: 1.5rem 1.25rem 0.5rem;
+  overflow-anchor: none;
+  /* Reserve the scrollbar track on BOTH sides so a classic (non-overlay)
+     scrollbar cannot shave width off only the right edge and knock the
+     centered reading column off the composer's axis. */
+  scrollbar-gutter: stable both-edges;
+}
+/* The reading column. Shares --surface-measure with the composer and the
+   new-chat card so the conversation and the input it answers sit on one
+   axis; below that width it shrinks with the pane instead of clipping. */
+.transcript-column {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
+}
+/* Load-bearing containment rule: NOTHING in the transcript may widen the
+   reading column. Every block in the column is capped at the measure and
+   given a zero automatic minimum size, so a long command line, a wide diff
+   or an unbroken token overflows *inside* its own container (which wraps or
+   scrolls) instead of stretching the column and pushing the whole transcript
+   into a horizontal scroll. Without this, flex and grid descendants keep
+   min-width: auto and size to their max-content. */
+.transcript-column > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.transcript-column :is(details, summary, pre, table) {
+  min-width: 0;
+}
+/* Wide tabular content scrolls in its own box rather than widening the column. */
+.markdown table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 .u-row {
   display: flex;
@@ -1001,6 +1058,11 @@ a:focus-visible {
 }
 .worked-items {
   display: grid;
+  /* An implicit `auto` track sizes to its widest item's max-content, so a
+     single long command turned the whole step list — and with it the
+     transcript — thousands of pixels wide. minmax(0, 1fr) pins the track to
+     the reading column and lets each row truncate inside it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.08rem;
   margin-top: 0.4rem;
   padding-top: 0.4rem;
@@ -1038,6 +1100,8 @@ a:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .activity {
+  min-width: 0;
+  max-width: 100%;
   margin: 0.08rem 0;
   border: 1px solid transparent;
   border-radius: 0.45rem;
@@ -1127,6 +1191,10 @@ a:focus-visible {
 }
 .activity-details {
   display: grid;
+  /* Same containment as .worked-items: an implicit `auto` track would size to
+     the widest <pre>'s longest line and drag the whole step — and the reading
+     column with it — out to max-content. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.65rem;
   padding: 0.65rem;
 }
@@ -1150,11 +1218,19 @@ a:focus-visible {
 }
 .activity-details footer {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 0.4rem 1rem;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.7rem;
+}
+/* A cwd is a long slash-separated path with no space to break on: without an
+   explicit break opportunity it is an unshrinkable flex item that widens the
+   whole step, and with it the reading column. */
+.activity-details footer span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .diagnostic {
   margin: 0.6rem 0;
@@ -1170,35 +1246,78 @@ a:focus-visible {
   color: var(--fail);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
-.composer {
+/* A failed run's reason, sat between the transcript and the composer on the
+   same reading column: quiet, but present. */
+/* Same box model as .composer above (padding + reserved gutter on the outer
+   element, --surface-measure on the inner one) so the failure line starts on
+   exactly the same axis as the transcript and the composer at every width. */
+.run-failure {
+  overflow: hidden;
   flex: none;
-  padding: 0.7rem max(1rem, 8%) 1rem;
-  border-top: 1px solid var(--border);
+  padding: 0.5rem 1.25rem 0;
+  scrollbar-gutter: stable both-edges;
+}
+.run-failure-body {
+  display: flex;
+  max-width: var(--surface-measure);
+  gap: 0.45rem;
+  align-items: baseline;
+  margin: 0 auto;
+  color: var(--fail);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+.run-failure .sdot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fail);
+}
+/* The composer reserves EXACTLY the same scrollbar gutter as the transcript
+   (NEW-R3-2). `.transcript` is a scroll container with
+   `scrollbar-gutter: stable both-edges`, so with classic (non-overlay)
+   scrollbars its content box is 2 scrollbar-widths narrower than the pane.
+   Above the measure both boxes clamp to --surface-measure and the mismatch is
+   invisible; below it the transcript column ended up 2 scrollbar-widths
+   narrower than the composer and inset from it on both sides — the user's
+   original "chat should be centered" complaint, back again in narrow panes.
+   `overflow: hidden` makes this a scroll container too, which is what lets
+   `scrollbar-gutter` apply; nothing here ever scrolls (the composer is
+   flex: none and sizes to its content) and no scrollbar is ever painted, so
+   the only effect is the reserved gutter. Verified in Chrome: an
+   `overflow: hidden` box with `stable both-edges` reserves 2×sbw. */
+.composer {
+  overflow: hidden;
+  flex: none;
+  padding: 0.5rem 1.25rem 1rem;
   background: var(--page);
+  scrollbar-gutter: stable both-edges;
 }
 .composer-input {
-  width: min(100%, 54rem);
-  margin: 0 auto;
+  width: 100%;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
   overflow: hidden;
   border: 1px solid var(--hairline-2);
   border-radius: 0.85rem;
   background: var(--card);
-  box-shadow: 0 0.35rem 1.2rem rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 .composer-input:focus-within {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--focus-ring),
-    0 0.35rem 1.2rem rgba(0, 0, 0, 0.24);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-2));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .composer-input textarea {
   display: block;
   width: 100%;
+  max-height: 40vh;
+  overflow-y: hidden;
   resize: none;
-  padding: 0.9rem 1rem 0.45rem;
+  padding: 0.75rem 1rem 0.35rem;
   border: 0;
   color: var(--text);
   background: transparent;
@@ -1303,7 +1422,7 @@ a:focus-visible {
 }
 .inspector-tabs {
   display: flex;
-  min-height: 3.8rem;
+  height: var(--header-h);
   align-items: end;
   border-bottom: 1px solid var(--border);
 }
@@ -1345,20 +1464,35 @@ a:focus-visible {
   color: var(--text);
   background: var(--surface-3);
 }
-.inspector-reopen {
-  position: fixed;
-  z-index: 25;
-  top: 0.8rem;
-  right: 0.8rem;
+/* A docked rail rather than a button floating over the transcript: it owns
+   its own grid column, and its top segment shares the pane header's height
+   so the two hairlines land on one line. */
+.inspector-rail {
+  display: flex;
+  grid-area: 1 / 3;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-1);
+  z-index: 20;
+}
+.inspector-rail-head {
   display: grid;
-  width: 2rem;
-  height: 2rem;
+  height: var(--header-h);
+  flex: none;
+  place-items: center;
+  border-bottom: 1px solid var(--hairline);
+}
+.inspector-reopen {
+  display: grid;
+  width: 1.85rem;
+  height: 1.85rem;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 0.4rem;
   color: var(--muted);
-  background: var(--surface-2);
+  background: transparent;
   cursor: pointer;
 }
 .inspector-reopen:hover {
@@ -1367,6 +1501,7 @@ a:focus-visible {
 }
 @media (min-width: 901px) {
   .workspace.inspector-available .inspector {
+    grid-area: 1 / 3;
     width: var(--inspector-width, 400px);
     justify-self: end;
     opacity: 0;
@@ -1458,6 +1593,32 @@ a:focus-visible {
 .file-preview {
   border-top: 1px solid var(--border);
 }
+/* Diff colouring from the shared theme tokens, so it resolves correctly in
+   light and dark. The `+`/`-` prefixes stay in the text: colour is never the
+   only carrier of the distinction. */
+.diff-text {
+  padding-inline: 0;
+}
+.diff-line {
+  display: block;
+  padding-inline: 0.8rem;
+}
+.diff-add {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.diff-remove {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.diff-hunk {
+  color: var(--accent);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.diff-meta {
+  color: var(--muted);
+}
 .diff-view > header,
 .file-preview > header {
   position: sticky;
@@ -1516,11 +1677,24 @@ a:focus-visible {
   color: var(--amber);
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
+/* xterm ships its own stylesheet with an opaque #000 viewport, outside this
+   app's token system. It is currently hidden behind the themed scrollable
+   element, but one xterm/renderer change (or an exposed scrollbar gutter)
+   away from reappearing as the light-theme black hole UX-8 removed. */
+.xterm .xterm-viewport {
+  background: var(--term-bg);
+}
 .terminal-surface {
   flex: 1;
   min-height: 12rem;
   padding: 0.4rem;
   background: var(--page);
+}
+.panel-state {
+  margin: 0;
+  padding: 0.7rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 .empty,
 .error-notice {
@@ -1532,10 +1706,37 @@ a:focus-visible {
   font-size: 0.78rem;
 }
 .error-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   border-style: solid;
   border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
   color: var(--fail);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
+}
+.error-notice-message {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+/* Inherits --fail, so it is legible in both themes without a second colour. */
+.error-notice-link {
+  font-weight: 600;
+  text-underline-offset: 0.15em;
+}
+.error-notice-retry {
+  flex: none;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
+  border-radius: 0.35rem;
+  color: var(--fail);
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.error-notice-retry:hover {
+  background: color-mix(in srgb, var(--fail) 14%, var(--card));
 }
 .conversation-empty {
   display: grid;
@@ -1598,6 +1799,44 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.82rem;
 }
+.shortcut-list {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+}
+.shortcut-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.shortcut-row:last-child {
+  border-bottom: 0;
+}
+.shortcut-row dt {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.85rem;
+}
+.shortcut-row dd {
+  display: flex;
+  flex: none;
+  gap: 0.2rem;
+  margin: 0;
+}
+.shortcut-row kbd {
+  min-width: 1.6rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.3rem;
+  color: var(--muted);
+  background: var(--hover);
+  font-family: inherit;
+  font-size: 0.76rem;
+  text-align: center;
+}
 .theme-control {
   display: flex;
   gap: 0.6rem;
@@ -1656,7 +1895,9 @@ a:focus-visible {
   .mobile-toolbar {
     position: fixed;
     inset: 0 0 auto;
-    z-index: 30;
+    /* Above the drawers (50) and their backdrop (40), so the control that
+       opened a drawer stays clickable and closes it again (NEW-R3-6). */
+    z-index: 60;
     display: flex;
     height: 2.6rem;
     justify-content: space-between;
@@ -1679,6 +1920,8 @@ a:focus-visible {
     top: 0;
     bottom: 0;
     width: min(88vw, 22rem);
+    /* Clears the fixed toolbar that now sits above these drawers. */
+    padding-top: 2.6rem;
     transition: transform 0.16s ease;
   }
   .sidebar {
@@ -1690,7 +1933,7 @@ a:focus-visible {
     transform: translateX(105%);
   }
   .inspector-resizer,
-  .inspector-reopen {
+  .inspector-rail {
     display: none;
   }
   .sidebar-open .sidebar,
@@ -1718,17 +1961,19 @@ a:focus-visible {
   border: 0;
 }
 .new-chat {
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 1.5rem 1.25rem 1rem;
 }
 .new-chat-card {
-  width: min(700px, 100%);
+  width: 100%;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
   overflow: hidden;
   border: 1px solid var(--hairline-2);
-  border-radius: 14px;
+  border-radius: 0.85rem;
   background: var(--card);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--card-shadow);
 }
 .new-chat-toolbar {
   display: flex;
@@ -1767,8 +2012,7 @@ a:focus-visible {
   box-shadow: inset 0 1px var(--focus-ring);
 }
 .new-chat-input textarea {
-  min-height: 132px;
-  padding: 1rem 1rem 0.4rem;
+  padding: 0.75rem 1rem 0.35rem;
 }
 .new-chat-note {
   margin: 0.15rem 1rem 0.55rem;

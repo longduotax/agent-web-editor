@@ -1,18 +1,31 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
 
+interface TerminalOptions {
+  theme?: { background?: string; foreground?: string; cursor?: string };
+}
+
 const terminals = vi.hoisted(() => ({
-  instances: [] as { lines: string[] }[],
+  instances: [] as { lines: string[]; options: TerminalOptions }[],
 }));
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    public constructor() {
-      terminals.instances.push({ lines: [] });
+    public options: TerminalOptions;
+    public lines: string[] = [];
+    public constructor(options: TerminalOptions) {
+      this.options = options;
+      terminals.instances.push(this);
     }
     public clear(): void {
       return undefined;
@@ -33,8 +46,7 @@ vi.mock("@xterm/xterm", () => ({
       return undefined;
     }
     public writeln(value: string): void {
-      const terminal = terminals.instances.at(-1);
-      if (terminal !== undefined) terminal.lines.push(value);
+      this.lines.push(value);
     }
     public readonly cols = 100;
     public readonly rows = 30;
@@ -90,23 +102,73 @@ class MockWebSocket extends EventTarget {
 afterEach(() => {
   MockWebSocket.instances.splice(0);
   terminals.instances.splice(0);
+  document.documentElement.removeAttribute("data-theme");
+  document.documentElement.style.removeProperty("--term-bg");
+  document.documentElement.style.removeProperty("--term-fg");
+  document.documentElement.style.removeProperty("--term-cursor");
+  cleanup();
   vi.unstubAllGlobals();
 });
 
+function stubEnvironment() {
+  vi.stubGlobal("WebSocket", MockWebSocket);
+  // jsdom ships no matchMedia; the terminal watches it so a "System" theme
+  // choice re-colours live when the OS flips.
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      public disconnect(): void {
+        return undefined;
+      }
+      public observe(): void {
+        return undefined;
+      }
+    },
+  );
+}
+
+function setThemeTokens(background: string, foreground: string) {
+  document.documentElement.style.setProperty("--term-bg", background);
+  document.documentElement.style.setProperty("--term-fg", foreground);
+  document.documentElement.style.setProperty("--term-cursor", foreground);
+}
+
 describe("TerminalView", () => {
+  it("takes its palette from the app's theme tokens, never a hardcoded one, and re-themes live when the theme changes", async () => {
+    stubEnvironment();
+    setThemeTokens("#ffffff", "#1d1d1f");
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+
+    const terminal = terminals.instances[0];
+    if (terminal === undefined) throw new Error("Terminal was not created");
+    expect(terminal.options.theme).toMatchObject({
+      background: "#ffffff",
+      foreground: "#1d1d1f",
+    });
+
+    // Switching System -> Dark in Settings stamps data-theme on <html> and
+    // remaps the tokens; the live terminal must follow without a reload.
+    await act(async () => {
+      setThemeTokens("#131417", "#ececee");
+      document.documentElement.setAttribute("data-theme", "dark");
+      // MutationObserver callbacks land on a microtask.
+      await Promise.resolve();
+    });
+
+    expect(terminal.options.theme).toMatchObject({
+      background: "#131417",
+      foreground: "#ececee",
+    });
+    expect(terminals.instances).toHaveLength(1); // re-themed, not recreated
+  });
+
   it("recovers from termination by attaching a fresh terminal", () => {
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        public disconnect(): void {
-          return undefined;
-        }
-        public observe(): void {
-          return undefined;
-        }
-      },
-    );
+    stubEnvironment();
     render(<TerminalView projectId={projectId} threadId={threadId} />);
     const socket = MockWebSocket.instances[0];
     if (socket === undefined) throw new Error("WebSocket was not created");

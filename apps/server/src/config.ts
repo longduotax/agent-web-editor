@@ -46,6 +46,23 @@ export interface ParseConfigOptions {
 
 const portTextSchema = z.string().regex(/^\d+$/);
 
+/**
+ * Every spelling of the loopback address this server is bound to. They all
+ * name the SAME machine, so the host/origin allowlist must treat them
+ * identically: allowlisting only `127.0.0.1` left a browser opened at
+ * `http://localhost:<port>` able to read but unable to write, because every
+ * mutation was rejected with 403 `forbidden_request`.
+ *
+ * This list is exhaustive and closed on purpose. The allowlist is this
+ * local-first app's DNS-rebinding defence: an attacker-controlled name that
+ * resolves to 127.0.0.1 still fails both the host and the origin check,
+ * because neither is a substring match — both are exact set membership over
+ * `<authority>` / `http://<authority>` built from these three literals and
+ * the ports this server actually serves. Never widen it to a wildcard, a
+ * suffix match, or a caller-supplied value.
+ */
+const LOOPBACK_AUTHORITIES = ["127.0.0.1", "localhost", "[::1]"] as const;
+
 function cliPort(argv: string[]): string | undefined {
   let result: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
@@ -91,15 +108,18 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
   if (!isAbsolute(stateDirectory))
     throw new Error("PI_WEB_STATE_DIR must be an absolute path");
   const normalizedState = resolve(stateDirectory);
-  const origin = `http://127.0.0.1:${String(port)}`;
   const production = environment.NODE_ENV === "production";
-  const hosts = new Set([`127.0.0.1:${String(port)}`]);
-  const origins = new Set([origin]);
-  if (port === 80) {
-    hosts.add("127.0.0.1");
-    origins.add("http://127.0.0.1");
+  const hosts = new Set<string>();
+  const origins = new Set<string>();
+  for (const loopback of LOOPBACK_AUTHORITIES) {
+    hosts.add(`${loopback}:${String(port)}`);
+    origins.add(`http://${loopback}:${String(port)}`);
+    if (port === 80) {
+      hosts.add(loopback);
+      origins.add(`http://${loopback}`);
+    }
+    if (!production) origins.add(`http://${loopback}:${String(devPort)}`);
   }
-  if (!production) origins.add(`http://127.0.0.1:${String(devPort)}`);
   return {
     host: "127.0.0.1",
     port,

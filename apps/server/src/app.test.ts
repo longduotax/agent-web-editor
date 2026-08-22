@@ -11,6 +11,8 @@ import type {
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
+  ArchivedThreadsResponseSchema,
+  UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
@@ -561,6 +563,89 @@ describe("credential-free project API", () => {
     await server.close();
   });
 
+  // The other half of the archive door: an archived thread must be listable
+  // and restorable, or archiving is irreversible from the UI.
+  it("lists archived threads and restores one through a strict idempotent endpoint", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const thread = await server.workspaceContext.workspace.createThread(
+      project.id,
+    );
+    const headers = { host, origin, "x-pi-web-request": "1" };
+    await server.workspaceContext.workspace.archiveThread(
+      project.id,
+      thread.id,
+      "00000000-0000-4000-8000-000000000011",
+    );
+
+    const listed = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/archived-threads`,
+      headers: { host },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(
+      ArchivedThreadsResponseSchema.parse(listed.json()).threads.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual([thread.id]);
+
+    const url = `/api/projects/${project.id}/threads/${thread.id}/unarchive`;
+    const malformed = await server.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: {
+        idempotencyKey: "00000000-0000-4000-8000-000000000012",
+        archived: false,
+      },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const restored = await server.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: { idempotencyKey: "00000000-0000-4000-8000-000000000012" },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(UnarchiveThreadResponseSchema.parse(restored.json())).toEqual({
+      archived: false,
+    });
+    expect(
+      (await server.workspaceContext.workspace.list()).threads.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual([thread.id]);
+    const afterList = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/archived-threads`,
+      headers: { host },
+    });
+    expect(
+      ArchivedThreadsResponseSchema.parse(afterList.json()).threads,
+    ).toEqual([]);
+    const snapshot = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}`,
+      headers: { host },
+    });
+    expect(snapshot.statusCode).toBe(200);
+    await server.close();
+  });
+
   it("maps a durable thread-run lease conflict to the busy response", async () => {
     const paths = await directories();
     const config = parseConfig({
@@ -691,6 +776,71 @@ describe("credential-free project API", () => {
       },
     });
     expect(missingSignal.statusCode).toBe(403);
+    await server.close();
+  });
+
+  // R2-4. Served at http://localhost:<port> the whole app was read-only:
+  // every mutation came back 403 forbidden_request because the allowlist held
+  // only the 127.0.0.1 spelling of the same loopback address. Both directions
+  // are asserted here -- the rejection is the important half, because the
+  // allowlist is the app's DNS-rebinding defence.
+  it("accepts mutations from every loopback origin and still rejects non-loopback ones", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new FakeRuntime(),
+      directoryPicker: { chooseDirectory: vi.fn().mockResolvedValue(null) },
+      logger: false,
+    });
+
+    for (const loopback of ["127.0.0.1", "localhost", "[::1]"]) {
+      const accepted = await server.inject({
+        method: "POST",
+        url: "/api/projects/browse",
+        headers: {
+          host: `${loopback}:3001`,
+          origin: `http://${loopback}:5173`,
+          "x-pi-web-request": "1",
+        },
+        payload: { idempotencyKey: "00000000-0000-4000-8000-000000000001" },
+      });
+      expect(accepted.statusCode, `${loopback} must be accepted`).toBe(200);
+    }
+
+    for (const hostile of [
+      "http://hostile.invalid",
+      "http://localhost.hostile.invalid:5173",
+      "http://127.0.0.1.hostile.invalid:5173",
+      "https://localhost:5173",
+      "http://192.168.1.10:5173",
+    ]) {
+      const rejected = await server.inject({
+        method: "POST",
+        url: "/api/projects/browse",
+        headers: { host, origin: hostile, "x-pi-web-request": "1" },
+        payload: { idempotencyKey: "00000000-0000-4000-8000-000000000002" },
+      });
+      expect(rejected.statusCode, `${hostile} must be rejected`).toBe(403);
+      expect(rejected.json()).toEqual({
+        error: {
+          code: "forbidden_request",
+          message: "Request origin or CSRF signal is invalid.",
+        },
+      });
+    }
+
+    // A forged Host header is still refused outright, on reads too.
+    const forgedHost = await server.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { host: "localhost.hostile.invalid:3001" },
+    });
+    expect(forgedHost.statusCode).toBe(403);
+
     await server.close();
   });
 

@@ -7,6 +7,7 @@ import type { AgentRuntime } from "@pi-web/agent-runtime";
 import type { RawData } from "ws";
 import {
   ArchiveThreadRequestSchema,
+  UnarchiveThreadRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
   ImportThreadRequestSchema,
@@ -393,6 +394,24 @@ export async function buildServer(
       );
     },
   );
+  server.post(
+    "/api/projects/:projectId/threads/:threadId/unarchive",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const body = UnarchiveThreadRequestSchema.parse(request.body);
+      return await workspace.unarchiveThread(
+        params.projectId,
+        params.threadId,
+        body.idempotencyKey,
+      );
+    },
+  );
+  // Deliberately not `/threads/archived`: that would sit under the
+  // `:threadId` param route and depend on segment-priority rules to resolve.
+  server.get("/api/projects/:projectId/archived-threads", (request) => {
+    const params = projectParamsSchema.parse(request.params);
+    return { threads: workspace.listArchivedThreads(params.projectId) };
+  });
   server.get("/api/projects/:projectId/threads/:threadId", async (request) => {
     const params = threadParamsSchema.parse(request.params);
     return await workspace.snapshot(params.projectId, params.threadId);

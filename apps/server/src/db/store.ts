@@ -769,6 +769,25 @@ export class MetadataStore {
     })();
   }
 
+  // Exact inverse of archiveThread's first statement. Deliberately does NOT
+  // touch last_activity_at or last_opened_thread_id: restoring a thread puts
+  // it back where it was in the list, it does not promote it.
+  public unarchiveThread(projectId: ProjectId, threadId: ThreadId): boolean {
+    return this.sqlite.transaction(() => {
+      const existing = this.getThread(projectId, threadId, {
+        includeArchived: true,
+      });
+      if (existing === null) return false;
+      if (existing.archived_at === null) return true;
+      const restored = this.sqlite
+        .prepare(
+          "UPDATE threads SET archived_at = NULL WHERE id = ? AND project_id = ? AND archived_at IS NOT NULL",
+        )
+        .run(threadId, projectId);
+      return restored.changes > 0;
+    })();
+  }
+
   public setLastOpenedThread(projectId: ProjectId, threadId: ThreadId): void {
     this.sqlite
       .prepare(

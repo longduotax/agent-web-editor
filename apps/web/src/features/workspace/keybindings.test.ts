@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   detectPlatform,
   resolveCommand,
+  shortcutKeys,
+  WORKSPACE_KEYBINDINGS,
   type KeyEventLike,
   type Platform,
 } from "./keybindings.js";
@@ -129,20 +131,69 @@ describe("resolveCommand", () => {
     }
   });
 
-  describe("bind (primary + alt + Enter)", () => {
-    it("mac: meta+alt+Enter binds", () => {
+  // R2-14: the "bind" chord set layoutTree's boundPaneId, which nothing has
+  // ever read, so pressing it did nothing observable. An inert shortcut must
+  // not be advertised on the Settings page, so it is removed rather than
+  // documented.
+  describe("the inert bind chord is gone", () => {
+    it("mac: meta+alt+Enter resolves to nothing", () => {
       expect(
         resolveCommand(key({ key: "Enter", metaKey: true, altKey: true }), mac),
-      ).toEqual({ type: "bind" });
+      ).toBeNull();
     });
 
-    it("other: ctrl+alt+Enter binds", () => {
+    it("other: ctrl+alt+Enter resolves to nothing", () => {
       expect(
         resolveCommand(
           key({ key: "Enter", ctrlKey: true, altKey: true }),
           other,
         ),
-      ).toEqual({ type: "bind" });
+      ).toBeNull();
+    });
+  });
+
+  // The help list and the dispatcher read the same table, so a binding can
+  // never be listed without working (or work without being listed).
+  describe("WORKSPACE_KEYBINDINGS is the single source of truth", () => {
+    it("resolves every advertised binding on both platforms", () => {
+      for (const binding of WORKSPACE_KEYBINDINGS) {
+        const modifiers =
+          binding.group === "shift-primary"
+            ? {
+                mac: { shiftKey: true, metaKey: true },
+                other: { shiftKey: true, altKey: true },
+              }
+            : {
+                mac: { metaKey: true, altKey: true },
+                other: { ctrlKey: true, altKey: true },
+              };
+        expect(
+          resolveCommand(key({ key: binding.key, ...modifiers.mac }), mac),
+          `${binding.label} on mac`,
+        ).toEqual(binding.command);
+        expect(
+          resolveCommand(key({ key: binding.key, ...modifiers.other }), other),
+          `${binding.label} elsewhere`,
+        ).toEqual(binding.command);
+      }
+    });
+
+    it("spells the chord with platform-correct modifier symbols", () => {
+      const closeBinding = WORKSPACE_KEYBINDINGS.find(
+        (binding) => binding.command.type === "close",
+      );
+      if (closeBinding === undefined) throw new Error("missing close binding");
+      expect(shortcutKeys(closeBinding, mac)).toEqual(["⇧", "⌘", "⌫"]);
+      expect(shortcutKeys(closeBinding, other)).toEqual(["Shift", "Alt", "⌫"]);
+      const focusBinding = WORKSPACE_KEYBINDINGS.find(
+        (binding) => binding.command.type === "focus",
+      );
+      if (focusBinding === undefined) throw new Error("missing focus binding");
+      expect(shortcutKeys(focusBinding, mac).slice(0, 2)).toEqual(["⌘", "⌥"]);
+      expect(shortcutKeys(focusBinding, other).slice(0, 2)).toEqual([
+        "Ctrl",
+        "Alt",
+      ]);
     });
   });
 

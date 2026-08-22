@@ -389,6 +389,71 @@ describe("run coordination", () => {
     context.store.close();
   });
 
+  it("restores an archived thread idempotently and leaves a live thread alone", async () => {
+    const context = await fixture();
+    const archiveKey = "19000000-0000-4000-8000-000000000010";
+    const restoreKey = "19000000-0000-4000-8000-000000000011";
+    await context.service.archiveThread(
+      context.project.id,
+      context.first.id,
+      archiveKey,
+    );
+    expect(
+      context.service
+        .listArchivedThreads(context.project.id)
+        .map((thread) => thread.id),
+    ).toEqual([context.first.id]);
+
+    await expect(
+      context.service.unarchiveThread(
+        context.project.id,
+        context.first.id,
+        restoreKey,
+      ),
+    ).resolves.toEqual({ archived: false });
+    // Replaying the same command is a no-op, not a second write.
+    await expect(
+      context.service.unarchiveThread(
+        context.project.id,
+        context.first.id,
+        restoreKey,
+      ),
+    ).resolves.toEqual({ archived: false });
+    expect(context.service.listArchivedThreads(context.project.id)).toEqual([]);
+    expect(
+      (await context.service.list()).threads.map((thread) => thread.id),
+    ).toContain(context.first.id);
+    // The restored thread is reachable again.
+    await expect(
+      context.service.snapshot(context.project.id, context.first.id),
+    ).resolves.toMatchObject({ thread: { id: context.first.id } });
+
+    // Restoring a thread that was never archived succeeds without changing it.
+    await expect(
+      context.service.unarchiveThread(
+        context.project.id,
+        context.second.id,
+        "19000000-0000-4000-8000-000000000012",
+      ),
+    ).resolves.toEqual({ archived: false });
+
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("refuses to restore a thread that does not exist in the project", async () => {
+    const context = await fixture();
+    await expect(
+      context.service.unarchiveThread(
+        context.project.id,
+        "19000000-0000-4000-8000-0000000000ff" as typeof context.first.id,
+        "19000000-0000-4000-8000-000000000013",
+      ),
+    ).rejects.toThrow("thread_not_found");
+    await context.service.close();
+    context.store.close();
+  });
+
   it("does not block archival when runtime disposal never settles", async () => {
     const context = await fixture();
     const session = sessionFor(context, context.first.id);

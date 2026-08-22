@@ -9,8 +9,10 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { StrictMode } from "react";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId, ThreadSnapshot } from "@pi-web/contracts";
 
@@ -104,11 +106,27 @@ function stubMacPlatform() {
   vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
 }
 
+// Stands in for the sidebar's thread rows, which live outside WorkspaceView
+// but are the only way a user opens a thread that is not already in a pane.
+function ThreadLinks({ ids }: { ids: ThreadId[] }) {
+  return (
+    <nav aria-label="Threads">
+      {ids.map((id) => (
+        <Link key={id} to={`/projects/${projectId}/threads/${id}`}>
+          {`Open ${id}`}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
 function renderWorkspace(
   initialEntry: string,
   options?: {
     seedStore?: (store: Map<string, string>) => void;
     snapshots?: Record<string, ThreadSnapshot>;
+    strict?: boolean;
+    sidebarLinks?: ThreadId[];
   },
 ) {
   const store = stubStorage();
@@ -151,9 +169,14 @@ function renderWorkspace(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const links =
+    options?.sidebarLinks === undefined ? null : (
+      <ThreadLinks ids={options.sidebarLinks} />
+    );
+  const tree = (
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
+        {links}
         <Routes>
           <Route
             path="/projects/:projectId"
@@ -169,8 +192,14 @@ function renderWorkspace(
           />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  return {
+    ...render(
+      options?.strict === true ? <StrictMode>{tree}</StrictMode> : tree,
+    ),
+    store,
+  };
 }
 
 describe("WorkspaceView", () => {
@@ -211,66 +240,59 @@ describe("WorkspaceView", () => {
     return closeButton as HTMLElement;
   }
 
-  it("closes a threaded pane immediately (no archive call yet) and shows an undo toast", async () => {
+  // R2-5 / D-9. Closing a pane used to archive the thread as a side effect:
+  // the button said "Close", the pane vanished, a 6s toast deferred the real
+  // archiveThread call, and that call was fire-and-forget -- no .catch, no
+  // error surface -- so the UI reported "Archived" even when the request
+  // 403'd and the thread was never archived. There is no unarchive endpoint
+  // and no archived-thread list, so a successful one was unrecoverable.
+  // Closing a pane is now a pure layout operation; archiving is an explicit,
+  // labelled action in the sidebar (see App.test.tsx).
+  it("closes a threaded pane as a pure layout operation: no archive call, ever, and no toast", async () => {
     api.archiveThread.mockResolvedValue({ archived: true as const });
     renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
     await screen.findByRole("region", { name: "Example thread" });
 
+    vi.useFakeTimers();
     fireEvent.click(closeButtonFor("Example thread"));
 
-    // The pane is gone right away — no modal, no waiting on the network.
-    await screen.findByText("No panes are open.");
+    // The pane is gone right away -- no modal, no waiting on the network.
+    expect(screen.getByText("No panes are open.")).toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "Example thread" }),
     ).not.toBeInTheDocument();
-    expect(api.archiveThread).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
-  });
-
-  it("archives the thread once the undo toast times out", async () => {
-    api.archiveThread.mockResolvedValue({ archived: true as const });
-    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
-    await screen.findByRole("region", { name: "Example thread" });
-
-    vi.useFakeTimers();
-    fireEvent.click(closeButtonFor("Example thread"));
-    expect(api.archiveThread).not.toHaveBeenCalled();
-
-    act(() => {
-      vi.advanceTimersByTime(6000);
-    });
-
-    expect(api.archiveThread).toHaveBeenCalledTimes(1);
-    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+    // Nothing is deferred, so no amount of elapsed time can archive it.
     expect(
       screen.queryByRole("button", { name: "Undo" }),
     ).not.toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(api.archiveThread).not.toHaveBeenCalled();
   });
 
-  it("clicking Undo restores the pane with no archive call, ever", async () => {
+  it("closing several threaded panes in a row still never archives anything", async () => {
     api.archiveThread.mockResolvedValue({ archived: true as const });
-    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    renderWorkspace(`/projects/${projectId}`, {
+      snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
+      seedStore: seedTwoPaneLayout,
+    });
+
     await screen.findByRole("region", { name: "Example thread" });
+    await screen.findByRole("region", { name: "Other thread" });
 
     vi.useFakeTimers();
     fireEvent.click(closeButtonFor("Example thread"));
+    fireEvent.click(closeButtonFor("Other thread"));
+
     expect(screen.getByText("No panes are open.")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-
-    expect(
-      screen.getByRole("region", { name: "Example thread" }),
-    ).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(api.archiveThread).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Undo" }),
     ).not.toBeInTheDocument();
-
-    // Undo cancelled the deferred archive outright — even letting the
-    // original timeout elapse must never call archiveThread.
-    act(() => {
-      vi.advanceTimersByTime(6000);
-    });
-    expect(api.archiveThread).not.toHaveBeenCalled();
   });
 
   it("closing a threadless (new-chat) pane shows no toast and never archives", async () => {
@@ -289,6 +311,33 @@ describe("WorkspaceView", () => {
       screen.queryByRole("button", { name: "Undo" }),
     ).not.toBeInTheDocument();
     expect(api.archiveThread).not.toHaveBeenCalled();
+  });
+
+  // R2-10: the draft key is scoped to a pane id that will never exist again,
+  // so leaving it behind leaked one localStorage entry per pane ever opened.
+  it("drops a closed new-chat pane's draft key instead of leaking it", async () => {
+    const user = userEvent.setup();
+    const { store } = renderWorkspace(`/projects/${projectId}`);
+    const composer = await screen.findByLabelText("First message");
+    await user.click(composer);
+    await user.paste("a draft nobody will send");
+
+    expect(
+      [...store.keys()].filter((key) => key.startsWith("pi-new-draft:")),
+    ).toHaveLength(1);
+
+    const closeButton = screen
+      .getByLabelText("New chat")
+      .closest(".pane")
+      ?.querySelector('[aria-label="Close"]');
+    if (closeButton === null || closeButton === undefined)
+      throw new Error("expected a close button");
+    fireEvent.click(closeButton);
+
+    await screen.findByText("No panes are open.");
+    expect(
+      [...store.keys()].filter((key) => key.startsWith("pi-new-draft:")),
+    ).toEqual([]);
   });
 
   function seedTwoPaneLayout(store: Map<string, string>) {
@@ -318,86 +367,26 @@ describe("WorkspaceView", () => {
     );
   }
 
-  it("flushes (archives now) a pending close's thread when a second pane is closed before its toast times out, and gives the second pane a fresh full timeoutMs window (not the first's leftover time)", async () => {
-    api.archiveThread.mockResolvedValue({ archived: true as const });
-    renderWorkspace(`/projects/${projectId}`, {
-      snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
-      seedStore: seedTwoPaneLayout,
+  // NEW-R3-3. Closing the last pane leaves the URL on the thread it was
+  // showing. Clicking that same thread in the sidebar navigates to the route
+  // the app is already on, so `params.threadId` never changes and the effect
+  // that opens panes from the route never re-runs -- the empty surface became
+  // a dead end for the one thread the user is most likely to click.
+  it("re-opens a pane when the routed thread's sidebar link is clicked after the last pane was closed", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`, {
+      sidebarLinks: [threadId],
     });
-
     await screen.findByRole("region", { name: "Example thread" });
-    await screen.findByRole("region", { name: "Other thread" });
 
-    vi.useFakeTimers();
     fireEvent.click(closeButtonFor("Example thread"));
-    expect(api.archiveThread).not.toHaveBeenCalled();
+    expect(screen.getByText("No panes are open.")).toBeInTheDocument();
 
-    // Let most (but not all) of the first toast's window elapse before
-    // flushing it, so a stale/reused timer for the second pane would fire
-    // almost immediately — distinguishing that bug from a correctly fresh
-    // 6s window starting at B's own close.
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(api.archiveThread).not.toHaveBeenCalled();
-
-    fireEvent.click(closeButtonFor("Other thread"));
-
-    // Closing the second pane while the first's toast was still pending
-    // flushes (archives) the first thread immediately...
-    expect(api.archiveThread).toHaveBeenCalledTimes(1);
-    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
-
-    // ...and starts a fresh deferred archive for the second: just past
-    // where the first pane's stale timer would have fired (1000ms further,
-    // i.e. 6000ms since A's close but only 1000ms since B's), it must NOT
-    // have archived yet.
-    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    expect(api.archiveThread).toHaveBeenCalledTimes(1);
-
-    // Only once a full 6000ms has elapsed since B's own close does it
-    // archive.
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    expect(api.archiveThread).toHaveBeenCalledTimes(2);
-    expect(api.archiveThread).toHaveBeenCalledWith(projectId, otherThreadId);
-  });
-
-  it("clicking Undo on the second (flushed) pane's toast still results in zero archive calls for it", async () => {
-    api.archiveThread.mockResolvedValue({ archived: true as const });
-    renderWorkspace(`/projects/${projectId}`, {
-      snapshots: { [threadId]: snapshot, [otherThreadId]: otherSnapshot },
-      seedStore: seedTwoPaneLayout,
-    });
-
-    await screen.findByRole("region", { name: "Example thread" });
-    await screen.findByRole("region", { name: "Other thread" });
-
-    vi.useFakeTimers();
-    fireEvent.click(closeButtonFor("Example thread"));
-    fireEvent.click(closeButtonFor("Other thread"));
-    expect(api.archiveThread).toHaveBeenCalledTimes(1);
-    expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
-
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    fireEvent.click(screen.getByRole("link", { name: `Open ${threadId}` }));
 
     expect(
-      screen.getByRole("region", { name: "Other thread" }),
+      await screen.findByRole("region", { name: "Example thread" }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Undo" }),
-    ).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(6000);
-    });
-    // Still just the one archive call, for the flushed first pane — never
-    // one for the second (undone) pane.
-    expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("No panes are open.")).not.toBeInTheDocument();
   });
 
   it("focuses/creates a pane for the thread named in the route on mount", async () => {
@@ -456,6 +445,70 @@ describe("WorkspaceView", () => {
     // alongside it, rather than reusing the already-threaded one.
     const composer = await screen.findByLabelText("First message");
     expect(composer.closest(".pane")).toHaveClass("focused");
+  });
+
+  // UX-5: the /new entry effect used to dispatch newPane() once per effect
+  // invocation. Under StrictMode React runs mount -> cleanup -> mount, and
+  // the second run still saw the pre-split layout, so the sidebar's "+"
+  // produced TWO identical new-chat panes (persisted to localStorage, so the
+  // user had to close one by hand). The entry must be dispatched at most once
+  // per route entry, whatever the effect's invocation count.
+  it("adds exactly one new-chat pane when entering /new, even under StrictMode's double-invoked effects", async () => {
+    const seededPaneId = "seeded-pane";
+    renderWorkspace(`/projects/${projectId}/new`, {
+      strict: true,
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 2,
+            root: { type: "pane", id: seededPaneId },
+            panes: { [seededPaneId]: { threadId } },
+            focusedPaneId: seededPaneId,
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    await screen.findByLabelText("New chat");
+    expect(screen.getAllByLabelText("New chat")).toHaveLength(1);
+    expect(document.querySelectorAll(".new-chat-pane")).toHaveLength(1);
+  });
+
+  it("adds no further new-chat pane when /new is re-entered while one is already focused", async () => {
+    const seededPaneId = "seeded-threadless-pane";
+    renderWorkspace(`/projects/${projectId}/new`, {
+      strict: true,
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 2,
+            root: { type: "pane", id: seededPaneId },
+            panes: { [seededPaneId]: { threadId: null } },
+            focusedPaneId: seededPaneId,
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    await screen.findByLabelText("New chat");
+    expect(screen.getAllByLabelText("New chat")).toHaveLength(1);
+  });
+
+  it("renders no environment panel and no environment toggle anywhere on the surface", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
+    await screen.findByRole("region", { name: "Example thread" });
+
+    expect(
+      screen.queryByRole("complementary", { name: "Environment" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /environment/i }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".environment-panel")).toBeNull();
   });
 
   it("renders no dock chrome: no 'Docked panes' group anywhere in the view", async () => {

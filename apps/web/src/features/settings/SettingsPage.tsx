@@ -1,3 +1,8 @@
+import {
+  detectPlatform,
+  shortcutKeys,
+  WORKSPACE_KEYBINDINGS,
+} from "../workspace/keybindings.js";
 import type { ThemeChoice } from "./themePreferences.js";
 import { useTheme } from "./useTheme.js";
 
@@ -9,6 +14,9 @@ const THEME_OPTIONS: readonly { value: ThemeChoice; label: string }[] = [
 
 export function SettingsPage() {
   const theme = useTheme();
+  // Rendered from the same table resolveCommand dispatches from, so the list
+  // cannot drift from the bindings and an inert chord cannot be advertised.
+  const platform = detectPlatform(navigator);
 
   return (
     <main className="center settings-page">
@@ -39,6 +47,41 @@ export function SettingsPage() {
               </label>
             ))}
           </div>
+        </section>
+        <section
+          className="settings-section"
+          aria-labelledby="settings-shortcuts-heading"
+        >
+          <h2 id="settings-shortcuts-heading">Keyboard shortcuts</h2>
+          <p className="settings-section-description">
+            Pane shortcuts work anywhere in the workspace, except while you are
+            typing in a composer.
+          </p>
+          <dl className="shortcut-list">
+            {WORKSPACE_KEYBINDINGS.map((binding) => (
+              <div className="shortcut-row" key={binding.label}>
+                <dt>{binding.label}</dt>
+                <dd>
+                  {shortcutKeys(binding, platform).map((keyLabel) => (
+                    <kbd key={keyLabel}>{keyLabel}</kbd>
+                  ))}
+                </dd>
+              </div>
+            ))}
+            <div className="shortcut-row">
+              <dt>Send a message</dt>
+              <dd>
+                <kbd>Enter</kbd>
+              </dd>
+            </div>
+            <div className="shortcut-row">
+              <dt>New line in a message</dt>
+              <dd>
+                <kbd>⇧</kbd>
+                <kbd>Enter</kbd>
+              </dd>
+            </div>
+          </dl>
         </section>
       </div>
     </main>

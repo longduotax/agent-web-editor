@@ -11,7 +11,7 @@
 **Product approval:** Pending for specification version 1
 
 **Subsystem:** Browser workspace composition — pane visual surface, theming, and
-the focus-bound right panel
+the single workspace inspector
 
 **Last verified:** 2026-08-22
 
@@ -35,13 +35,14 @@ look reads as a generic web page rather than a native desktop tool, it ships dar
 only, and it carries a collapse-to-dock tier that adds model and UI complexity.
 
 This capability restyles the surface to match the calm, near-borderless Codex
-desktop aesthetic, adds a light theme as the default alongside dark, renders the
-focus-bound right-hand **Environment** panel that the tiling surface only carried
-as a binding target, and **removes the collapse-to-dock pane tier entirely** so
-the pane model is simply: split, focus, close. The user outcome is a workspace
-that looks and feels like a first-class agent desktop app, is comfortable in
-light or dark, and lets them tell at a glance which of several parallel runs on a
-project needs them — without a second, minimized tier of panes to manage.
+desktop aesthetic, adds a light theme as the default alongside dark, keeps
+**exactly one** right-hand workspace panel — the `Changes | Files | Terminal`
+inspector — and **removes the collapse-to-dock pane tier entirely** so the pane
+model is simply: split, focus, close. The user outcome is a workspace that looks
+and feels like a first-class agent desktop app, is comfortable in light or dark,
+and lets them tell at a glance which of several parallel runs on a project needs
+them — without a second, minimized tier of panes to manage and without a second
+right-hand column restating what the first already shows.
 
 The visual reference is the mockup set in `docs/design/thread-surface-*.html`;
 those files are the authoritative source for spacing, color roles, and component
@@ -52,9 +53,13 @@ shapes referenced below.
 - **Pane**, **tiling tree**, **focused pane**, **new-chat pane**, and **settled
   run** carry the meanings defined in
   [Tiling workspace surface](tiling-workspace-surface.md).
-- The **Environment panel** is a device-local right-hand column that reflects the
-  focused pane's run environment (changes, worktree, branch, sources). It
-  replaces the tiling surface's unrendered "right-panel binding target."
+- The **workspace inspector** is the single right-hand column of the thread
+  route, carrying the `Changes | Files | Terminal` tabs. It is the tiling
+  surface's "right-panel binding target", rendered. There is no second
+  right-hand column.
+- The **reading column** is the one centered measure the transcript, the
+  composer and the new-chat card all share, expressed as a single CSS custom
+  property (`--surface-measure`). No component carries a measure of its own.
 - A **theme** is the light or dark visual token set applied to the whole app,
   stored as a device-local preference.
 - **Run status** is the settled/unsettled state a pane surfaces in its header:
@@ -70,8 +75,9 @@ revises that baseline: it supersedes the tiling surface's dock, collapse, and
 restore behavior (see [Superseded requirements](#superseded-requirements)) and
 promotes theming and the right panel, which that spec listed as separate future
 capabilities. All non-dock tiling behavior — the binary tiling tree, resizable
-dividers, split-to-new-chat-pane, close-archives-thread, device-local layout, and
-server authority over threads and runs — is retained unchanged.
+dividers, split-to-new-chat-pane, device-local layout, and server authority
+over threads and runs — is retained unchanged. `TWS-07`'s
+close-archives-the-thread coupling is superseded (see CWS-04).
 
 ## Proposed contract (version 1)
 
@@ -109,27 +115,51 @@ tokens only and changes no layout or content. Status and state are never conveye
 by color alone; every status carries an accessible text label or icon in addition
 to color.
 
-### CWS-03 — Pane header surfaces run status at a glance
+### CWS-03 — One pane header surfaces run status at a glance
 
-Each threaded pane's header shows, in reading order: a **run-status indicator**
+A pane has **exactly one** header. It shows the thread title once, the run
+status once, and the trust/permissions notice as one quiet inline line; nothing
+below it restates any of the three. It shows, in reading order: a
+**run-status indicator**
 (working, needs-approval, done, or failed) as a labeled, color-plus-text element
 with an optional elapsed timer for running work; the **thread title**; a compact
 **project/worktree chip**; and the pane action controls. The status is legible
 without opening or scrolling the transcript, so a user monitoring several panes
 can identify which run needs them from the headers alone. The same status
-indicators appear against each run in the sidebar run list. A new-chat pane with
-no thread shows no run status. A run changing to needs-approval or failed updates
+indicators appear against each run in the sidebar run list. The header's second
+line is a quiet detail line carrying the thread's worktree mode and branch plus
+the inline trust notice, clamped to a single ellipsised line (full text on its
+tooltip). The header's height is pinned to one shared token, so every pane
+header and the inspector's top row present a single continuous bottom
+hairline at every width; header content never changes it. A new-chat pane with no thread shows no run status. A run changing to needs-approval or failed updates
 its pane header and its sidebar indicator but **never steals focus or moves the
 focus ring**; attention is surfaced, not forced.
 
 ### CWS-04 — Pane actions are Split and Close only
 
-The pane header exposes exactly two pane actions: **Split** and **Close**. Close
-archives the pane's thread exactly as specified by the tiling surface
-(`TWS-07`): metadata-only, non-destructive, and a no-op archive for a new-chat
-pane. Close is **immediate** and shows a brief undo affordance (an "Archived —
-Undo" toast); it never opens a confirmation modal. There is no collapse,
-minimize, or dock action anywhere on the pane. The focused pane is visually
+The pane header exposes exactly two pane actions: **Split** and **Close**.
+
+**Revised 2026-08-22 (supersedes close-archives-thread).** Close removes the
+pane from the layout and does **nothing else**: it never archives, deletes, or
+otherwise mutates the pane's thread. Closing needs no confirmation precisely
+_because_ it is not destructive — the thread stays in the sidebar and can be
+reopened from it.
+
+Archiving is a separate, explicitly labelled action on the sidebar's
+per-thread actions menu. It is deferred behind an `Archived "<title>" — Undo`
+toast (undo _prevents_ the call rather than reversing it), and a failed archive
+restores the row and surfaces the error, naming the thread it belongs to,
+instead of reporting success.
+
+**Revised 2026-08-22 (NEW-R3-1).** Staged archives are **independent**:
+requesting a second archive while a first is still inside its undo window must
+not commit, cancel or hurry the first. Each staged archive owns its own toast,
+its own timer, and its own error. Archiving is also **reversible** — see TM-05
+in `thread-management.md` — so a committed archive is recoverable from the UI
+rather than only from the database.
+
+There is no collapse, minimize, or dock
+action anywhere on the pane. The focused pane is visually
 distinguished (a focus ring); non-focused panes are slightly de-emphasized but
 fully rendered. Clicking a non-focused pane focuses it.
 
@@ -160,32 +190,59 @@ Panes can no longer be collapsed, docked, minimized, or restored. Concretely:
 This requirement supersedes the tiling surface clauses listed in
 [Superseded requirements](#superseded-requirements).
 
-### CWS-06 — The Environment panel renders and follows the focused pane
+### CWS-06 — One right-hand panel: the workspace inspector
 
-The right-hand panel, which the tiling surface carried only as an unrendered
-binding target, now renders as a **docked right column** (never a floating
-overlay that covers panes). It reflects the **focused pane's** run environment
-and updates whenever focus moves between panes. It shows: a focus header naming
-the run it describes (title and run status), the run's **changes** summary
-(added/removed counts), its **worktree** and **branch**, a commit-or-push
-affordance, and **sources** (e.g. GitHub). There is exactly **one** Environment
-panel for the whole surface — it is shared and focus-following, not per-pane. Its
-visibility is toggleable and is a device-local preference: on a fresh device it is
-**open while the surface has a single pane and hidden once the surface tiles**,
-and after the user toggles it that choice is remembered per device. When no pane
-is focused, the panel shows an empty state.
+**Revised 2026-08-22 (supersedes the Environment-panel model below).** The
+workspace has exactly **one** panel docked right of the pane surface at any
+width: the `Changes | Files | Terminal` **inspector**. A standalone
+"Environment" column does not exist, and no control for one is rendered.
 
-The panel's scope in this version is the environment and git summary only; an
-embedded terminal is out of scope (see [Non-goals](#non-goals)).
+- The inspector is a **docked right column**, never a floating overlay, and
+  neither it nor its open/close control ever overlaps pane content. When it is
+  closed, its reopen control lives in a docked rail, not floating over the
+  transcript.
+- The inspector **follows the focused pane, not the URL**. Focusing a pane that
+  owns a thread shows that thread's workspace at any route, without touching
+  the sidebar; focusing a threadless (new-chat) pane hides the inspector and
+  its rail; with no panes open it is hidden. A route addresses at most one
+  thread while the surface can hold several panes, so the URL cannot express
+  what the user is looking at — the focused pane can. The sidebar's selected
+  thread follows the same source of truth.
+- Information the removed panel carried survives in exactly one place each, and
+  is never restated in a second column:
+  - the focused thread's **worktree mode and branch** appear once, as the quiet
+    detail line of that pane's own header (CWS-03);
+  - the **changes summary** (added / modified / deleted, or "No changes")
+    appears once, in the inspector's Changes tab;
+  - the commit-or-push and sources rows are **dropped** at this version; they
+    were inert placeholders.
+- Every inspector tab has a defined loading, empty, and no-selection state, all
+  rendered in muted tokens that read correctly in light and dark.
 
-### CWS-07 — Readability across pane densities
+The earlier version of this requirement specified a second, focus-following
+"Environment" column alongside the inspector. It shipped, the user rejected it
+as a duplicate column, and it is **superseded**: the panel, its device-local
+visibility preference, and its floating toggle are removed from the product.
 
-Inside a pane the centered fixed reading measure is dropped so a pane uses its
-full width with comfortable padding, keeping the transcript readable when a pane
-is narrow (for example at three-up or two-by-two). The surface **enforces a
-minimum usable pane width**; when more panes are open than fit at that minimum,
-the surface **scrolls** rather than shrinking panes below it. Panes never shrink
-past the minimum into an unreadable state.
+### CWS-07 — One centered reading column
+
+Transcript content, the composer, and the new-chat card all sit inside the
+**same centered reading column**, sized by a single CSS custom property
+(`--surface-measure`, currently `48rem`). A user's turn and the input that
+answers it share one axis; no component may hardcode a competing measure. Below
+that width the column shrinks with the pane rather than clipping.
+
+The pane's header chrome (run status, title, project chip, pane actions, and
+the quiet detail line) is full-width bar chrome, not reading content, and is
+therefore not constrained to the column.
+
+The surface still **enforces a minimum usable pane width**; when more panes are
+open than fit at that minimum, the surface **scrolls** rather than shrinking
+panes below it. Panes never shrink past the minimum into an unreadable state.
+
+The earlier version of this requirement dropped the centered measure so a pane
+used its full width. The user rejected the result as "too spread out"; the
+centered measure is **restored** and that clause is superseded.
 
 ### CWS-08 — Settings page hosts theme selection
 
@@ -194,9 +251,12 @@ the user or project switcher region of the sidebar). Version 1 of the page hosts
 the **theme selection** control — a three-way choice of System, Light, and Dark
 (CWS-02) — with System selected by default. Selecting an option applies it
 immediately and persists it as a device-local preference. The page is the durable
-home for future device-local preferences (such as right-panel default visibility
-and keybinding display); version 1 need only contain the theme control, but its
-structure must accommodate additional settings without a redesign. Settings are
+home for future device-local preferences (such as inspector default
+visibility); version 1 contains the theme control and a **Keyboard shortcuts**
+list. That list is generated from the same table the workspace's key handler
+dispatches from, so it cannot drift from the bindings and an inert binding
+cannot be advertised. The structure must accommodate additional settings
+without a redesign. Settings are
 device-local and are never sourced from or written to the server.
 
 ## Acceptance criteria
@@ -208,32 +268,76 @@ device-local and are never sourced from or written to the server.
 2. The app follows the OS theme by default and updates live on OS change; a
    Settings page offers System / Light / Dark; the choice persists per device and
    applies before first paint; and no state is conveyed by color alone.
-3. Each threaded pane header shows a labeled run-status indicator (working /
-   needs-approval / done / failed, with an elapsed timer while running), the
-   thread title, and a project/worktree chip; a user can identify which pane
-   needs them from headers alone, and the same statuses appear in the sidebar.
-4. The only pane actions are Split and Close; there is no collapse/minimize/dock
-   control anywhere, the focused pane shows a ring, and clicking a non-focused
-   pane focuses it.
+3. A threaded pane renders one header only, at a fixed shared height so every
+   pane header and the inspector's top row share one bottom hairline, showing
+   a labeled run-status
+   indicator (working / needs-approval / done / failed, with an elapsed timer
+   while running), the thread title, a project/worktree chip, and a quiet
+   detail line carrying worktree/branch and the trust notice — each exactly
+   once. A user can identify which pane needs them from headers alone, and the
+   same statuses appear in the sidebar.
+4. The only pane actions are Split and Close; Close is a pure layout
+   operation that never archives or otherwise mutates the thread; there is no
+   collapse/minimize/dock control anywhere, the focused pane is distinguished
+   by a quiet hairline (not a saturated ring), and clicking a non-focused pane
+   focuses it.
 5. There is no dock strip, no collapse or restore keybinding, and no docked pane
    tier; a persisted layout that references a dock loads with its previously
    docked panes restored into the tiling tree (its splits preserved), and no pane
    is silently dropped.
-6. The Environment panel renders as a docked right column, reflects the focused
-   pane's changes/worktree/branch/sources, updates when focus changes, is a
-   single shared panel (not per-pane), and its visibility persists per device.
-7. A pane uses its full width for the transcript with no centered fixed measure,
-   and remains readable at three-up and two-by-two densities down to the defined
-   minimum pane width.
+6. Exactly one panel is docked right of the pane surface — the
+   `Changes | Files | Terminal` inspector. No `Environment` column and no
+   control for one exists in the DOM at any width; no control overlaps pane
+   content; the focused thread's worktree/branch appears only in its own pane
+   header, and its changes summary only in the Changes tab, which also has
+   defined loading, empty, and no-selection states in both themes. The
+   inspector shows the **focused pane's** thread at any route: focusing a
+   thread pane while the route points elsewhere shows that thread's
+   workspace, focusing a new-chat pane hides the column and its rail, and an
+   empty surface hides it too.
+7. The transcript, the composer, and the new-chat card share one centered
+   reading column driven by a single custom property; a message and the
+   composer that answers it start at the same x **and end at the same x**, at
+   every pane width above and below the measure, with classic (space-consuming)
+   scrollbars as well as overlay ones; and the surface still
+   remains readable at three-up and two-by-two densities down to the defined
+   minimum pane width, scrolling rather than shrinking past it.
 8. All retained tiling behavior is unchanged: binary tiling tree, resizable
-   dividers, split opens a focused new-chat pane, close archives the thread
-   non-destructively, layout is device-local, and threads/runs/transcripts stay
-   server-authoritative.
+   dividers, split opens a focused new-chat pane, layout is device-local, and
+   threads/runs/transcripts stay server-authoritative. Archiving is reachable
+   only from the sidebar's per-thread actions menu, is metadata-only, is
+   undoable for the life of its own toast independently of any other staged
+   archive, and is reversible afterwards from the project's Archived section.
+   With zero panes open, clicking any thread in the sidebar opens a pane for
+   it — including the thread the URL already addresses — and the empty surface
+   carries its own control for opening a pane.
 9. A Settings page is reachable from the app chrome, hosts the System/Light/Dark
    theme control with System preselected, applies a change immediately, persists
-   it per device, and is structured to hold further settings later.
+   it per device, lists every active pane keyboard shortcut with
+   platform-correct symbols (and nothing inert), and is structured to hold
+   further settings later.
 
 ## Superseded requirements
+
+### Within this spec (revised 2026-08-22, before approval)
+
+- **CWS-06 (the Environment panel)** — the standalone focus-following
+  "Environment" column, its device-local visibility preference, and its
+  floating toggle are removed. CWS-06 now specifies the single-inspector
+  model. The user rejected the second right-hand column as a duplicate of the
+  inspector; the user's instruction outranks the drafted requirement.
+- **CWS-04 (close archives the thread)** — Close no longer archives. It was a
+  destructive side effect behind a button labelled only "Close", executed
+  fire-and-forget with no error handling, and unrecoverable once its toast
+  expired (there is no unarchive endpoint and no archived-thread list).
+  Archiving moves to an explicit, labelled sidebar action that keeps the undo
+  toast and surfaces failures.
+- **CWS-07 (full-width panes)** — the clause "the centered fixed reading
+  measure is dropped so a pane uses its full width" is struck. CWS-07 now
+  specifies one centered reading column on a single custom property. The
+  minimum-pane-width-and-scroll clause is retained unchanged.
+
+### In the tiling workspace surface spec
 
 This spec revises [Tiling workspace surface](tiling-workspace-surface.md) v1 by
 striking the dock. On approval, that spec must be updated so the following no
@@ -255,10 +359,9 @@ longer describe shipped behavior:
 
 ## Non-goals
 
-- An embedded per-pane terminal in the right panel; version 1 renders the
-  environment and git summary only. The terminal remains covered by
-  [Inspector and terminal](../design/inspector-and-terminal.md) and is promoted
-  separately.
+- A second right-hand column of any kind. The commit-or-push and sources rows
+  the superseded Environment panel sketched are not reintroduced at this
+  version; when they land they belong in the inspector, not a new column.
 - Additional agent backends and per-pane agent selection.
 - The fork-of-a-running-chat start state and its worktree lineage.
 - Server-persisted or cross-device synchronization of theme, layout, or panel
@@ -279,6 +382,9 @@ None. The five questions raised during drafting were resolved with the user on
 - Minimum pane width → **enforce a minimum and scroll** past it (CWS-07).
 - Attention routing → **stay passive**; surface status, never steal focus
   (CWS-03).
-- Close friction → **immediate with an undo toast**, no modal (CWS-04).
-- Right-panel default visibility → **open on a single pane, remembered per
-  device** thereafter (CWS-06).
+- Close friction → **immediate and non-destructive**, no modal; the undo
+  toast moves to the sidebar's explicit Archive action, which is the only
+  destructive thread operation (CWS-04).
+- Right-panel default visibility → settled by the inspector's own device-local
+  visibility preference; the superseded Environment panel's separate
+  "open on a single pane" rule is retired with the panel (CWS-06).

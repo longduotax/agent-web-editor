@@ -1,4 +1,4 @@
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import {
   PANE_STATUS_LABEL,
@@ -12,70 +12,85 @@ export interface PaneHeaderProps {
   title: string; // thread title, or "New chat" for a threadless pane
   projectLabel: string; // project/worktree chip text
   focused: boolean;
+  // Optional quiet second line (workspace/branch context and the trust
+  // notice). This is the pane's ONE header: nothing below it restates the
+  // title, the run status, or the trust warning. It is clamped to a single
+  // ellipsised line so it can never grow the header past --header-h;
+  // `detailTitle` carries the full text as a tooltip so nothing is lost.
+  detail?: ReactNode;
+  detailTitle?: string | undefined;
   onSplit(): void; // split right (row); keyboard still offers both axes
   onClose(): void;
 }
 
 export function PaneHeader(props: PaneHeaderProps): JSX.Element {
-  const { status, elapsed, title, projectLabel, focused } = props;
+  const { status, elapsed, title, projectLabel, focused, detail, detailTitle } =
+    props;
 
   return (
     <header className={`pane-head ${focused ? "focused" : "dim"}`}>
-      {status !== null && (
-        <span className={`status ${PANE_STATUS_TOKEN[status]}`}>
-          <span
-            className={`sdot ${PANE_STATUS_TOKEN[status]}`}
-            aria-hidden="true"
-          />
-          <span className="status-label">{PANE_STATUS_LABEL[status]}</span>
-          {elapsed !== null && (
-            <span className="status-elapsed">{`· ${elapsed}`}</span>
-          )}
+      <div className="pane-head-row">
+        {status !== null && (
+          <span className={`status ${PANE_STATUS_TOKEN[status]}`}>
+            <span
+              className={`sdot ${PANE_STATUS_TOKEN[status]}`}
+              aria-hidden="true"
+            />
+            <span className="status-label">{PANE_STATUS_LABEL[status]}</span>
+            {elapsed !== null && (
+              <span className="status-elapsed">{`· ${elapsed}`}</span>
+            )}
+          </span>
+        )}
+        <h1 className="title">{title}</h1>
+        <span className="repo">{projectLabel}</span>
+        <span className="acts">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Split"
+            title="Split"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onSplit();
+            }}
+          >
+            <svg
+              className="ico ico-sm"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M12 3v18" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="icon-btn danger"
+            aria-label="Close"
+            title="Close"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onClose();
+            }}
+          >
+            <svg
+              className="ico ico-sm"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
         </span>
+      </div>
+      {detail !== undefined && detail !== null && (
+        <div className="pane-head-detail" title={detailTitle}>
+          {detail}
+        </div>
       )}
-      <span className="title">{title}</span>
-      <span className="repo">{projectLabel}</span>
-      <span className="acts">
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label="Split"
-          title="Split"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onSplit();
-          }}
-        >
-          <svg
-            className="ico ico-sm"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <path d="M12 3v18" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="icon-btn danger"
-          aria-label="Close"
-          title="Close"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onClose();
-          }}
-        >
-          <svg
-            className="ico ico-sm"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path d="M6 6l12 12M18 6L6 18" />
-          </svg>
-        </button>
-      </span>
     </header>
   );
 }

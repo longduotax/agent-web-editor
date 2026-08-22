@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -17,6 +17,11 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import {
+  detectPlatform,
+  shortcutKeys,
+  WORKSPACE_KEYBINDINGS,
+} from "../workspace/keybindings.js";
 import { readThemeChoice } from "./themePreferences.js";
 import { App } from "../../App.js";
 
@@ -78,6 +83,43 @@ describe("SettingsPage", () => {
     expect(readThemeChoice()).toBe("dark");
     expect(screen.getByRole("radio", { name: "Dark" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "System" })).not.toBeChecked();
+  });
+
+  // R2-14: multi-pane tiling is the app's differentiating feature and its
+  // controls were hover-buttons plus undocumented chords.
+  it("lists every active pane shortcut, and nothing inert", () => {
+    stubMatchMedia();
+    renderSettings();
+
+    const shortcuts = screen.getByRole("heading", {
+      name: "Keyboard shortcuts",
+    }).parentElement;
+    if (shortcuts === null) throw new Error("expected a shortcuts section");
+
+    for (const binding of WORKSPACE_KEYBINDINGS)
+      expect(
+        within(shortcuts).getByText(binding.label),
+        `${binding.label} must be documented`,
+      ).toBeVisible();
+
+    // Every listed chord renders its keys as <kbd>, platform-correctly.
+    const platform = detectPlatform(navigator);
+    const closeBinding = WORKSPACE_KEYBINDINGS.find(
+      (binding) => binding.command.type === "close",
+    );
+    if (closeBinding === undefined) throw new Error("missing close binding");
+    const row = within(shortcuts)
+      .getByText(closeBinding.label)
+      .closest(".shortcut-row");
+    if (row === null) throw new Error("expected a shortcut row");
+    expect(
+      [...row.querySelectorAll("kbd")].map((element) => element.textContent),
+    ).toEqual(shortcutKeys(closeBinding, platform));
+
+    // The inert "bind" chord is not advertised.
+    expect(within(shortcuts).queryByText(/bind/i)).not.toBeInTheDocument();
+    // The composer hints live here too, so this is the one place to look.
+    expect(within(shortcuts).getByText("Send a message")).toBeVisible();
   });
 
   it("has no axe violations", async () => {

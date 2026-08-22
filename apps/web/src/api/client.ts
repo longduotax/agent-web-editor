@@ -1,6 +1,8 @@
 import {
   ApiErrorSchema,
+  ArchivedThreadsResponseSchema,
   ArchiveThreadResponseSchema,
+  UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
@@ -134,6 +136,22 @@ export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
     `/api/projects/${projectId}/threads/${threadId}/archive`,
     ArchiveThreadResponseSchema,
     { method: "POST", body: body({ idempotencyKey: commandId() }) },
+  );
+}
+export async function unarchiveThread(
+  projectId: ProjectId,
+  threadId: ThreadId,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/unarchive`,
+    UnarchiveThreadResponseSchema,
+    { method: "POST", body: body({ idempotencyKey: commandId() }) },
+  );
+}
+export async function getArchivedThreads(projectId: ProjectId) {
+  return await request(
+    `/api/projects/${projectId}/archived-threads`,
+    ArchivedThreadsResponseSchema,
   );
 }
 export async function renameThread(

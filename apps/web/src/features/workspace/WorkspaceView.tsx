@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, type JSX } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ThreadIdSchema,
@@ -6,36 +6,16 @@ import {
   type ThreadId,
 } from "@pi-web/contracts";
 
-import { archiveThread } from "../../api/client.js";
-import {
-  isEnvironmentOpen,
-  readEnvironmentVisibility,
-  writeEnvironmentVisibility,
-} from "../settings/environmentPreferences.js";
-import { EnvironmentPanel } from "./EnvironmentPanel.js";
 import {
   detectPlatform,
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
-import {
-  tiledPaneIds,
-  type PaneId,
-  type WorkspaceLayout,
-} from "./layoutTree.js";
+import { newChatDraftKey, removeDraft } from "./drafts.js";
+import type { PaneId } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
-import { UndoToast } from "./UndoToast.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
-
-// Captured at the moment a threaded pane is closed, so an in-flight undo
-// toast can either flush (archive now) or be cancelled (restore `previous`,
-// never archiving) without a server round trip either way.
-interface PendingClose {
-  paneId: PaneId;
-  threadId: ThreadId;
-  previous: WorkspaceLayout;
-}
 
 // Browser Shift variants of "=" and "-" report as "+" and "_"; the
 // keybindings map the un-shifted key alongside a shiftKey flag, so normalize
@@ -46,10 +26,26 @@ function normalizeKey(key: string): string {
   return key;
 }
 
-export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
-  const { projectId } = props;
+export function WorkspaceView(props: {
+  projectId: ProjectId;
+  // Reports whichever thread the focused pane owns, or null for a threadless
+  // pane / an empty surface. The workspace inspector is docked outside this
+  // component but must follow the focused pane rather than the URL, so the
+  // focus state has to travel upward (see App.tsx's ProjectWorkspace).
+  onFocusedThreadChange?: ((threadId: ThreadId | null) => void) | undefined;
+}): JSX.Element {
+  const { projectId, onFocusedThreadChange } = props;
   const controller = useWorkspaceLayout(projectId);
   const navigate = useNavigate();
+
+  const focusedPaneId = controller.layout.focusedPaneId;
+  const focusedThreadId =
+    focusedPaneId === null
+      ? null
+      : (controller.layout.panes[focusedPaneId]?.threadId ?? null);
+  useEffect(() => {
+    onFocusedThreadChange?.(focusedThreadId);
+  }, [focusedThreadId, onFocusedThreadChange]);
 
   // Always-fresh reference so effects/callbacks with stable identities never
   // dispatch against a stale controller from an earlier render.
@@ -135,74 +131,44 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     };
   }, []);
 
-  // There is no unarchive endpoint, so undo must prevent the archive rather
-  // than reverse it: closing a threaded pane is immediate (the pane leaves
-  // the layout right away), while the actual archiveThread call is deferred
-  // until the undo toast times out. Only one close can be pending at a
-  // time — pendingCloseRef mirrors the pendingClose state so handleClose
-  // (called synchronously from a click) can read/flush the previous pending
-  // close without waiting on a render.
-  const pendingCloseRef = useRef<PendingClose | null>(null);
-  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
-
-  const clearPending = useCallback(() => {
-    pendingCloseRef.current = null;
-    setPendingClose(null);
-  }, []);
-
-  // Archives the given pending close's thread right now (either because its
-  // toast timed out, or because it's being flushed by a newer close) and
-  // clears it from pending state.
-  const archivePending = useCallback(
-    (pending: PendingClose) => {
-      clearPending();
-      void archiveThread(projectId, pending.threadId);
-    },
-    [clearPending, projectId],
-  );
-
+  // Closing a pane is a PURE LAYOUT OPERATION. It used to archive the pane's
+  // thread as a side effect, behind a button labelled only "Close", via a
+  // fire-and-forget archiveThread() with no .catch and no error surface --
+  // so a failed archive still reported success, and a successful one was
+  // unrecoverable (there is no unarchive endpoint and no archived-thread
+  // list). Archiving is now only ever reached through the sidebar's
+  // explicitly labelled Archive action, which defers the call behind an undo
+  // toast and surfaces failures. Do not reintroduce a destructive side
+  // effect here.
+  // Closing also drops the pane's new-chat draft: the key is scoped to a pane
+  // id that will never exist again, so leaving it behind is an unbounded
+  // storage leak. A pane that has adopted a thread has already cleared its
+  // key on submit, so this is a no-op for those.
   const handleClose = useCallback(
-    (paneId: PaneId, threadId: ThreadId | null) => {
-      // Only one close may be pending its toast at a time: a second close
-      // flushes (archives now) whatever was already pending.
-      const existing = pendingCloseRef.current;
-      if (existing !== null) archivePending(existing);
-
-      if (threadId === null) {
-        controllerRef.current.close(paneId);
-        return;
-      }
-
-      const previous = controllerRef.current.layout;
+    (paneId: PaneId) => {
+      removeDraft(newChatDraftKey(projectId, paneId));
       controllerRef.current.close(paneId);
-      const pending: PendingClose = { paneId, threadId, previous };
-      pendingCloseRef.current = pending;
-      setPendingClose(pending);
     },
-    [archivePending],
+    [projectId],
   );
-
-  const handleToastDismiss = useCallback(() => {
-    const pending = pendingCloseRef.current;
-    if (pending === null) return;
-    archivePending(pending);
-  }, [archivePending]);
-
-  const handleToastUndo = useCallback(() => {
-    const pending = pendingCloseRef.current;
-    if (pending === null) return;
-    // Cancel the deferred archive outright (never fires) and restore the
-    // pane exactly as it was, splits and all — a pure client operation.
-    clearPending();
-    controllerRef.current.replaceLayout(pending.previous);
-  }, [clearPending]);
 
   const params = useParams();
+  // Depends on `location.key` as well as the thread id (NEW-R3-3). Clicking a
+  // sidebar row for the thread the URL ALREADY addresses navigates to the
+  // same path, so `params.threadId` does not change and an effect keyed only
+  // on it never re-runs. After the last pane is closed the URL still names
+  // the thread it was showing, so that row -- the selected one, the one a
+  // user is most likely to click -- did nothing at all and the empty surface
+  // was a dead end. Every navigation (push OR replace, same path or not)
+  // mints a fresh key, so this re-runs exactly once per click.
+  // openThread is idempotent: it focuses an existing pane for the thread
+  // rather than opening a second one, so re-running on unrelated navigations
+  // only ever moves focus to the thread the URL names.
   useEffect(() => {
     const parsed = ThreadIdSchema.safeParse(params.threadId);
     if (!parsed.success) return;
     openThread(parsed.data);
-  }, [params.threadId, openThread]);
+  }, [params.threadId, location.key, openThread]);
 
   // The "/new" route is the tiling surface's entry point for starting a
   // fresh chat: on entering it (or switching projects while already on it),
@@ -210,8 +176,22 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
   // [isNewChatRoute, projectId] so this runs once per route entry, not on
   // every layout change (e.g. once the pane adopts a thread and the route
   // navigates away, isNewChatRoute flips to false and this won't refire).
+  // Guards on the *intent* (this route entry has been handled) rather than on
+  // `controllerRef.current.layout`, which is stale on a repeated invocation:
+  // newPane() is a functional setState, so under StrictMode's mount ->
+  // cleanup -> mount the second run still saw the pre-split layout, failed the
+  // threadless-pane check below, and split a SECOND new-chat pane (which then
+  // persisted to device-local layout storage). The ref survives the double
+  // invocation; it is cleared when the route leaves /new, so a later
+  // re-entry (or a project switch while on /new) dispatches again.
+  const handledNewChatEntryRef = useRef<ProjectId | null>(null);
   useEffect(() => {
-    if (!isNewChatRoute) return;
+    if (!isNewChatRoute) {
+      handledNewChatEntryRef.current = null;
+      return;
+    }
+    if (handledNewChatEntryRef.current === projectId) return;
+    handledNewChatEntryRef.current = projectId;
     const layout = controllerRef.current.layout;
     const focusedPaneId = layout.focusedPaneId;
     const focusedPane =
@@ -237,34 +217,6 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
     [isNewChatRoute, navigate, projectId],
   );
 
-  // The Environment panel is single, shared, and focus-following (CWS-06) —
-  // exactly one instance for the whole surface, docked as a right column
-  // (never a floating overlay), never one per pane. Its visibility is a
-  // device-local preference: "auto" opens it while the surface is a single
-  // pane and hides it once split; "shown"/"hidden" are an explicit,
-  // persisted override from the toggle below.
-  const [environmentVisibility, setEnvironmentVisibility] = useState(
-    readEnvironmentVisibility,
-  );
-  const tiledPaneCount = tiledPaneIds(controller.layout).length;
-  const environmentOpen = isEnvironmentOpen(
-    environmentVisibility,
-    tiledPaneCount,
-  );
-  const toggleEnvironment = useCallback(() => {
-    setEnvironmentVisibility((current) => {
-      const next = isEnvironmentOpen(current, tiledPaneCount)
-        ? "hidden"
-        : "shown";
-      writeEnvironmentVisibility(next);
-      return next;
-    });
-  }, [tiledPaneCount]);
-  const hideEnvironment = useCallback(() => {
-    setEnvironmentVisibility("hidden");
-    writeEnvironmentVisibility("hidden");
-  }, []);
-
   return (
     <div className="workspace-view">
       <div className="workspace-main">
@@ -274,46 +226,7 @@ export function WorkspaceView(props: { projectId: ProjectId }): JSX.Element {
           onClosePane={handleClose}
           onThreadStarted={handleThreadStarted}
         />
-        <button
-          type="button"
-          className="icon-btn environment-toggle"
-          aria-label="Toggle environment panel"
-          aria-pressed={environmentOpen}
-          title="Toggle environment panel"
-          onClick={toggleEnvironment}
-        >
-          <svg
-            className="ico"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M15 4v16" />
-          </svg>
-        </button>
       </div>
-      {environmentOpen && (
-        <EnvironmentPanel
-          projectId={projectId}
-          controller={controller}
-          onClose={hideEnvironment}
-        />
-      )}
-      {pendingClose !== null && (
-        // Keyed by paneId so a flush that swaps one pending close for
-        // another (see handleClose) remounts the toast instead of reusing
-        // its fiber — otherwise the timer effect's [timeoutMs] dependency
-        // never changes and the *first* pane's countdown keeps running,
-        // leaving the second pane with whatever time was left rather than
-        // a fresh timeoutMs window.
-        <UndoToast
-          key={pendingClose.paneId}
-          message="Archived"
-          onUndo={handleToastUndo}
-          onDismiss={handleToastDismiss}
-        />
-      )}
     </div>
   );
 }

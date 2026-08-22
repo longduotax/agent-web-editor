@@ -108,7 +108,7 @@ describe("worked-for run grouping", () => {
     expect(screen.getAllByText("runtime.md")).toHaveLength(2);
   });
 
-  it("falls back to a static label when tool timestamps do not establish a duration", () => {
+  it("keeps the duration slot filled when tool timestamps do not establish a duration", () => {
     render(
       <ActivityGroup
         items={[{ ...completedRead, timestamp: null }]}
@@ -116,6 +116,9 @@ describe("worked-for run grouping", () => {
       />,
     );
 
-    expect(screen.getByText("Worked")).toBeInTheDocument();
+    // Never a bare "Worked": beside a sibling "Worked for 27s" that reads as
+    // a different kind of row instead of an unknown duration.
+    expect(screen.getByText("Worked for <1s")).toBeInTheDocument();
+    expect(screen.queryByText("Worked")).toBeNull();
   });
 });

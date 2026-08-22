@@ -11,6 +11,7 @@ import type {
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
+  UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   ProjectIdSchema,
   ProjectSchema,
@@ -938,6 +939,70 @@ export class WorkspaceService {
               // cleanup failure must not turn the accepted command into an error.
             });
           }
+          return receipt.response;
+        }),
+    );
+  }
+
+  // Archived threads are hidden from every other listing, so restoring one
+  // needs its own read path. Ordered like the sidebar's live list.
+  public listArchivedThreads(projectId: ProjectId): ThreadSummary[] {
+    this.requireProject(projectId);
+    return this.store
+      .listThreadResults(projectId, { includeArchived: true })
+      .flatMap((result) =>
+        result.record?.archived_at == null
+          ? []
+          : [this.threadDto(result.record)],
+      );
+  }
+
+  // The inverse of archiveThread, and the reason archive is no longer a
+  // one-way door. Idempotent through the same receipt machinery: replaying
+  // the same command, or restoring a thread that is already live, both
+  // succeed without a second write.
+  public async unarchiveThread(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    idempotencyKey: string,
+  ): Promise<z.infer<typeof UnarchiveThreadResponseSchema>> {
+    const operation = "unarchive-thread";
+    const hash = canonicalRequestHash(operation, { projectId, threadId });
+    return await this.serialized(
+      projectId,
+      idempotencyKey,
+      operation,
+      hash,
+      UnarchiveThreadResponseSchema,
+      () =>
+        Promise.resolve().then(() => {
+          const prior = this.store.readReceipt(
+            projectId,
+            idempotencyKey,
+            operation,
+            hash,
+            UnarchiveThreadResponseSchema,
+          );
+          if (prior !== null) return prior;
+          const thread = this.store.getThread(projectId, threadId, {
+            includeArchived: true,
+          });
+          if (thread === null) throw new Error("thread_not_found");
+          const receipt = this.store.withReceipt(
+            projectId,
+            idempotencyKey,
+            operation,
+            hash,
+            UnarchiveThreadResponseSchema,
+            () => {
+              if (
+                thread.archived_at !== null &&
+                !this.store.unarchiveThread(projectId, threadId)
+              )
+                throw new Error("thread_not_found");
+              return { archived: false as const };
+            },
+          );
           return receipt.response;
         }),
     );
