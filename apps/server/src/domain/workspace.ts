@@ -131,6 +131,52 @@ const browseReceiptSchema = z.discriminatedUnion("outcome", [
 const removedReceiptSchema = z.object({ removed: z.literal(true) });
 const viewedReceiptSchema = z.object({ viewed: z.literal(true) });
 
+/**
+ * How long a Stop is given to bring the agent to rest before the request
+ * gives up on it.
+ *
+ * `OpenRuntimeSession.stop()` bottoms out in `AgentSession.abort()`, which is
+ * `abortRetry(); agent.abort(); await waitForIdle()` -- and `waitForIdle()`
+ * has no timeout of its own. An agent that never reaches idle therefore
+ * wedges the HTTP request forever and leaves the run row `running` until a
+ * restart reconciles it; that was observed twice on this build (iteration 3,
+ * implementer H) before the queue-clearing fix removed the one trigger then
+ * known. The hazard is general, so the deadline is here rather than at the
+ * one trigger.
+ *
+ * Ten seconds because a Stop that works is not close to it -- every live Stop
+ * measured in this loop returned in well under a second, including one taken
+ * mid-`sleep 40` -- while a wedged one must not hold a connection open until
+ * the browser gives up on its own and leaves the reader with nothing at all.
+ */
+const STOP_TIMEOUT_MS = 10_000;
+
+/**
+ * `work`, or `onTimeout()` thrown if it has not settled within `ms`.
+ *
+ * `Promise.race` has already attached handlers to `work`, so a rejection that
+ * arrives after the deadline is handled and does not surface as an unhandled
+ * rejection; the loser is abandoned, not cancelled.
+ */
+async function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  onTimeout: () => Error,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(onTimeout());
+    }, ms);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 const TITLE_LIMIT = 60;
 // A prompt's first clause is rarely this short, and when it is, it is
 // something like "Hi." or "Ok." rather than a title. Below this a sentence
@@ -185,6 +231,13 @@ const TITLE_TRAILING_STOPWORDS = new Set([
  * A `.` inside a filename is not a sentence end: a terminator only counts
  * when whitespace or the end of the prompt follows it, which is what keeps
  * `PROOF.txt` whole.
+ *
+ * Characters with no glyph are removed before any of that. The slug this
+ * replaced deleted them as a side effect of deleting all punctuation; `\s`
+ * does not, so without this step a prompt of nothing but a zero-width space
+ * produced a one-character title that renders as an empty sidebar row, and a
+ * NUL pasted out of a log file was persisted into one -- the same class of
+ * value `12dfd65` had to fix in the file tree's row keys.
  */
 export function fallbackTitle(prompt: string): string {
   const text = collapse(prompt);
@@ -201,25 +254,60 @@ export function fallbackTitle(prompt: string): string {
       ? trimTail(source)
       : truncateOnWord(source, TITLE_LIMIT));
   if (value === "") return "New coding task";
-  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
-}
-
-function collapse(text: string): string {
-  return text.replace(/\s+/gu, " ").trim();
+  return `${capitaliseFirst(value)}${value.slice(1)}`;
 }
 
 /**
- * The first sentence, without its terminator, or null when there is none that
- * makes a usable title.
+ * Characters that occupy no space and draw nothing: C0/C1 controls, the
+ * zero-width formatting marks, surrogates, private use and unassigned code
+ * points. `\s` covers only the space-like ones (plus U+FEFF), so these
+ * survive `collapse` and reach the title.
+ *
+ * ZWJ and ZWNJ are deliberately exempt. They are invisible themselves but
+ * they change which glyphs their neighbours draw -- an emoji sequence, a
+ * Persian word form -- so removing them corrupts text rather than cleaning
+ * it. Everything else in `\p{C}` can only ever subtract from what the reader
+ * can see.
+ */
+const INVISIBLE = /[^\P{C}\u200c\u200d]+/gu;
+
+function collapse(text: string): string {
+  return text.replace(INVISIBLE, "").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The first character upper-cased, unless upper-casing it makes it longer.
+ *
+ * `"ß".toUpperCase()` is `"SS"` and `"ﬁ".toUpperCase()` is `"FI"`, so the
+ * naive form could return 61 characters from a 60-character budget and
+ * `TITLE_LIMIT` was not actually a bound. It also rewrites the word: a title
+ * is a label for what the user typed, not a place to expand their ligatures.
+ */
+function capitaliseFirst(value: string): string {
+  const head = value[0] ?? "";
+  const upper = head.toUpperCase();
+  return upper.length === head.length ? upper : head;
+}
+
+/**
+ * The first sentence, or null when there is none that makes a usable title.
  *
  * A terminator only counts when whitespace or the end of the string follows
  * it, which is what keeps `PROOF.txt` whole -- the `.` there is followed by a
  * letter, so it is part of an identifier and not the end of anything.
+ *
+ * The terminator itself is dropped, EXCEPT a question mark. A full stop adds
+ * nothing to a label, but `Why does the build fail` and
+ * `Why does the build fail?` are not the same sidebar entry: the first reads
+ * as a statement of fact about the build, the second as the thing the user
+ * asked. One `?` is restored however many the prompt piled up, so `What?!!`
+ * titles as `What?` rather than shouting in the sidebar.
  */
 function firstSentence(text: string): string | null {
   const match = /[.!?]+(?=\s|$)/u.exec(text);
   if (match === null) return null;
-  const sentence = text.slice(0, match.index).trim();
+  const terminator = match[0].includes("?") ? "?" : "";
+  const sentence = `${text.slice(0, match.index).trim()}${terminator}`;
   return sentence.length < TITLE_SENTENCE_FLOOR || sentence.length > TITLE_LIMIT
     ? null
     : sentence;
@@ -1507,7 +1595,19 @@ export class WorkspaceService {
         const thread = this.requireThread(projectId, threadId);
         const run = this.store.runningRunForThread(threadId);
         if (run?.project_id !== projectId) throw new Error("run_not_active");
-        await (await this.openRuntime(thread)).stop();
+        // A Stop that could not be confirmed is not a Stop that worked, and
+        // the run row is what tells the reader which. Settling it
+        // `interrupted` here would say "stopped by the user" about an agent
+        // that is, as far as anything here knows, still running -- so the run
+        // is left exactly as it is and the caller gets an error naming that.
+        // Nothing is lost by waiting for the truth: `agent.abort()` has
+        // already been delivered, and the prompt's own settlement handler
+        // settles the row the moment the agent does come to rest.
+        await withDeadline(
+          (await this.openRuntime(thread)).stop(),
+          STOP_TIMEOUT_MS,
+          () => new Error("stop_timed_out"),
+        );
         const settlesCapturedRun =
           this.store.runningRunForThread(threadId)?.id === run.id;
         const settled = this.store.withReceipt(

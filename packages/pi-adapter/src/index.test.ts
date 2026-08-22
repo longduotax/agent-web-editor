@@ -1288,4 +1288,69 @@ describe("stopping a run", () => {
     await expect(opened.stop()).resolves.toBeUndefined();
     expect(aborted).toBe(true);
   });
+
+  // The same stranded steer, on the ending nothing calls `stop()` for. A run
+  // that ends in FAILURE never reaches the end-of-turn drain either
+  // (`runLoop` returns on `stopReason === "error"`), so the queue survived it
+  // and the pane's "never delivered" was false all over again. The settlement
+  // outcome already distinguishes the three endings, so the rule is stated
+  // where they are all visible: only a COMPLETED run keeps its queue.
+  describe("a run that ends without being stopped", () => {
+    // A thunk, not a promise: a rejected promise created at the call site is
+    // unhandled for the microtasks it takes to reach the adapter.
+    async function settledSession(operation: () => Promise<void>) {
+      const cleared: string[] = [];
+      const opened = await stoppableSession({
+        clearQueue: () => {
+          cleared.push("clearQueue");
+          return { steering: [], followUp: [] };
+        },
+        abort: () => {
+          cleared.push("abort");
+          return Promise.resolve();
+        },
+        prompt: (
+          _text: string,
+          options: { preflightResult: (value: boolean) => void },
+        ) => {
+          Reflect.apply(options.preflightResult, undefined, [true]);
+          return operation();
+        },
+      });
+      const acceptance = await opened.prompt("Work");
+      acceptance.discardEvents();
+      return { cleared, outcome: await acceptance.settlement };
+    }
+
+    it("clears the steering queue when the run fails", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.reject(new Error("provider exploded")),
+      );
+
+      expect(outcome).toBe("failed");
+      // Nothing called stop(): this is the ending that had no owner.
+      expect(cleared).toEqual(["clearQueue"]);
+    });
+
+    it("clears it when the run ends interrupted", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.reject(new Error("The operation was aborted")),
+      );
+
+      expect(outcome).toBe("interrupted");
+      expect(cleared).toEqual(["clearQueue"]);
+    });
+
+    // Not merely redundant -- wrong. A completed run drained its own queue,
+    // so anything left in it arrived after that drain and is legitimately
+    // waiting for the next prompt.
+    it("leaves the queue alone when the run completes", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.resolve(),
+      );
+
+      expect(outcome).toBe("completed");
+      expect(cleared).toEqual([]);
+    });
+  });
 });

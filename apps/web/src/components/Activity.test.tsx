@@ -257,15 +257,27 @@ describe("worked-for run grouping", () => {
     expect(screen.getByText("1 failed")).toBeInTheDocument();
   });
 
-  it("opens a settled group that contains a failure", () => {
+  // Nit 4. A failed group used to open itself in the `useState` INITIALISER,
+  // so every historical failure re-opened on every mount -- on reload, and on
+  // any pane remount, which `key={threadId}` makes routine. A reader's
+  // collapse survived only until the next rebind, and scrolling back through
+  // a long thread meant folding the same groups away again.
+  //
+  // A group that was never live in this mount is one whose run ended before
+  // the reader arrived, and nothing is hidden by leaving it closed: the red
+  // failure count is IN the collapsed summary, and that count is what closed
+  // G6.
+  it("leaves a group that already failed before this mount collapsed", () => {
     render(<ActivityGroup items={[failedRead]} projectPath="/workspace" />);
 
-    expect(screen.getByText("1 step · 1s").closest("details")).toHaveAttribute(
-      "open",
-    );
     expect(
-      screen.getByText("cat /nonexistent/path/xyz.txt"),
-    ).toBeInTheDocument();
+      screen.getByText("1 step · 1s").closest("details"),
+    ).not.toHaveAttribute("open");
+    // Still says so where a skim reads it.
+    expect(screen.getByText("1 failed")).toBeInTheDocument();
+    expect(
+      screen.queryByText("cat /nonexistent/path/xyz.txt"),
+    ).not.toBeInTheDocument();
   });
 
   // The auto-expansion rides ON the live rule rather than against it: a group

@@ -23,6 +23,7 @@ import { newChatDraftKey, readDraft } from "./drafts.js";
 import {
   NewChatPane,
   partitionBranches,
+  branchLabels,
   shortBranchLabel,
 } from "./NewChatPane.js";
 
@@ -481,5 +482,61 @@ describe("NewChatPane's base branch list", () => {
       project: ["master", "dev"],
       generated: ["pi/a-1"],
     });
+  });
+
+  // SF6. Keeping both ends saves the `pi/*` hash, but it does not make every
+  // pair distinguishable: two branches that agree on their first 14 and last
+  // 9 characters shorten onto one label, and the same function is applied to
+  // the user's own branches. This control creates a worktree from the branch
+  // it names, so two options that read alike are a wrong choice waiting to
+  // happen.
+  it("never gives two branches the same label", () => {
+    const colliding = [
+      "release/2024-01-01/hotfix-alpha",
+      "release/2024-02-01/hotfix-alpha",
+    ];
+    expect(shortBranchLabel(colliding[0] ?? "")).toBe(
+      shortBranchLabel(colliding[1] ?? ""),
+    );
+
+    const labels = branchLabels(colliding);
+    // Shown in full: it is the POPUP that has to tell them apart, and a
+    // native select popup sizes itself to its content.
+    expect(labels.get(colliding[0] ?? "")).toBe(colliding[0]);
+    expect(labels.get(colliding[1] ?? "")).toBe(colliding[1]);
+    expect(new Set(labels.values()).size).toBe(2);
+  });
+
+  it("still shortens the branches that a label does identify", () => {
+    const labels = branchLabels([
+      "master",
+      "release/2024-01-01/hotfix-alpha",
+      "release/2024-02-01/hotfix-alpha",
+      "pi/explore-this-repository-before-changing-anything-1909c1f5",
+    ]);
+    expect(labels.get("master")).toBe("master");
+    expect(
+      labels.get(
+        "pi/explore-this-repository-before-changing-anything-1909c1f5",
+      ),
+    ).toBe("pi/explore-thi…-1909c1f5");
+  });
+
+  it("shows colliding branches in full in the control itself", async () => {
+    const colliding = [
+      "release/2024-01-01/hotfix-alpha",
+      "release/2024-02-01/hotfix-alpha",
+    ];
+    renderNewChat({ branches: ["master", ...colliding] });
+    await screen.findByRole("textbox", { name: "First message" });
+    await screen.findByRole("option", { name: colliding[0] ?? "" });
+
+    const labels = [
+      ...screen
+        .getByRole("combobox", { name: "Base branch" })
+        .querySelectorAll("option"),
+    ].map((option) => option.textContent);
+    expect(labels).toEqual(["master", ...colliding]);
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });

@@ -390,13 +390,22 @@ export function ActivityGroup({
   live?: boolean;
 }) {
   const failed = failedStepCount(items);
-  // A settled group that contains a failure opens itself, and stays open when
-  // the run that produced it settles. This rides ON the live rule rather than
-  // against it: `live` still decides at every flip, and `failed` only ever
-  // widens the answer from "closed" to "open", so a group that opened because
-  // it was live does not slam shut on the one occasion its contents matter
-  // most. A hand-collapse still survives until the next flip.
-  const [expanded, setExpanded] = useState(live || failed > 0);
+  // A group that FAILS WHILE YOU WATCH stays open: `live` still decides at
+  // every flip, and `failed` only ever widens the answer from "closed" to
+  // "open", so a group that opened because it was live does not slam shut on
+  // the one occasion its contents matter most.
+  //
+  // The initial value is `live` alone, deliberately. `failed > 0` here too
+  // meant every historical failed group re-opened on every MOUNT -- on
+  // reload, and on any pane remount, which `key={threadId}` makes a routine
+  // event -- so a reader's collapse survived only until the next rebind and
+  // scrolling back through a long thread meant re-folding the same groups.
+  // The mount case is exactly the one the effect cannot be about: a group
+  // that was never live in this mount is one whose run ended before the
+  // reader arrived. Nothing is hidden by leaving it closed, because the
+  // failure count is IN the collapsed summary -- that red `N failed` is what
+  // closed G6, not the disclosure state, and it is what a skim reads.
+  const [expanded, setExpanded] = useState(live);
   const wasLive = useRef(live);
   useEffect(() => {
     if (wasLive.current === live) return;

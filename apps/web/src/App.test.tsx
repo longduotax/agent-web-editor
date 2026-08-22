@@ -2547,3 +2547,141 @@ describe("shell layout and light-mode palette", () => {
     expect(Number.parseFloat(menu.style.top)).toBe(bounds.top);
   });
 });
+
+// SF5. One `rename` mutation is shared by every row in every project and
+// nothing ever called `reset()`. Two consequences: the notice was the only
+// error in the app with no way out -- in the commit whose organising idea
+// (G10) is that a red block needs an exit -- and the error outlived the form
+// that produced it, so a failed rename of one thread rendered under the next
+// thread's field.
+describe("a rename that fails", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const first = "20000000-0000-4000-8000-000000000001" as ThreadId;
+  const second = "20000000-0000-4000-8000-000000000002" as ThreadId;
+
+  function renderTwoThreads() {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [
+        {
+          id: first,
+          projectId,
+          title: "First thread",
+          runState: null,
+          unread: false,
+        },
+        {
+          id: second,
+          projectId,
+          title: "Second thread",
+          runState: null,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  // Scoped to the form: the sidebar can carry other alerts (a project
+  // diagnostic, a failed snapshot), and the finding is about THIS one.
+  function renameForm(): HTMLElement {
+    const form = document.querySelector(".thread-rename");
+    if (!(form instanceof HTMLElement)) throw new Error("no rename form open");
+    return form;
+  }
+
+  async function openRenameOf(
+    user: ReturnType<typeof userEvent.setup>,
+    title: string,
+  ) {
+    fireEvent.contextMenu(screen.getByRole("link", { name: title }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+  }
+
+  async function failRenameOf(
+    user: ReturnType<typeof userEvent.setup>,
+    title: string,
+  ) {
+    await openRenameOf(user, title);
+    await user.click(
+      within(renameForm()).getByRole("button", { name: "Save" }),
+    );
+    return await within(renameForm()).findByRole("alert");
+  }
+
+  it("can be dismissed, and comes back for the next failure", async () => {
+    api.renameThread.mockRejectedValue(new Error("Renaming is not allowed."));
+    const user = userEvent.setup();
+    renderTwoThreads();
+    await screen.findByRole("link", { name: "First thread" });
+
+    const alert = await failRenameOf(user, "First thread");
+    expect(alert).toHaveTextContent(
+      "Could not rename this thread: Renaming is not allowed.",
+    );
+
+    await user.click(
+      within(renameForm()).getByRole("button", {
+        name: "Dismiss this message",
+      }),
+    );
+    expect(within(renameForm()).queryByRole("alert")).not.toBeInTheDocument();
+
+    // Dismissal is `reset()` at the call site rather than a sticky flag in
+    // the component, so a second failure re-renders the notice by
+    // construction.
+    api.renameThread.mockRejectedValue(new Error("The thread is gone."));
+    await user.click(
+      within(renameForm()).getByRole("button", { name: "Save" }),
+    );
+    expect(await within(renameForm()).findByRole("alert")).toHaveTextContent(
+      "Could not rename this thread: The thread is gone.",
+    );
+  });
+
+  it("does not follow the reader onto another thread", async () => {
+    api.renameThread.mockRejectedValue(new Error("Renaming is not allowed."));
+    const user = userEvent.setup();
+    renderTwoThreads();
+    await screen.findByRole("link", { name: "First thread" });
+
+    await failRenameOf(user, "First thread");
+    await user.click(
+      within(renameForm()).getByRole("button", { name: "Cancel" }),
+    );
+    expect(document.querySelector(".thread-rename")).toBeNull();
+
+    await openRenameOf(user, "Second thread");
+
+    expect(
+      within(renameForm()).getByRole("textbox", {
+        name: "Rename Second thread",
+      }),
+    ).toBeInTheDocument();
+    // The first thread's failure has nothing to say about this one.
+    expect(within(renameForm()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

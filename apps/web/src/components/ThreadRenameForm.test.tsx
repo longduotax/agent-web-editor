@@ -14,18 +14,22 @@ afterEach(() => {
 // The measured case: 52 characters edited through a 95px window.
 const LONG_TITLE = "Explore this repository before changing anything run";
 
-function renderForm(value = LONG_TITLE) {
+function renderForm(
+  value = LONG_TITLE,
+  overrides: { pending?: boolean; error?: unknown } = {},
+) {
   const handlers = {
     onChange: vi.fn(),
     onSubmit: vi.fn(),
     onCancel: vi.fn(),
+    onDismissError: vi.fn(),
   };
   render(
     <ThreadRenameForm
       value={value}
       label="Rename Example thread"
-      pending={false}
-      error={null}
+      pending={overrides.pending ?? false}
+      error={overrides.error ?? null}
       {...handlers}
     />,
   );
@@ -105,5 +109,53 @@ describe("ThreadRenameForm", () => {
     expect(handlers.onChange).toHaveBeenLastCalledWith(
       "first line second line",
     );
+  });
+});
+
+// SF5. Save and Cancel were both `disabled={pending}`; Enter went straight
+// past that to `onSubmit`, so a second Enter on a slow rename fired a second
+// rename of the same thread.
+describe("ThreadRenameForm while a rename is in flight", () => {
+  it("does not submit again on Enter", async () => {
+    const user = userEvent.setup();
+    const handlers = renderForm(LONG_TITLE, { pending: true });
+
+    await user.click(
+      screen.getByRole("textbox", { name: "Rename Example thread" }),
+    );
+    await user.keyboard("{Enter}{Enter}");
+
+    expect(handlers.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("still submits on Enter once the rename has settled", async () => {
+    const user = userEvent.setup();
+    const handlers = renderForm();
+
+    await user.click(
+      screen.getByRole("textbox", { name: "Rename Example thread" }),
+    );
+    await user.keyboard("{Enter}");
+
+    expect(handlers.onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  // G10's rule, applied to the one error that did not have it: a red block
+  // needs an exit.
+  it("gives the rename error a way out", async () => {
+    const user = userEvent.setup();
+    const handlers = renderForm(LONG_TITLE, {
+      error: new Error("Renaming is not allowed."),
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Could not rename this thread: Renaming is not allowed.",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Dismiss this message" }),
+    );
+
+    expect(handlers.onDismissError).toHaveBeenCalledTimes(1);
   });
 });

@@ -505,6 +505,21 @@ export function Composer({
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
+  // Stop used to be `void stop(...).then(...)` with no rejection handler: a
+  // Stop the server refused produced an unhandled promise rejection in the
+  // console and NOTHING on screen, so the run went on running under a button
+  // the reader had already pressed. It has an error to show now -- the server
+  // reports `stop_timed_out` when the agent does not come to rest inside its
+  // deadline, and that run really is still active -- so the failure has to be
+  // visible, and Retry has to be the obvious thing to do with it.
+  const stopping = useMutation({
+    mutationFn: async () => await stop(projectId, threadId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["snapshot", projectId, threadId],
+      });
+    },
+  });
   const mutation = useMutation({
     mutationFn: async () => {
       // Trimmed, because that is what the server stores: `SteerRequestSchema`
@@ -611,13 +626,10 @@ export function Composer({
             <button
               type="button"
               className="stop"
-              onClick={() =>
-                void stop(projectId, threadId).then(() =>
-                  queryClient.invalidateQueries({
-                    queryKey: ["snapshot", projectId, threadId],
-                  }),
-                )
-              }
+              disabled={stopping.isPending}
+              onClick={() => {
+                stopping.mutate();
+              }}
             >
               ■ Stop
             </button>
@@ -633,6 +645,15 @@ export function Composer({
           </button>
         </div>
       </div>
+      {stopping.error !== null && (
+        <ErrorNotice
+          error={stopping.error}
+          context="Could not stop this run"
+          onRetry={() => {
+            stopping.mutate();
+          }}
+        />
+      )}
       {mutation.error !== null &&
         (missingThread ? (
           <div className="error-notice" role="alert">

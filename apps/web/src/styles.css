@@ -34,7 +34,16 @@
      a run in progress (a 6px pulsing dot, a spinner rim, a "Working" label);
      darkening that to satisfy a text rule would dull the one moving signal in
      the app to fix a sentence somewhere else. The two just happened to be the
-     same hex, which is how a status colour ended up carrying a warning. */
+     same hex, which is how a status colour ended up carrying a warning.
+
+     That separation is what this token IS, in both themes -- but the two
+     values only DIVERGE in light. In dark they are both #d6a53a, which is a
+     measurement and not a shared definition: they are two independent
+     declarations that happen to agree, the way they once did in light, and
+     changing either moves only itself. Dark amber needs no darkening, so
+     there is nothing to buy by making them differ: 7.47:1 on --card, 6.52:1
+     on the 8% tint the warning callout paints behind itself, 7.13:1 on
+     --hover, 6.69:1 on --active. */
   --amber: #8a5a0f;
   --accent: #2f6feb;
   --send-bg: #1d1d1f;
@@ -178,6 +187,9 @@
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
+    /* Same value as --run below, and independent of it: see the note on the
+       light --amber. Dark needs no darkened warning ink (6.52:1 on the tint
+       the callout paints), so the split that light needed buys nothing here. */
     --amber: #d6a53a;
     --accent: #6aa0ff;
     --send-bg: #ececee;
@@ -224,6 +236,7 @@
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
+  /* Same value as --run below, and independent of it: see the light --amber. */
   --amber: #d6a53a;
   --accent: #6aa0ff;
   --send-bg: #ececee;
@@ -1527,8 +1540,14 @@ a:focus-visible {
 /* The failure count, carried in the COLLAPSED summary. `.worked` is --muted
    and stays that way; this one span takes the failure colour, so a run that
    got nothing done can no longer be mistaken at a glance for one that did.
-   The separator is a pseudo-element rather than text so a screen reader hears
-   "2 steps, 41s, 2 failed" and not a middle dot. */
+
+   The separator is a pseudo-element so it can be --muted while the count
+   beside it is --fail-ink, which is a painting reason and the only one. It
+   used to claim an accessibility reason as well -- that a screen reader would
+   hear "2 steps, 41s, 2 failed" without the dot. That was wrong twice over:
+   Chrome puts generated content in the accessibility tree, and `runLabel`
+   already emits a literal `·` into "2 steps · 41s" two spans earlier, so
+   there was never a dot-free reading to protect. */
 .worked-failed {
   display: inline-flex;
   align-items: center;

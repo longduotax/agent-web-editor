@@ -64,7 +64,15 @@ function starterPrompts(
  * hash is the only part that tells two of them apart, so it is the part that
  * must survive: the middle goes, not the tail.
  *
- * Exported for the test that pins that property.
+ * Keeping both ends is what makes `pi/*` names distinguishable, but it does
+ * not make ALL names distinguishable: any two branches that agree on their
+ * first 14 and last 9 characters collapse onto one label, and
+ * `release/2024-01-01/hotfix-alpha` and `release/2024-02-01/hotfix-alpha`
+ * both do. Use `branchLabels` rather than this function directly -- it knows
+ * the whole list and can tell when a label has stopped identifying one
+ * branch.
+ *
+ * Exported for the test that pins the `pi/*` property.
  */
 export function shortBranchLabel(branch: string, max = 24): string {
   if (branch.length <= max) return branch;
@@ -72,6 +80,44 @@ export function shortBranchLabel(branch: string, max = 24): string {
   // appends, so a `pi/*` name keeps the field that disambiguates it.
   const tail = branch.slice(-9);
   return `${branch.slice(0, Math.max(1, max - tail.length - 1))}…${tail}`;
+}
+
+/**
+ * A label for every branch in a list, with distinctness guaranteed.
+ *
+ * Two branches that shorten to the same label are shown in FULL instead: a
+ * long option is a nuisance, two options that read identically are a wrong
+ * choice waiting to happen, and this control creates a worktree from the
+ * branch it names.
+ *
+ * The full name is a real fix rather than a fallback because it is the popup
+ * that has to distinguish them, and a native `<select>` popup sizes itself to
+ * its content -- the 200px that motivated shortening constrains the CLOSED
+ * control, where only the selected option is drawn. `title={branch}` was the
+ * stated mitigation and is not one on this loop's target platform: Chrome on
+ * macOS draws `<select>` popups with the native menu, which does not surface
+ * option titles at all. The attribute stays because it costs nothing and does
+ * work elsewhere, but nothing depends on it now.
+ *
+ * Collisions are resolved across the WHOLE list, not per optgroup: "Previous
+ * Pi runs" is a heading inside one select, not a separate control.
+ */
+export function branchLabels(
+  branches: readonly string[],
+  max = 24,
+): Map<string, string> {
+  const claimants = new Map<string, Set<string>>();
+  for (const branch of branches) {
+    const label = shortBranchLabel(branch, max);
+    const claimed = claimants.get(label);
+    if (claimed === undefined) claimants.set(label, new Set([branch]));
+    else claimed.add(branch);
+  }
+  const labels = new Map<string, string>();
+  for (const [label, claimed] of claimants)
+    for (const branch of claimed)
+      labels.set(branch, claimed.size === 1 ? label : branch);
+  return labels;
 }
 
 /**
@@ -91,14 +137,19 @@ export function partitionBranches(branches: readonly string[]): {
   return { project, generated };
 }
 
-function BranchOptions({ branches }: { branches: readonly string[] }) {
+function BranchOptions({
+  branches,
+  labels,
+}: {
+  branches: readonly string[];
+  labels: ReadonlyMap<string, string>;
+}) {
   return (
     <>
       {branches.map((branch) => (
-        // `value` is always the real branch; only the label is shortened,
-        // and `title` keeps the full name one hover away.
+        // `value` is always the real branch; only the label is shortened.
         <option key={branch} value={branch} title={branch}>
-          {shortBranchLabel(branch)}
+          {labels.get(branch) ?? branch}
         </option>
       ))}
     </>
@@ -192,7 +243,9 @@ export function NewChatPane(props: NewChatPaneProps) {
     (candidate) => candidate.id === projectId,
   );
   const currentBranch = preflight.data?.currentBranch ?? null;
-  const branchGroups = partitionBranches(preflight.data?.branches ?? []);
+  const allBranches = preflight.data?.branches ?? [];
+  const branchGroups = partitionBranches(allBranches);
+  const branchLabelsByBranch = branchLabels(allBranches);
   const send = (value: string) => {
     // `requestSubmit()` with no argument ignores the disabled submit button,
     // so Enter still reaches this while a thread is being created. That used
@@ -479,13 +532,19 @@ export function NewChatPane(props: NewChatPaneProps) {
                   </option>
                 ) : (
                   <>
-                    <BranchOptions branches={branchGroups.project} />
+                    <BranchOptions
+                      branches={branchGroups.project}
+                      labels={branchLabelsByBranch}
+                    />
                     {branchGroups.generated.length > 0 && (
                       // Grouped, not hidden: these are real branches a user
                       // may legitimately want to branch from again. They just
                       // must not bury the handful of branches a person named.
                       <optgroup label="Previous Pi runs">
-                        <BranchOptions branches={branchGroups.generated} />
+                        <BranchOptions
+                          branches={branchGroups.generated}
+                          labels={branchLabelsByBranch}
+                        />
                       </optgroup>
                     )}
                   </>

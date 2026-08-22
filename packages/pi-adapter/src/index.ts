@@ -852,6 +852,30 @@ class PiOpenSession implements OpenRuntimeSession {
         if (error instanceof Error && /abort/i.test(error.message))
           return "interrupted" as const;
         return "failed" as const;
+      })
+      .then((outcome) => {
+        // The invariant `stop()` establishes, stated once for every way a run
+        // can end: a run that did not COMPLETE leaves no steering queue
+        // behind. Only a completed run drained its own queue -- `runLoop`
+        // polls `getSteeringMessages` at the head of each pass -- so on any
+        // other ending whatever is still in there is a message the user was
+        // told was never delivered, waiting to be injected ahead of whatever
+        // they type next.
+        //
+        // `stop()` covered the one ending it is called on. A run that ends in
+        // FAILURE calls nothing, and `runLoop` returns on
+        // `stopReason === "error"` without reaching the end-of-turn drain, so
+        // the same stranded steer survived there. This is the place that
+        // knows: the settlement outcome is already `completed | failed |
+        // interrupted` in the runtime contract, so nothing had to widen to
+        // tell them apart -- it is the `agent_settled` EVENT that cannot,
+        // and that event is not what settles a run.
+        //
+        // Clearing after a completed run would be wrong, not merely
+        // redundant: a steer that arrives between the last drain and the
+        // final event is legitimately queued for the next prompt.
+        if (outcome !== "completed") this.clearSteeringQueue();
+        return outcome;
       });
     const accepted = await Promise.race([
       preflight,
@@ -930,16 +954,27 @@ class PiOpenSession implements OpenRuntimeSession {
    * the next pass. Clearing first empties that drain, so both branches now
    * agree with what the pane tells the reader.
    *
-   * The `clearQueue` guard is deliberate: it is present on the installed
+   * Stop is not the only ending that strands a steer -- see the settlement
+   * handler in `prompt`, which applies the same rule to a run that ends in
+   * failure, an ending nothing calls `stop()` for.
+   */
+  public async stop(): Promise<void> {
+    this.clearSteeringQueue();
+    await this.session.abort();
+  }
+
+  /**
+   * Empty Pi's steering queue, if this Pi has the method for it.
+   *
+   * The guard is deliberate: `clearQueue` is present on the installed
    * `@earendil-works/pi-coding-agent@0.84.2` and is what the TUI calls, but a
    * Pi that does not have it must still be able to stop a run.
    */
-  public async stop(): Promise<void> {
+  private clearSteeringQueue(): void {
     const clearQueue: unknown = (this.session as Partial<AgentSession>)
       .clearQueue;
     if (typeof clearQueue === "function")
       Reflect.apply(clearQueue, this.session, []);
-    await this.session.abort();
   }
   public subscribe(listener: (event: RuntimeEvent) => void): () => void {
     this.listeners.add(listener);

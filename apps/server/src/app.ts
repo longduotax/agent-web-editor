@@ -196,6 +196,17 @@ function safeError(error: unknown): {
         code: "run_not_active",
         message: "There is no matching active run.",
       },
+      // 504 rather than 500: the stop was dispatched and it is the agent
+      // downstream that did not answer. The message says what is true of the
+      // run afterwards, because the run row still says `running` and the
+      // reader is looking at it -- "stopped" would be a claim nothing here
+      // can support.
+      stop_timed_out: {
+        status: 504,
+        code: "stop_timed_out",
+        message:
+          "Stop was sent, but the agent did not come to rest. The run is still active — try again.",
+      },
       prompt_rejected: {
         status: 409,
         code: "prompt_rejected",

@@ -11,6 +11,8 @@ export interface ThreadRenameFormProps {
   onChange(value: string): void;
   onSubmit(): void;
   onCancel(): void;
+  /** Clears `error`. Without one the notice below the field has no exit. */
+  onDismissError(): void;
 }
 
 /**
@@ -37,17 +39,28 @@ export interface ThreadRenameFormProps {
 export function ThreadRenameForm(props: ThreadRenameFormProps) {
   const { value, label, pending, error } = props;
   const ref = useAutoGrow<HTMLTextAreaElement>(value);
+  // Save and Cancel are both `disabled={pending}`; Enter went straight to
+  // `onSubmit` and was not, so holding Enter -- or pressing it again because
+  // a slow rename looked like it had not registered -- fired a second rename
+  // of the same thread. The guard lives here so every route into the
+  // mutation passes it, rather than on the one control that had it.
+  const submit = () => {
+    if (!pending) props.onSubmit();
+  };
   return (
     <form
       className="thread-rename"
       onSubmit={(event) => {
         event.preventDefault();
-        props.onSubmit();
+        submit();
       }}
     >
       <textarea
         ref={ref}
         aria-label={label}
+        // The field holds the same text the sidebar row does, so it takes its
+        // base direction the same way: from the title, not from the app.
+        dir="auto"
         autoFocus
         rows={1}
         maxLength={200}
@@ -66,7 +79,7 @@ export function ThreadRenameForm(props: ThreadRenameFormProps) {
           // Including Shift+Enter: a thread title has no second line, so
           // there is nothing for a newline to do but break the layout.
           event.preventDefault();
-          props.onSubmit();
+          submit();
         }}
         onChange={(event) => {
           props.onChange(event.target.value.replace(/\s*[\r\n]+\s*/gu, " "));
@@ -89,7 +102,15 @@ export function ThreadRenameForm(props: ThreadRenameFormProps) {
           Cancel
         </button>
       </div>
-      {error !== null && error !== undefined && <ErrorNotice error={error} />}
+      {error !== null && error !== undefined && (
+        <ErrorNotice
+          error={error}
+          context="Could not rename this thread"
+          onDismiss={() => {
+            props.onDismissError();
+          }}
+        />
+      )}
     </form>
   );
 }

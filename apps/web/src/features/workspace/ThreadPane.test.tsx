@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1740,5 +1741,59 @@ describe("live streaming", () => {
     expect(
       container.querySelector(".pane-head-detail")?.getAttribute("title"),
     ).toContain(full);
+  });
+});
+
+// Implementer H's third handoff, at the other end of the wire. The server now
+// gives up on a Stop the agent never answers and reports `stop_timed_out`
+// rather than settling the run as "Stopped by the user." -- so the reader is
+// no longer told a lie, but only if the pane says anything at all. Stop was
+// `void stop(...).then(...)`, with no rejection handler: the failure became
+// an unhandled promise rejection in the console, and the reader watched a run
+// keep running under a button they had already pressed.
+describe("a Stop the server refuses", () => {
+  const running: ThreadSnapshot = {
+    ...snapshot,
+    thread: { ...snapshot.thread, runState: "running" },
+    currentRun: {
+      id: "50000000-0000-4000-8000-000000000021" as RunId,
+      threadId,
+      projectId,
+      state: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      endedAt: null,
+      failureCode: null,
+      failureMessage: null,
+    },
+  };
+
+  it("says so, and offers the retry that is the only thing to do about it", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.stop.mockRejectedValue(
+      new Error(
+        "Stop was sent, but the agent did not come to rest. The run is still active — try again.",
+      ),
+    );
+    const user = userEvent.setup();
+    renderPane();
+
+    await user.click(await screen.findByRole("button", { name: "■ Stop" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Could not stop this run: Stop was sent, but the agent did not come to rest.",
+    );
+    // The run is still going, so the pane still offers the control.
+    expect(screen.getByRole("button", { name: "■ Stop" })).toBeInTheDocument();
+
+    api.stop.mockResolvedValue(undefined);
+    await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(api.stop).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
   });
 });

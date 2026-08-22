@@ -316,6 +316,26 @@ function Sidebar({
       ]);
     },
   });
+  // One `rename` mutation is shared by every row in every project, so its
+  // error outlives the form that produced it: a failed rename of thread A,
+  // Cancel, then Rename on thread B rendered A's red block under B's field.
+  // Nothing ever called `reset()`, so the notice was also the one error in
+  // the app with no way out -- in the commit whose organising idea (G10) is
+  // that a red block needs an exit. Every route into and out of a rename form
+  // goes through these two, so the error can only ever belong to the form on
+  // screen.
+  const beginRename = (target: {
+    projectId: ProjectId;
+    threadId: ThreadId;
+    title: string;
+  }) => {
+    rename.reset();
+    setRenamingThread(target);
+  };
+  const endRename = () => {
+    rename.reset();
+    setRenamingThread(null);
+  };
 
   // The menu opens off the right edge of the row that asked for it, level with
   // that row's top, so it never covers the thread below. That anchor can fall
@@ -709,8 +729,9 @@ function Sidebar({
                                     title,
                                   });
                               }}
-                              onCancel={() => {
-                                setRenamingThread(null);
+                              onCancel={endRename}
+                              onDismissError={() => {
+                                rename.reset();
                               }}
                             />
                           ) : (
@@ -722,7 +743,22 @@ function Sidebar({
                                   setThreadMenu(null);
                                 }}
                               >
-                                <span className="thread-title">
+                                {/* A title is the only text on this row the
+                                    app did not write, and it may be RTL. In
+                                    an LTR paragraph the server's trailing
+                                    `…` is a neutral run at the end of the
+                                    line, so the bidi algorithm hands it the
+                                    paragraph direction and draws it to the
+                                    RIGHT of a Hebrew or Arabic title --
+                                    detached from the end of the text it
+                                    truncates, where it reads as if it came
+                                    first. `dir="auto"` gives the title its
+                                    own base direction, taken from its first
+                                    strong character, so the ellipsis stays
+                                    at the logical end. It also stops an RTL
+                                    title reordering the status glyph beside
+                                    it. A no-op for every LTR title. */}
+                                <span className="thread-title" dir="auto">
                                   {thread.title}
                                 </span>
                                 {(() => {
@@ -863,7 +899,7 @@ function Sidebar({
             type="button"
             role="menuitem"
             onClick={() => {
-              setRenamingThread({
+              beginRename({
                 projectId: threadMenu.projectId,
                 threadId: threadMenu.threadId,
                 title: threadMenu.title,

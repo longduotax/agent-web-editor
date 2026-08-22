@@ -47,7 +47,13 @@ export function PaneHeader(props: PaneHeaderProps): JSX.Element {
             )}
           </span>
         )}
-        <h1 className="title">{title}</h1>
+        {/* Same reasoning as the sidebar's `.thread-title`: the title is
+            user-or-model text that may be RTL, and it sits in a row of
+            app-written LTR labels. `dir="auto"` keeps its base direction to
+            itself. */}
+        <h1 className="title" dir="auto">
+          {title}
+        </h1>
         <span className="repo">{projectLabel}</span>
         <span className="acts">
           <button
