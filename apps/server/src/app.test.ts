@@ -190,6 +190,109 @@ describe("credential-free project API", () => {
     await server.close();
   });
 
+  // WSP-05 as revised by specification version 2: the listing route gained a
+  // depth bound and an ignore opt-in. Both are client-supplied strings, so
+  // both are parsed rather than interpreted.
+  it("bounds the file listing by depth and honours ignore rules", async () => {
+    const paths = await directories();
+    await mkdir(join(paths.project, "node_modules", "dep"), {
+      recursive: true,
+    });
+    await mkdir(join(paths.project, "src"));
+    await mkdir(join(paths.project, ".git"));
+    await writeFile(join(paths.project, ".gitignore"), "node_modules\n");
+    await writeFile(join(paths.project, "README.md"), "# The project\n");
+    await writeFile(join(paths.project, "src", "main.ts"), "export const a=1;");
+    await writeFile(
+      join(paths.project, "node_modules", "dep", "README.md"),
+      "# A dependency\n",
+    );
+    await writeFile(join(paths.project, ".git", "config"), "[core]\n");
+
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const start = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Browse the files",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000031",
+      },
+    });
+    const thread = StartThreadResponseSchema.parse(start.json()).thread;
+    const base = `/api/projects/${project.id}/threads/${thread.id}/files`;
+    const list = async (query: string) => {
+      const response = await server.inject({
+        method: "GET",
+        url: `${base}${query}`,
+        headers: { host },
+      });
+      const body: unknown = response.json();
+      return { status: response.statusCode, body };
+    };
+
+    const oneLevel = await list("?depth=1");
+    expect(oneLevel.status).toBe(200);
+    const shallow = FileTreeResponseSchema.parse(oneLevel.body);
+    expect(shallow.entries.map((entry) => entry.path)).toEqual([
+      "src",
+      ".gitignore",
+      "README.md",
+    ]);
+    expect(shallow.ignoredHidden).toBe(true);
+
+    // No `depth` at all is the whole recursive listing, exactly as before.
+    const full = FileTreeResponseSchema.parse((await list("")).body);
+    expect(full.entries.map((entry) => entry.path)).toContain("src/main.ts");
+
+    // The scenario the milestone exists for.
+    const search = FileTreeResponseSchema.parse(
+      (await list("?search=README.md")).body,
+    );
+    expect(search.entries.map((entry) => entry.path)).toEqual(["README.md"]);
+
+    const revealed = FileTreeResponseSchema.parse(
+      (await list("?depth=1&showIgnored=true")).body,
+    );
+    expect(revealed.entries.map((entry) => entry.path)).toContain(
+      "node_modules",
+    );
+    // The opt-in reveals ignored paths; `.git` is not one of them.
+    expect(revealed.entries.map((entry) => entry.path)).not.toContain(".git");
+    expect(revealed.ignoredHidden).toBe(false);
+
+    // A nested listing addresses the same root-relative paths.
+    const nested = FileTreeResponseSchema.parse(
+      (await list("?depth=1&path=src")).body,
+    );
+    expect(nested.entries.map((entry) => entry.path)).toEqual(["src/main.ts"]);
+
+    for (const rejected of [
+      "?depth=2",
+      "?depth=full%20",
+      "?depth=",
+      "?showIgnored=1",
+      "?showIgnored=TRUE",
+      "?depth=1&path=../escape",
+    ]) {
+      expect((await list(rejected)).status).toBe(400);
+    }
+    await server.close();
+  });
+
   it("creates a clean isolated thread and runs Pi in its worktree", async () => {
     const paths = await directories();
     await exec("git", ["init", "-b", "main"], { cwd: paths.project });

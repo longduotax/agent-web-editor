@@ -350,6 +350,11 @@ export const FileEntrySchema = z.object({
 export const FileTreeResponseSchema = z.object({
   entries: z.array(FileEntrySchema),
   truncated: z.boolean(),
+  // Whether this listing omitted anything because the working tree's ignore
+  // rules matched it. The browser states it rather than under-reporting
+  // quietly (WSP-05 as revised by specification version 2). `.git` is not an
+  // ignore rule and never sets this.
+  ignoredHidden: z.boolean(),
 });
 export const FilePreviewResponseSchema = z.object({
   path: z.string(),

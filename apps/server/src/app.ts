@@ -58,6 +58,18 @@ const runParamsSchema = z.object({
 const fileQuerySchema = z.object({
   path: z.string().default(""),
   search: z.string().max(500).default(""),
+  // `"full"` by default so the parameter is additive: a browser built before
+  // the file tree, or one that drops the parameter, still receives the whole
+  // recursive listing it expects (WSP-05 as revised by specification
+  // version 2).
+  depth: z.enum(["1", "full"]).default("full"),
+  // A query string carries no booleans, so the flag is an exact pair of
+  // spellings rather than a truthiness test: `?showIgnored=0` must not
+  // reveal a dependency tree because "0" is a non-empty string.
+  showIgnored: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 });
 
 export interface BuildServerOptions {
@@ -485,16 +497,16 @@ export async function buildServer(
         params.projectId,
         params.threadId,
       );
-      if (query.path !== "") RelativePathSchema.parse(query.path);
-      const target =
-        query.path === ""
-          ? root
-          : (
-              await (
-                await import("./inspector/files.js")
-              ).resolveContained(root, query.path, true)
-            ).target;
-      return await listProjectFiles(target, query.search);
+      // Containment is `listProjectFiles`' own first step, through the same
+      // `resolveContained` this route used to call: the listed directory is
+      // proven to be the execution root or under it before a single entry is
+      // read, and entry paths come back relative to that root.
+      return await listProjectFiles(root, {
+        search: query.search,
+        depth: query.depth,
+        showIgnored: query.showIgnored,
+        path: query.path,
+      });
     },
   );
   server.get(
