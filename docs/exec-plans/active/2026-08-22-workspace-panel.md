@@ -31,6 +31,7 @@ URL-probe boundaries those tabs require
 `apps/server/src/terminal/manager.ts`, new `apps/server/src/browser/probe.ts`,
 `apps/server/src/app.ts`, `apps/server/src/inspector/files.ts`, new
 `apps/server/src/inspector/ignoreRules.ts`, new
+`apps/server/src/inspector/trackedFiles.ts`, new
 `apps/web/src/features/panel/FileTree.tsx`,
 `apps/web/src/features/panel/FilesTab.tsx`,
 `packages/contracts/src/index.ts` (terminal client and
@@ -787,7 +788,17 @@ including its `"full"` default and a rejected value; `panelStorage.test.ts` for
 the v2 → v3 migration and the v1 → v3 chain; `FileTree.test.tsx` for expand,
 collapse, expansion surviving a reload, the row name versus its tooltip, flat
 search, expansion restored on clearing the search, the ignored-files notice and
-opt-in, computed accessible names, and `aria-expanded`. Then the **standing
+opt-in, computed accessible names, and `aria-expanded`. From the hands-on pass:
+`trackedFiles.test.ts` and `files.test.ts` for a tracked file an ignore rule
+matches, the tracked-only contents of an excluded directory, and the requested
+root refused as `.git`, as ignored, and as absent; `app.test.ts` for each of
+those over HTTP; `client.test.ts` for the read deadline and the retry policy;
+`FileTree.test.tsx` for the error row under that policy and for a 404;
+`WorkspacePanel.test.tsx` for focus after an activation, after a tab chord, and
+after the panel closes; `useTabDrag.test.tsx` for an interrupted gesture; and
+end-to-end cases for the deep-row measurement at `PANEL_MIN_WIDTH`, the failing
+listing and its retry, the deleted directory, keyboard focus after opening a
+file, and the interrupted drag with a real pointer. Then the **standing
 hands-on UI pass**, which for this milestone is the exact scenario that produced
 the finding: open the Files tab on a repository containing `node_modules`,
 search `README.md`, and confirm the project's own README is in the first screen
@@ -1408,7 +1419,12 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 - [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
       verification, close-control question confirmed
 - [x] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
-      search. Implemented on the coordinator's instruction ahead of the recorded
+      search. Its standing hands-on UI pass was performed on 2026-08-23 and
+      found seven defects, all fixed and pinned: a tracked file hidden by an
+      ignore rule, a requested path exempt from the rules its entries obey, an
+      unreadable indent at the panel's floor, focus dropped on opening a file,
+      an unbounded read, an untyped not-found, and a drag that outlived its
+      gesture. See Discoveries and blockers. Implemented on the coordinator's instruction ahead of the recorded
       approval of specification version 2; that approval was given by the user
       on 2026-08-23 and the gate is now satisfied (see Discoveries and
       blockers). Shipped 2026-08-23: `apps/server/src/inspector/ignoreRules.ts`
@@ -1939,8 +1955,200 @@ one. Nothing implemented is being undone by this entry — the approved behaviou
 and the built behaviour are the same behaviour — but the sequence is not erased,
 because the next reader is entitled to know that the document trailed the work.
 
+**2026-08-23 — milestone 4's standing hands-on UI pass, and the seven defects
+it found in the file tree.** A reviewer drove the running application against
+a real repository and measured every finding before reporting it. Each was
+reproduced from that measurement before anything was changed, each is pinned
+by a test that fails without its fix, and two of them turned out to be
+different defects from the ones reported — which is recorded here rather than
+tidied away, because both times the reported symptom was real and the
+mechanism behind it was not what it looked like.
+
+1. **The tree hid files the repository tracks (H1).** `backend/cert.pem` and
+   `backend/key.pem` are tracked — `git ls-files --error-unmatch` succeeds,
+   commit `e48ff2e3` — and match `backend/.gitignore:185:*.pem`. Git never
+   ignores a tracked file; a pure pattern matcher always does. Measured over
+   the whole reporting repository: panel-visible 1899 against git-visible
+   1901, the difference exactly those two, and **zero** files shown that Git
+   would ignore. So the matcher is faithful everywhere else, and this is the
+   one systematic divergence — and it is the worst kind, because the user
+   knows the file is in the repository and the tree says it is not.
+
+   **Decided: consult the index, and say why that is not the rejected
+   call.** The plan rejects `git check-ignore`, and that rejection stands
+   untouched: it is a per-path oracle, one process or one long-lived pipe
+   consulted for every entry of every listing, on the hot path. `git ls-files
+-z --cached` is a different call in every respect that made the first one
+   unacceptable — **one** bounded listing per working tree, cached and served
+   from memory thereafter — and it answers a question the matcher cannot
+   answer at all rather than re-answering one it already answers correctly.
+   Measured on this repository: 226 tracked paths, 8,947 bytes, 7 ms, against
+   a 5 MiB output limit and a 10-second timeout it already inherits from the
+   Git process policy `git status` uses.
+
+   Invalidation is the identity of `.git/index` — the file `ls-files` reads,
+   and the file every `add`, `commit`, `rm`, and `checkout` writes — with a
+   five-second lifetime where it cannot be stamped (a linked worktree keeps
+   its index elsewhere), a one-minute ceiling regardless, four working trees
+   cached, and 50,000 paths each. Every failure degrades to the matcher
+   alone: no Git, no repository, a non-zero exit, a timeout, truncated
+   output, or too many paths all yield no index, and no index exempts
+   anything. A non-Git project is bit-for-bit what it was.
+
+   One thing came out of building it that the report did not name. Once a
+   tracked file can pull the walk into an excluded directory, the directory's
+   untracked siblings become visible too — a floating pattern like `dist`
+   matches the directory and not the paths beneath it, and the shipped code
+   relied on never descending. So the walk now carries "am I inside an
+   excluded directory", and inside one only tracked paths are shown. That is
+   Git's own rule that a path under an excluded directory cannot be
+   re-included, and it is pinned by a case that lists `dist/keep.js` and not
+   `dist/stale.js`.
+
+2. **The requested path obeyed no rule of its own (H2).** The filter was
+   applied to entries met while walking and never to the path the request
+   named: `?path=.git&depth=1&showIgnored=false` answered 200 with the
+   repository's machinery, `?path=.git/refs&depth=1` answered 200,
+   `/file?path=.git/config` returned the config including the remote URL, and
+   `?path=frontend/node_modules&showIgnored=false` returned 390 entries.
+   Refused now at the resolve step every file route shares.
+
+   **One deliberate divergence from the instruction, recorded rather than
+   made quietly.** The single-file read applies the `.git` refusal and _not_
+   the ignore filter. A File tab is opened from a tree that may legitimately
+   be showing ignored paths — that is what the opt-in is for — it is durable,
+   and it carries no ignore mode of its own; a check that every real caller
+   would have to bypass is not a boundary, it is a parameter with one value.
+   The ignore rules govern what a **listing** offers, which is what WSP-05
+   and the read policy actually require of them. Written into the read policy
+   so the boundary states what it holds.
+
+3. **Deep rows were unreadable at the panel's floor (H3).** At
+   `PANEL_MIN_WIDTH` a level-14 row computed `padding-inline-start: 11.05rem`
+   inside a 248px line, leaving a 44px name column for a name 128px wide;
+   level 13 left 58px, and about 13.6px goes per level. The tree did not
+   scroll sideways (`scrollWidth === clientWidth === 259`) and the page did
+   not overflow, so the only recovery was the row's tooltip and ten
+   consecutive rows read `eleme… playw… reque… sessi…`.
+
+   **Chosen: scroll, not compress.** A row is as wide as its own content and
+   never narrower than the tree. Capping or compressing the indent past some
+   depth was the alternative and was rejected: the indent is the only thing
+   on screen that says how deep a row is, and flattening it exactly where the
+   tree is deepest trades one unreadable thing for another; a smaller unit
+   only moves the width at which the same failure happens. Scrolling keeps
+   both the depth and the name, which is what the editor this tab is
+   modelled on does.
+
+   The trap was the one this feature has already fallen into once. A
+   horizontal scroller whose height is unbounded puts its scrollbar at the
+   bottom of the whole list, hundreds of pixels below the visible area — F2,
+   exactly. So the Files tab became a column, the arrangement the file
+   preview already uses, and the tree is a bounded box whose scrollbars are
+   at the edges of the panel. Measured at the floor: the name is not clipped,
+   the tree scrolls, its bottom edge is on screen, and the page's own
+   horizontal overflow is still zero.
+
+4. **Focus dropped to `<body>` after opening a file (H4).** F5's defect on
+   the path F5 did not cover: it fixed the structural chords, and an
+   activation hides a body just as surely as a split does. Opening a tab now
+   asks the panel for focus. Two further paths hide a body the keyboard may
+   be inside, and both are covered: the tab-switching chord, which moves
+   focus only when the keyboard was in the body it just hid — read from
+   `document.activeElement` before the command runs, so a chord issued from
+   elsewhere on the page still does not steal focus into the panel — and
+   closing the panel, whose own close control is inside the panel that is
+   about to become inert.
+
+5. **The failing-listing report was true about the symptom and wrong about
+   the cause (H5).** Investigated before anything was changed, as the report
+   asked. The error row and its retry are **reachable**: under the
+   application's own retry policy a rejecting listing settles in about three
+   seconds and the row reads "Could not list src. Activate this row to try
+   again." — in jsdom, and against the real server in a real browser, where
+   the row's retry also recovers. So "30+ seconds still Listing…" cannot be
+   explained by a failing request at all.
+
+   What it is explained by is a request that never **settles**. React Query
+   can retry a rejected promise and then fail it; it can do nothing with a
+   pending one, and nothing in the client bounded how long a read would wait.
+   That is a permanent "Listing…" row with no error, no retry, and no
+   recovery short of a reload — including the part of the report that looked
+   strangest, that unpatching the server changed nothing, because the promise
+   already in flight never settles either. The most likely origin of the
+   observation is the patched `fetch` itself: a stand-in `Response` whose
+   `json()` never resolves produces precisely this and is invisible from the
+   page.
+
+   Fixed where the gap actually is: a panel read carries a ten-second
+   deadline — the same one the server gives its own Git calls — and aborts
+   the request rather than abandoning it, reporting a typed `request_timeout`.
+   The retry policy moved out of `main.tsx` into `shouldRetryRequest`, where
+   it is unit-tested: a client error and a timeout go to the view's error
+   state at once, everything else is retried twice. The old policy
+   special-cased 401 and retried a 404 three times.
+
+6. **A path that is not there was an internal error (H6).** `path=does/not/
+exist` answered `500 {"error":{"code":"internal_error"}}`. Typed now:
+   `path_not_found` (404) for a path that is gone, `path_not_directory` and
+   `file_not_regular` (400) for one that exists and is the wrong kind,
+   `path_unreadable` (403) for one that cannot be read; the tree renders that
+   row's own error state on the first answer, because a client error is not
+   worth repeating twice before saying so. Containment was never at fault:
+   `path=../../../etc` was a correct 400 before and still is.
+
+   Worth recording, because it changes what the defect is: the realistic
+   trigger the report names — a persisted expansion pointing at a deleted
+   directory — does **not** reach the server. A collapsed-away path is only
+   requested when a row for it exists, and the row comes from its parent's
+   listing, which no longer holds it. The reachable case is narrower and
+   real: a directory deleted while the tab is open, whose row the tab is
+   still showing from the listing it read before. That is what the
+   end-to-end case drives.
+
+7. **An interrupted drag stranded the panel, and it is reachable by a real
+   pointer (H7).** Reported as unconfirmed for real input because the
+   reporting harness could not deliver a second real `pointerdown`. It is
+   confirmed: Chrome delivers it, and a second `mouse.down()` mid-drag
+   reproduces the stranded state exactly — the drop zones still mounted, the
+   ghost still on screen, the source tab still at 0.45 opacity, and Escape
+   inert. The mechanism is the one the reviewer identified in code, verified
+   line by line: a second press replaces `tracking.current` with a
+   non-dragging record, its `pointerup` takes the "never became a drag" early
+   return and nulls tracking without clearing `drag`, and `cancel()` — which
+   begins by reading `tracking.current` — early-returns for ever, so Escape,
+   whose whole job is to cancel, cannot. A press now ends whatever the
+   previous gesture left behind, a release and a `pointercancel` clear a drag
+   they find stranded, and `cancel()` clears drag state on its own terms when
+   there is no tracking record to clear it through.
+
+**The `README.md` search figure, corrected by measuring it twice.** The pull
+request's table says 7 matches; the pass reported 9 against its own ground
+truth. Both are right, about different working trees, and the figure is a
+property of the tree rather than of the code: on **this** repository the
+search returns exactly 7, and `git ls-files` plus untracked-not-ignored
+contains exactly 7 paths matching `README.md` — checked independently, and
+they agree path for path. The pass's 9 belongs to the repository its other
+measurements come from, the one with `backend/` and `frontend/node_modules/`.
+What the figure supports is unchanged and verified in both places: no
+dependency copies, project files first. The lesson is the small one — a
+number measured against one working tree is not a property of the feature —
+and the documentation now says which tree it counted.
+
+**What this pass says about the last one.** Two of the seven reports
+described a real symptom and a mechanism that was not there (H5's failing
+listing, H6's persisted expansion), and one described a mechanism precisely
+while doubting it could happen at all (H7). All three were settled the same
+way: by reproducing the measurement first and only then reading the code, or
+by driving the real browser at the exact sequence in question. The standing
+instruction to confirm a finding before it becomes work earned its place
+again — and so did its converse, that a finding whose mechanism is wrong is
+still a finding, because the symptom was real every time.
+
 - No blockers. Milestone 4's gate is **satisfied** as of 2026-08-23; it was
-  never blocked, only waiting on a normal lifecycle step.
+  never blocked, only waiting on a normal lifecycle step. Its standing
+  hands-on UI pass is no longer owed either: it was performed, and the seven
+  defects it found are fixed above.
 
 ## Decision and revision log
 

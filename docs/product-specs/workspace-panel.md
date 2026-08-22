@@ -408,6 +408,12 @@ browsing.
   The user may **explicitly opt into showing ignored files**, and while ignored
   files are hidden the tab **says so** — a listing that quietly under-reports
   what is on disk is not acceptable, in the tree or in a search result count.
+  **A file the repository tracks is never hidden by an ignore rule**, because
+  the repository does not hide one either: a file committed before the rule
+  that now matches it is in the repository, and a tree that says otherwise is
+  telling the user their own committed file does not exist. Where the project
+  is not a repository, or the tracked set cannot be read, the rules alone
+  decide and nothing is shown that they would hide.
 - **Search stays flat.** While a search term is active the tab shows flat
   matching paths rather than a tree, because a tree of sparse matches is harder
   to read than a list. Clearing the search returns to the tree **at its previous
@@ -462,6 +468,36 @@ Continuing the numbering of the version 1 list above.
     state), and every tab in every tab strip exposes an accessible name equal to
     the text it displays, confirmed by computing the accessible name rather than
     by an automated rule scan alone.
+15. A file the repository tracks appears in the tree and in a search even when
+    an ignore rule matches it, and the listing agrees path for path with what
+    the repository itself reports as tracked or untracked-and-not-ignored.
+16. At the panel's minimum width, a row nested deep enough for its indent to
+    exceed the panel shows its whole name — reached by scrolling the tree, with
+    no horizontal overflow of the page.
+17. Opening a file from the tree with the keyboard leaves focus on the tab it
+    opened, and no action that hides a tab body leaves focus on `<body>`.
+
+## Findings against version 2
+
+A hands-on pass of 2026-08-23 drove the file tree against a real repository
+and reported seven defects, every one measured. All seven are fixed, and the
+measurements, the two whose mechanism turned out not to be the reported one,
+and the reasoning behind each fix are in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section. Three of them changed what this document requires and are
+written into WSP-05 above and into acceptance criteria 15 to 17: a tracked file
+is never hidden by an ignore rule, a deep row stays readable at every panel
+width, and opening a file leaves the keyboard somewhere. The other four —
+a requested path exempt from the rules its entries obey, an unbounded read that
+could leave a row loading for ever, an untyped not-found, and a drag that could
+outlive its gesture — were defects against what versions 1 and 2 already
+require, and needed no contract change.
+
+One figure in the record was corrected rather than fixed. The `README.md`
+search was reported as returning 7 matches in one place and 9 in another; both
+are right, about different working trees, because the number is a property of
+the repository being browsed and not of the feature. What it was cited for is
+unchanged and verified in both: the project's own files, no dependency copies.
 
 ## Findings against version 1
 
