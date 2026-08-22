@@ -5,6 +5,7 @@ import {
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { leafIds } from "../layout/binaryTree.js";
 import { NewTabMenu } from "./NewTabMenu.js";
@@ -201,20 +202,35 @@ export function WorkspacePanel({
         <p className="panel-announcement" role="status">
           {announcement}
         </p>
-        {/* The dragged tab's ghost: a label following the pointer, never a
-            clone of the tab's body — cloning one would mount a second
-            terminal, and the body's own host element must not move until the
-            drop does move it (PanelBodies.tsx). */}
-        {drag.drag !== null && (
+      </aside>
+      {/* The dragged tab's ghost: a label following the pointer, never a
+          clone of the tab's body — cloning one would mount a second terminal,
+          and the body's own host element must not move until the drop does
+          move it (PanelBodies.tsx).
+
+          Portalled to the document body, and that is load-bearing (G2). It
+          is `position: fixed` and moved by a transform in viewport
+          coordinates, but `.panel` computes a non-`none` transform of its own
+          from the slide-in rule, and a transformed element is the containing
+          block for every fixed descendant — so the panel's left edge was
+          added to every position the ghost was given. Measured with the
+          pointer at x = 1870: `translate(1882px, …)` and a client rectangle
+          starting at 3020.33, in a 1920px viewport. Since the panel is always
+          the right-hand dock, the ghost was always off screen and the only
+          pick-up feedback the user ever got was the source tab dimming.
+          Removing the panel's transform would have been the other route and
+          is not available: that transform IS the slide-in. */}
+      {drag.drag !== null &&
+        createPortal(
           <div
             className="panel-drag-ghost"
             ref={drag.ghostRef}
             aria-hidden="true"
           >
             {drag.drag.title}
-          </div>
+          </div>,
+          document.body,
         )}
-      </aside>
       {!open && (
         <div className="panel-rail">
           <div className="panel-rail-head">

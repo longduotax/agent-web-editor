@@ -1525,6 +1525,31 @@ case asserting either would pass in both directions.
    `PanelBodies.test.tsx` scroll cases are left as they are and are **not**
    evidence about this: they passed throughout.
 
+2. **The drag ghost was drawn ~1138px off screen and was never visible
+   (G2).** `.panel-drag-ghost` is `position: fixed` and moved by a transform
+   in viewport coordinates, but `.panel` computes a non-`none` transform from
+   the slide-in rule — and a transformed element is the containing block for
+   its fixed descendants, so the two offsets added. Reproduced at the
+   reported measurement: pointer at x = 1870, `translate(1882px, 512px)`,
+   `getBoundingClientRect().left = 3020.33` = 1882 + 1138.33, the panel's
+   left edge. Vertical was right only because the panel's top is 0. Since the
+   panel is always the right-hand dock, the ghost was **always** outside the
+   viewport, and pick-up feedback was the source tab dimming and nothing
+   else.
+
+   Fixed by rendering the ghost through a portal into `document.body`, which
+   is outside the transformed subtree. Removing the panel's transform was the
+   alternative and is not available: that transform is the slide-in.
+
+   Pinned by an **e2e** case that measures the ghost's client rectangle at
+   three pointer positions and asserts it tracks the pointer in viewport
+   coordinates, is inside the viewport, and is not parented inside the panel.
+   It has to be e2e: a containing block is layout, and jsdom computes none —
+   the same assertion there passes whether the ghost is portalled or not. The
+   ghost is deliberately **not** clamped to the viewport when the pointer is
+   within its own size of an edge: clamping needs the ghost's measured size
+   on every pointer move, and that is the per-move layout WSP-09 forbids.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.

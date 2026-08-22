@@ -1884,7 +1884,14 @@ a:focus-visible {
 }
 /* A label under the pointer, never a clone of the tab's body: cloning one
    would mount a second terminal. Moved by transform alone, which is
-   composited, so following the pointer costs no layout (WSP-09). */
+   composited, so following the pointer costs no layout (WSP-09).
+   Rendered into the document body rather than into `.panel`, and that is
+   what makes `position: fixed` mean the viewport here (G2): `.panel` has a
+   non-`none` transform from its slide-in rule, which makes it the containing
+   block for every fixed descendant, and the panel's left edge was then added
+   to every position — measured at 1138px, so the ghost was off screen at
+   every pointer position the panel can be dragged over. See
+   WorkspacePanel.tsx. */
 .panel-drag-ghost {
   position: fixed;
   z-index: 100;

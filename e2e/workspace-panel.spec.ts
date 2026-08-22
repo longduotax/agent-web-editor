@@ -1286,6 +1286,75 @@ test("panel drag: releasing outside every drop target changes nothing", async ({
   expect(await page.evaluate(panelLayout)).toEqual(before);
 });
 
+// G2. The ghost is the whole of the drag's pick-up feedback, and it was
+// drawn off screen every time.
+//
+// `.panel-drag-ghost` is `position: fixed` and moved by a transform in
+// VIEWPORT coordinates, but `.panel` computes a non-`none` transform from
+// the slide-in rule — and a transformed element is the containing block for
+// its fixed descendants, so the panel's own left edge was added to every
+// position. Measured with the pointer at x = 1870: `translate(1882px, …)`
+// and `getBoundingClientRect().left = 3020.33`, which is 1882 + 1138.33,
+// the panel's left edge, in a 1920px viewport. The panel is always the
+// right-hand dock, so the ghost was ALWAYS outside the viewport.
+//
+// End to end, and only end to end: this is a containing block, which is
+// layout. jsdom computes none, so the same assertion there passes whether
+// the ghost is portalled out of the transformed subtree or not.
+function ghostBox() {
+  const ghost = document.querySelector(".panel-drag-ghost");
+  if (ghost === null) return null;
+  const rect = ghost.getBoundingClientRect();
+  return {
+    left: rect.x,
+    top: rect.y,
+    right: rect.x + rect.width,
+    bottom: rect.y + rect.height,
+    // Which subtree it is actually in: a transformed ancestor is what put
+    // it off screen, so the fix has to be checkable and not just the
+    // coordinates it happens to produce at one pointer position.
+    insidePanel: ghost.parentElement?.className.includes("panel") === true,
+  };
+}
+
+test("panel drag: the ghost follows the pointer in viewport coordinates", async ({
+  page,
+}) => {
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  if (viewport === null) return;
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+
+  const only = await pointsOfGroup(page, 0);
+  await dragTabOver(page, "Changes", only.centre);
+
+  for (const at of [only.centre, only.left, only.bottom]) {
+    await page.mouse.move(at.x, at.y);
+    const box = await page.evaluate(ghostBox);
+    expect(box).not.toBeNull();
+    if (box === null) return;
+    // Just off the pointer, which is over the target being resolved.
+    expect(box.left).toBeCloseTo(at.x + 12, 0);
+    expect(box.top).toBeCloseTo(at.y + 12, 0);
+    // And on screen at all, which is the defect: the ghost's whole box was
+    // ~1138px right of the viewport at every pointer position. The bottom
+    // band's point is within the ghost's own height of the viewport floor,
+    // so only its horizontal containment is asserted — the ghost is not
+    // clamped, deliberately: clamping needs the ghost's measured size on
+    // every pointer move, and reading it there is the layout per move that
+    // WSP-09 says a drag must not do.
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(viewport.width);
+    if (at !== only.bottom)
+      expect(box.bottom).toBeLessThanOrEqual(viewport.height);
+    expect(box.insidePanel).toBe(false);
+  }
+
+  await page.mouse.up();
+});
+
 // G1, the drag half: WSP-03's "a moved tab keeps its ... scroll position".
 // End to end for the same reason as its tab-switch twin above — the offset
 // is lost because the host element is detached and re-attached, which jsdom
