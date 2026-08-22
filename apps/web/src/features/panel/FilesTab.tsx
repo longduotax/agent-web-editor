@@ -112,7 +112,12 @@ export const FilesTab = memo(function FilesTab({
     : ignoredIn.length > 0;
 
   return (
-    <>
+    // A column: the search, the ignore notice, and the no-selection line each
+    // keep their own height, and the tree or the match list is the one part
+    // that grows and scrolls — the arrangement the file preview already uses
+    // (F2), and what puts the tree's own horizontal scrollbar on screen
+    // instead of at the bottom of a list a thousand pixels tall (H3).
+    <div className="files-tab">
       <input
         className="file-search"
         aria-label="Search project files"
@@ -217,6 +222,6 @@ export const FilesTab = memo(function FilesTab({
       {(searching ? entries.length > 0 : rootEntries > 0) && (
         <p className="panel-state">Select a file to open it in its own tab.</p>
       )}
-    </>
+    </div>
   );
 });

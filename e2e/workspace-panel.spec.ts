@@ -256,7 +256,11 @@ declare function getComputedStyle(element: ProbeElement): {
   paddingTop: string;
   paddingBottom: string;
 };
-declare const window: { __sentFrames?: string[] };
+declare const window: {
+  __sentFrames?: string[];
+  innerHeight: number;
+  innerWidth: number;
+};
 declare const WebSocket: {
   prototype: { send: (this: unknown, data: unknown) => void };
 };
@@ -881,6 +885,55 @@ test("panel files: the keyboard walks, opens, and closes tree rows", async ({
   await src.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(src).toHaveAttribute("aria-expanded", "false");
+});
+
+// H3. At `PANEL_MIN_WIDTH` a level-14 row computed `padding-inline-start:
+// 11.05rem` inside a 248px line, leaving 44px for a name whose natural width
+// is 128px — and the tree did not scroll sideways, so ten consecutive rows
+// read `eleme… playw… reque… sessi…` and the only recovery was the tooltip.
+test("panel files: a deep row stays readable at the panel's minimum width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  // The panel's floor, reached the way a keyboard user reaches it.
+  await page
+    .getByRole("separator", { name: "Resize workspace panel" })
+    .press("Home");
+  for (const name of DEEP_CHAIN) await clickTreeRow(page, name);
+  const deepFile = "session-storage.spec.ts";
+  await expect(page.getByRole("treeitem", { name: deepFile })).toBeVisible();
+  // The indent still encodes the depth; that is what it is for.
+  await expect(page.getByRole("treeitem", { name: deepFile })).toHaveAttribute(
+    "aria-level",
+    String(DEEP_CHAIN.length + 1),
+  );
+
+  const measured = await page.evaluate((name: string) => {
+    const tree = document.querySelector(".file-tree");
+    const rows = [...document.querySelectorAll(".file-tree-name")];
+    const label = rows.find((row) => row.textContent === name) ?? null;
+    const page_ = document.documentElement;
+    const treeRect = tree?.getBoundingClientRect() ?? null;
+    return {
+      // The name is painted in full rather than clipped to an ellipsis...
+      nameClipped: label === null || label.scrollWidth > label.clientWidth + 1,
+      // ...because the tree scrolls sideways to reach it...
+      treeScrolls: tree !== null && tree.scrollWidth > tree.clientWidth,
+      // ...inside its own box, whose bottom edge — and therefore whose
+      // horizontal scrollbar — is on screen (the F2 defect, not repeated).
+      treeBottom:
+        treeRect === null ? -1 : Math.round(treeRect.y + treeRect.height),
+      viewportHeight: window.innerHeight,
+      // ...and the page itself still does not scroll sideways.
+      pageOverflow: page_.scrollWidth - page_.clientWidth,
+    };
+  }, deepFile);
+
+  expect(measured.nameClipped).toBe(false);
+  expect(measured.treeScrolls).toBe(true);
+  expect(measured.treeBottom).toBeLessThanOrEqual(measured.viewportHeight);
+  expect(measured.pageOverflow).toBe(0);
 });
 
 // H5. The pass saw a row that read "Listing ops…" thirty seconds after the

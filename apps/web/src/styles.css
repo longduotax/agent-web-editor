@@ -1965,6 +1965,25 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.7rem;
 }
+/* The Files tab is a column, like the file preview and the diff (F2): only
+   the listing grows, so the listing is the one box that scrolls and its
+   scrollbars are at the edges of the panel rather than at the bottom of a
+   list far below the visible area. */
+.files-tab {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.files-tab > * {
+  flex: none;
+}
+.files-tab > .file-tree,
+.files-tab > .file-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
 .file-search {
   margin: 0.6rem;
   width: calc(100% - 1.2rem);
@@ -2010,7 +2029,19 @@ a:focus-visible {
 .file-tree {
   padding: 0.35rem;
 }
+/* A row is as wide as its own content and never narrower than the tree, so
+   a deep name is painted in full and reached by scrolling sideways, while a
+   shallow row's hover and focus still span the whole width (H3).
+
+   The alternative was to cap or compress the indent past some depth. That
+   was rejected: the indent is the only thing on screen that says how deep a
+   row is, and flattening it exactly where the tree is deepest trades one
+   unreadable thing for another. A smaller unit only moves the width at which
+   the same failure happens. Scrolling keeps both the depth and the name,
+   which is what the editor this tab is modelled on does. */
 .file-tree-row {
+  width: max-content;
+  min-width: 100%;
   border-radius: 0.3rem;
   color: var(--text-2);
   font-size: 0.76rem;
@@ -2042,10 +2073,17 @@ a:focus-visible {
   background: var(--surface-3);
   border-radius: 0.3rem;
 }
-/* Not a row the user chooses: a loading, empty, capped, or failed listing. */
+/* Not a row the user chooses: a loading, empty, capped, or failed listing.
+   It is a sentence rather than a path, so it wraps inside the tree instead
+   of making the whole tree scroll sideways to be read. */
 .file-tree-state {
+  width: auto;
   color: var(--muted);
   cursor: default;
+}
+.file-tree-state .file-tree-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .file-ignored {
   display: flex;
