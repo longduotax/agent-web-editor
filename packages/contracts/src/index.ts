@@ -431,6 +431,26 @@ export const LiveSnapshotRequiredSchema = z.object({
   type: z.literal("snapshot_required"),
   threadId: ThreadIdSchema,
 });
+/**
+ * The payload of a `diagnostic` live event.
+ *
+ * `LiveEventSchema.payload` is `unknown` because four event types share the
+ * envelope, so the shape has to be asserted per type at the point of use --
+ * exactly as `TranscriptItemSchema` is for `transcript`. The server
+ * republishes the runtime's whole diagnostic event (`workspace.ts`
+ * `onRuntimeEvent`), which is why the redundant `type` discriminator is still
+ * on the payload.
+ *
+ * `code` is optional because it post-dates the field it explains: a runtime
+ * that predates it still sends level and message.
+ */
+export const LiveDiagnosticSchema = z.object({
+  type: z.literal("diagnostic"),
+  level: z.enum(["info", "warning", "error"]),
+  message: z.string().min(1).max(2_000),
+  code: z.string().min(1).max(80).optional(),
+});
+export type LiveDiagnostic = z.infer<typeof LiveDiagnosticSchema>;
 
 /**
  * What a terminal may be resized to.

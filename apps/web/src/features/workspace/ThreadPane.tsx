@@ -1,9 +1,18 @@
-import { useEffect, useState, type SyntheticEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SyntheticEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  LiveDiagnosticSchema,
   LiveEventSchema,
   LiveSnapshotRequiredSchema,
   TranscriptItemSchema,
+  type LiveDiagnostic,
   type ProjectId,
   type ThreadId,
   type ThreadSnapshot,
@@ -11,11 +20,14 @@ import {
 } from "@pi-web/contracts";
 
 import {
+  ApiClientError,
   getSnapshot,
+  getWorkspace,
   markViewed,
   prompt,
   steer,
   stop,
+  unarchiveThread,
   webSocketUrl,
 } from "../../api/client.js";
 import { ActivityGroup, displayTranscript } from "../../components/Activity.js";
@@ -26,12 +38,20 @@ import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
 import { isReleaseKey, releaseFocusToPane } from "./paneFocus.js";
 import {
+  dropSettledSteers,
+  isReaderFacingDiagnostic,
   mergeLiveTurn,
+  mergePendingSteers,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
+  type PendingSteer,
 } from "./liveTranscript.js";
 import { PaneHeader } from "./PaneHeader.js";
-import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
+import {
+  deriveRunStatus,
+  elapsedLabel,
+  runOutcomeNotice,
+} from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
 
 export interface ThreadPaneProps {
@@ -86,19 +106,35 @@ const TRUST_NOTICE =
  * every poll tick and every throttled refetch — invisible while tokens flow
  * at 7ms intervals, but a blank paragraph for the whole of a tool call.
  */
+export interface LiveState {
+  turn: TranscriptItem | null;
+  /**
+   * The newest reader-facing diagnostic of the run in flight, or null.
+   *
+   * One slot, not a list: these describe the state of the run *right now*
+   * ("Provider retry 2 of 5.") and a reader wants the current one, not a
+   * history of them.
+   */
+  diagnostic: LiveDiagnostic | null;
+}
+
 function useLive(
   projectId: ProjectId,
   threadId: ThreadId,
   ready: boolean,
   runActive: boolean,
-): TranscriptItem | null {
+): LiveState {
   const queryClient = useQueryClient();
   const [liveTurn, setLiveTurn] = useState<TranscriptItem | null>(null);
+  const [diagnostic, setDiagnostic] = useState<LiveDiagnostic | null>(null);
   // The turn belongs to the run that produced it. `runActive` only goes false
   // once a fetch has told us so, and that same fetch carried the settled
   // message, so there is no moment where the text belongs to neither.
   useEffect(() => {
-    if (!runActive) setLiveTurn(null);
+    if (!runActive) {
+      setLiveTurn(null);
+      setDiagnostic(null);
+    }
   }, [runActive]);
   useEffect(() => {
     if (!ready) return;
@@ -184,6 +220,11 @@ function useLive(
           scheduleRefetch();
           return;
         }
+        // Content is moving again, so whatever the run was last complaining
+        // about ("Provider retry 2 of 5.") has resolved. Clearing here rather
+        // than on a timer means the notice lives exactly as long as the
+        // stall it describes.
+        setDiagnostic(null);
         pending.push(item.data);
         if (item.data.id === STREAMING_ITEM_ID) {
           scheduleFlush();
@@ -193,6 +234,23 @@ function useLive(
         // for the tool steps and canonical ids the live channel does not
         // carry; `mergeLiveTurn` stops appending it once that lands.
         flush();
+        scheduleRefetch();
+        return;
+      }
+      if (live.eventType === "diagnostic") {
+        // Diagnostics used to fall through to the refetch below and nothing
+        // else -- received, used purely as a poll trigger, and dropped. The
+        // refetch is still right (a diagnostic can accompany state the
+        // snapshot knows about), but the message itself is the only account
+        // the app ever gets of a provider retry, and it is not in any
+        // snapshot: `snapshot()` builds its transcript from Pi's persisted
+        // branch, which never held it.
+        const parsedDiagnostic = LiveDiagnosticSchema.safeParse(live.payload);
+        if (
+          parsedDiagnostic.success &&
+          isReaderFacingDiagnostic(parsedDiagnostic.data)
+        )
+          setDiagnostic(parsedDiagnostic.data);
         scheduleRefetch();
         return;
       }
@@ -229,13 +287,14 @@ function useLive(
     return () => {
       closed = true;
       setLiveTurn(null);
+      setDiagnostic(null);
       if (retry !== undefined) clearTimeout(retry);
       if (flushTimer !== undefined) clearTimeout(flushTimer);
       if (refetchTimer !== undefined) clearTimeout(refetchTimer);
       socket?.close();
     };
   }, [projectId, queryClient, ready, threadId]);
-  return liveTurn;
+  return { turn: liveTurn, diagnostic };
 }
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
@@ -271,27 +330,31 @@ function groupTranscriptItems(
 function transcriptContentKey(
   items: readonly TranscriptItem[],
   diagnostics: readonly string[],
+  live: LiveDiagnostic | null,
 ): string {
   const last = items.at(-1);
   const lastLength =
     last !== undefined && "text" in last ? last.text.length : 0;
-  return [items.length, last?.id ?? "", lastLength, diagnostics.length].join(
-    ":",
-  );
+  return [
+    items.length,
+    last?.id ?? "",
+    lastLength,
+    diagnostics.length,
+    live?.message ?? "",
+  ].join(":");
 }
 
 function Transcript({
   snapshot,
-  liveTurn,
+  items,
+  diagnostic,
+  scrollRef,
 }: {
   snapshot: ThreadSnapshot;
-  liveTurn: TranscriptItem | null;
+  items: readonly TranscriptItem[];
+  diagnostic: LiveDiagnostic | null;
+  scrollRef: (node: HTMLDivElement | null) => void;
 }) {
-  const items = displayTranscript(mergeLiveTurn(snapshot.transcript, liveTurn));
-  const scrollRef = useStickToBottom<HTMLDivElement>(
-    snapshot.thread.id,
-    transcriptContentKey(items, snapshot.diagnostics),
-  );
   const running = snapshot.currentRun?.state === "running";
   const groups = groupTranscriptItems(items);
   // The newest batch of steps stays open for the whole run. Keying "live" to
@@ -360,9 +423,18 @@ function Transcript({
             </div>
           );
         })}
-        {snapshot.diagnostics.map((diagnostic) => (
-          <p className="diagnostic warning" key={diagnostic}>
-            {diagnostic}
+        {/* The live diagnostic sits at the foot of the transcript, directly
+            under the running activity group -- where a reader watching a
+            stalled run is already looking. `role="status"` so it is
+            announced when it appears without stealing focus. */}
+        {diagnostic !== null && (
+          <p className={`diagnostic live ${diagnostic.level}`} role="status">
+            {diagnostic.message}
+          </p>
+        )}
+        {snapshot.diagnostics.map((text) => (
+          <p className="diagnostic warning" key={text}>
+            {text}
           </p>
         ))}
       </div>
@@ -374,20 +446,34 @@ export function Composer({
   projectId,
   threadId,
   snapshot,
+  onSteered,
+  onSent,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
   snapshot: ThreadSnapshot;
+  /**
+   * A steer the server accepted. The pane echoes it into the transcript,
+   * because nothing else will until the run ends (see `steerEchoItem`).
+   */
+  onSteered?: ((text: string, runId: string) => void) | undefined;
+  /** Anything was sent: re-pin the transcript to the bottom. */
+  onSent?: (() => void) | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
-  const active = snapshot.currentRun?.state === "running";
+  const activeRun =
+    snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
+  const active = activeRun !== null;
   const mutation = useMutation({
-    mutationFn: async () =>
-      active
-        ? await steer(projectId, threadId, text)
-        : await prompt(projectId, threadId, text),
+    mutationFn: async () => {
+      const sent = text;
+      if (activeRun === null) return await prompt(projectId, threadId, sent);
+      const result = await steer(projectId, threadId, sent);
+      onSteered?.(sent, activeRun.id);
+      return result;
+    },
     onSuccess: async () => {
       setText("");
       removeDraft(`pi-draft:${threadId}`);
@@ -404,15 +490,34 @@ export function Composer({
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (text.trim() === "") return;
+    // Before the request, not after it: sending is the moment the reader
+    // expects to be taken to the bottom, and waiting for the response would
+    // leave them staring at old history for the length of a round trip.
+    onSent?.();
     mutation.mutate();
   };
+  // A thread the server no longer serves. Retry can never clear it while the
+  // thread stays archived, and "Thread was not found in this project." is
+  // both written for a developer and untrue -- the thread exists.
+  const missingThread =
+    mutation.error instanceof ApiClientError &&
+    mutation.error.code === "thread_not_found";
   return (
-    <form className="composer" onSubmit={submit}>
+    <form className={`composer${active ? " steering" : ""}`} onSubmit={submit}>
       <div className="composer-input">
         <textarea
           ref={textareaRef}
           aria-label="Message Pi"
-          placeholder="Ask Pi to work in this project…"
+          // The mode was previously visible ONLY on the submit button's
+          // aria-label, i.e. after the decision to send had already been
+          // made. Placeholder, hint line and the rule above them now say it
+          // too, so "am I adding to this run or starting a new turn?" is
+          // answerable before the keystroke rather than after it.
+          placeholder={
+            active
+              ? "Steer this run — Pi picks it up mid-task…"
+              : "Ask Pi to work in this project…"
+          }
           rows={1}
           value={text}
           onChange={(event) => {
@@ -436,8 +541,9 @@ export function Composer({
         />
         <div className="composer-actions">
           <span>
-            Enter to send · Shift + Enter for a new line · Esc to leave the
-            composer
+            {active
+              ? "Enter to steer this run · Shift + Enter for a new line · Esc to leave the composer"
+              : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
           </span>
           {active && (
             <button
@@ -465,15 +571,62 @@ export function Composer({
           </button>
         </div>
       </div>
-      {mutation.error !== null && (
-        <ErrorNotice
-          error={mutation.error}
-          onRetry={() => {
-            mutation.mutate();
-          }}
-        />
-      )}
+      {mutation.error !== null &&
+        (missingThread ? (
+          <div className="error-notice" role="alert">
+            <span className="error-notice-message">
+              This thread is no longer open for messages. If you archived it,
+              restore it from the sidebar to keep working; your message is still
+              in the box.
+            </span>
+          </div>
+        ) : (
+          <ErrorNotice
+            error={mutation.error}
+            onRetry={() => {
+              mutation.mutate();
+            }}
+          />
+        ))}
     </form>
+  );
+}
+
+/**
+ * What a pane shows in place of its composer once its thread is archived.
+ *
+ * The pane used to keep a fully enabled composer pointed at a thread the
+ * server answers 404 for, so the first sign anything was wrong arrived after
+ * the message had been typed and sent.
+ */
+function ArchivedNotice({
+  onRestore,
+  restoring,
+  error,
+}: {
+  onRestore: () => void;
+  restoring: boolean;
+  error: unknown;
+}) {
+  return (
+    <div className="archived-notice">
+      <div className="archived-notice-body">
+        <p className="archived-notice-text" role="status">
+          This thread is archived. Restore it to keep working.
+        </p>
+        <button
+          type="button"
+          className="archived-notice-restore"
+          onClick={onRestore}
+          disabled={restoring}
+        >
+          Restore thread
+        </button>
+      </div>
+      {error !== null && error !== undefined && (
+        <ErrorNotice error={error} context="Could not restore this thread" />
+      )}
+    </div>
   );
 }
 
@@ -484,12 +637,103 @@ export function ThreadPane(props: ThreadPaneProps) {
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
   });
-  const liveTurn = useLive(
+  const runActive = snapshot.data?.currentRun?.state === "running";
+  const currentRunId = snapshot.data?.currentRun?.id ?? null;
+  const live = useLive(
     projectId,
     threadId,
     snapshot.data !== undefined,
-    snapshot.data?.currentRun?.state === "running",
+    runActive,
   );
+  // Archive is a sidebar action in a file this pane does not own, and NO
+  // contract carries an `archived` flag: `ThreadSummary` has none, and every
+  // thread route answers an archived thread with a flat 404
+  // (`store.getThread` appends `AND t.archived_at IS NULL`). So the pane
+  // infers it, from two signals it can already see.
+  //
+  // The inference is sound because archiving is the ONLY way a thread leaves
+  // the workspace listing: `apps/server/src/app.ts` has no delete-thread
+  // route at all, and removing the whole project takes this pane with it. If
+  // a delete route is ever added, this has to grow a way to tell the two
+  // apart -- it would currently call a deleted thread archived and offer a
+  // Restore that 404s.
+  const workspace = useQuery({
+    queryKey: ["workspace"],
+    queryFn: getWorkspace,
+  });
+  const listedNow =
+    workspace.data?.threads.some((thread) => thread.id === threadId) ?? false;
+  // Latched: a thread that has never appeared in the listing might simply be
+  // newer than the listing. One that HAS appeared and then left was archived.
+  // Without this, a thread created a moment ago flashes "Archived" while the
+  // workspace query catches up.
+  const wasListed = useRef(false);
+  if (listedNow) wasListed.current = true;
+  const missingFromWorkspace =
+    workspace.data !== undefined && !listedNow && wasListed.current;
+  // The slower but unambiguous signal: the server itself refusing the thread.
+  // Kept alongside the listing check because the two arrive at different
+  // times -- App invalidates ["workspace"] the instant an archive commits,
+  // while this pane's own snapshot only re-asks on its 15s poll, and waiting
+  // for that would leave a green header and a live composer up for as long as
+  // the reported bug did.
+  //
+  // `failureReason` as well as `error`, and that is load-bearing: the
+  // app-wide default retries twice with backoff, and for the whole of that
+  // ladder `error` is still null and `isPending` is still true. Observed in
+  // the running app, two panes restored onto a just-archived thread sat on
+  // "Loading workspace…" rather than reaching any resolution.
+  // `failureReason` carries the FIRST failed attempt's error, so the pane can
+  // say what happened at once without this query having to opt out of a
+  // retry policy it does not own.
+  const refusal = snapshot.error ?? snapshot.failureReason;
+  const snapshotRefused =
+    refusal instanceof ApiClientError && refusal.code === "thread_not_found";
+  const archived = snapshotRefused || missingFromWorkspace;
+  // Steers the client has sent and no transcript can show yet. Held here, in
+  // component state, for the same reason the streamed turn is: the server
+  // provably cannot produce them, so a query cache entry holding them would
+  // be deleted by the next authoritative fetch.
+  const [pendingSteers, setPendingSteers] = useState<readonly PendingSteer[]>(
+    [],
+  );
+  const onSteered = useCallback((text: string, runId: string) => {
+    setPendingSteers((current) => [...current, { runId, text }]);
+  }, []);
+  // An echo belongs to its run. Like the live turn, it is cleared on the
+  // fetch that reports the run finished -- the same fetch that carries the
+  // now-persisted message -- so there is no frame in which the text is gone
+  // from both.
+  useEffect(() => {
+    setPendingSteers((current) => {
+      const kept = current.filter(
+        (steer) => runActive && steer.runId === currentRunId,
+      );
+      return kept.length === current.length ? current : kept;
+    });
+  }, [runActive, currentRunId]);
+  // And an echo stops the moment Pi has persisted it, so the handover from
+  // optimistic to authoritative removes nothing and adds nothing.
+  const settledTranscript = snapshot.data?.transcript;
+  useEffect(() => {
+    if (settledTranscript === undefined) return;
+    setPendingSteers((current) =>
+      dropSettledSteers(settledTranscript, current),
+    );
+  }, [settledTranscript]);
+  const queryClient = useQueryClient();
+  const restore = useMutation({
+    mutationFn: async () => await unarchiveThread(projectId, threadId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+        queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["snapshot", projectId, threadId],
+        }),
+      ]);
+    },
+  });
   useEffect(() => {
     const lastRun = snapshot.data?.lastRun;
     if (snapshot.data?.thread.unread === true && lastRun?.state === "completed")
@@ -507,6 +751,7 @@ export function ThreadPane(props: ThreadPaneProps) {
   };
   const status = deriveRunStatus({
     runState: snapshot.data?.thread.runState ?? null,
+    archived,
   });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -528,19 +773,35 @@ export function ThreadPane(props: ThreadPaneProps) {
   // The header clamps its detail line to one row, so the full text lives on
   // the tooltip rather than being lost.
   const detailTitle = `${workspaceLabel} · ${TRUST_NOTICE}`;
-  // A failed run used to be a red dot and nothing else. Run.failureMessage /
-  // Run.failureCode have always been in the contract and sent by the server;
-  // surface whichever the server gave us so the failure path does not dead
-  // end.
-  const failedRun =
-    snapshot.data?.lastRun?.state === "failed" ? snapshot.data.lastRun : null;
-  const failureText =
-    failedRun === null
-      ? null
-      : (failedRun.failureMessage ??
-        (failedRun.failureCode === null
-          ? "The run failed without reporting a reason."
-          : `The run failed (${failedRun.failureCode}).`));
+  // A failed run used to be a red dot and nothing else, and an INTERRUPTED
+  // one was worse: it rendered as a green "Done" with no notice at all, so a
+  // run the user cancelled was presented exactly like one that succeeded.
+  // Run.failureMessage / Run.failureCode have always been in the contract and
+  // sent by the server ("Stopped by the user.", "Interrupted because the
+  // project was removed."); both settled non-success states now surface
+  // whichever of them the server gave us.
+  const outcome = runOutcomeNotice(snapshot.data?.lastRun ?? null);
+
+  // The transcript and the composer are siblings, and sending has to re-pin
+  // the transcript, so the pin lives here where both can reach it rather than
+  // inside the transcript.
+  const items = useMemo(() => {
+    if (snapshot.data === undefined) return [];
+    return displayTranscript(
+      mergePendingSteers(
+        mergeLiveTurn(snapshot.data.transcript, live.turn),
+        pendingSteers,
+      ),
+    );
+  }, [snapshot.data, live.turn, pendingSteers]);
+  const transcript = useStickToBottom<HTMLDivElement>(
+    threadId,
+    transcriptContentKey(
+      items,
+      snapshot.data?.diagnostics ?? [],
+      live.diagnostic,
+    ),
+  );
 
   return (
     <section
@@ -592,9 +853,23 @@ export function ThreadPane(props: ThreadPaneProps) {
           props.onClose();
         }}
       />
-      {snapshot.isPending ? (
+      {/* Archived is checked BEFORE isPending: a thread that has been
+          archived is settled, and there is nothing a still-running retry
+          could return that would change the answer. Waiting for the ladder
+          to finish is what left the pane on "Loading workspace…". */}
+      {archived && snapshot.data === undefined ? (
+        <main className="center">
+          <ArchivedNotice
+            onRestore={() => {
+              restore.mutate();
+            }}
+            restoring={restore.isPending}
+            error={restore.error}
+          />
+        </main>
+      ) : snapshot.isPending ? (
         <Loading />
-      ) : snapshot.error !== null ? (
+      ) : snapshot.data === undefined ? (
         <main className="center">
           <ErrorNotice
             error={snapshot.error}
@@ -605,20 +880,64 @@ export function ThreadPane(props: ThreadPaneProps) {
         </main>
       ) : (
         <main className="center">
-          <Transcript liveTurn={liveTurn} snapshot={snapshot.data} />
-          {failureText !== null && (
-            <div className="run-failure">
+          <Transcript
+            snapshot={snapshot.data}
+            items={items}
+            diagnostic={live.diagnostic}
+            scrollRef={transcript.attach}
+          />
+          {/* In normal flow between the transcript and the composer, never
+              over the transcript: an overlay would hide the newest line,
+              which is the line the reader unpinned in order to get away
+              from. It is the only route back during a fast run -- the
+              content grows faster than a reader can scroll, so scrolling
+              down by hand does not converge. */}
+          {!transcript.pinned && (
+            <div className="jump-latest">
+              <button
+                type="button"
+                className="jump-latest-btn"
+                onClick={transcript.pinToBottom}
+              >
+                ↓ Jump to latest
+              </button>
+            </div>
+          )}
+          {outcome !== null && (
+            <div className={`run-failure ${outcome.tone}`}>
               <p className="run-failure-body" role="status">
-                <span className="sdot fail" aria-hidden="true" />
-                {failureText}
+                <span
+                  className={`sdot ${outcome.tone === "failed" ? "fail" : "stop"}`}
+                  aria-hidden="true"
+                />
+                {outcome.text}
               </p>
             </div>
           )}
-          <Composer
-            projectId={projectId}
-            threadId={threadId}
-            snapshot={snapshot.data}
-          />
+          {archived ? (
+            <ArchivedNotice
+              onRestore={() => {
+                restore.mutate();
+              }}
+              restoring={restore.isPending}
+              error={restore.error}
+            />
+          ) : (
+            <Composer
+              // Keyed by thread: the composer reads its saved draft ONCE, in
+              // a `useState` initialiser, so a pane rebound to another thread
+              // kept the previous thread's text on screen AND wrote it
+              // straight over the new thread's saved draft on the next
+              // effect. Remounting re-reads the right draft and leaves the
+              // other one alone.
+              key={threadId}
+              projectId={projectId}
+              threadId={threadId}
+              snapshot={snapshot.data}
+              onSteered={onSteered}
+              onSent={transcript.pinToBottom}
+            />
+          )}
         </main>
       )}
     </section>

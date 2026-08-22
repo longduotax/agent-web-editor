@@ -1148,4 +1148,83 @@ describe("PiOpenSession preflight boundary", () => {
       expect(events).toHaveLength(accepted ? 1 : 0);
     },
   );
+
+  // G12. "Provider retry N of M." reached the browser and was dropped, so a
+  // stalled run was indistinguishable from a slow one. Fixing that in the
+  // client needed a way to tell this diagnostic apart from the adapter's
+  // routine ones — and severity could not do it, because EVERY unrecognised
+  // Pi event (which includes all tool activity) is also a `warning`.
+  describe("diagnostics carry a code, not only a severity", () => {
+    async function emitted(event: unknown): Promise<unknown[]> {
+      const context = await fixture();
+      sdk.list.mockResolvedValue([
+        descriptor(context.project, context.sessionPath),
+      ]);
+      sdk.open.mockReturnValue(openedManager());
+      let listener: ((value: unknown) => void) | undefined;
+      sdk.createAgentSession.mockResolvedValue({
+        session: {
+          subscribe: (next: (value: unknown) => void) => {
+            listener = next;
+            return () => undefined;
+          },
+          prompt: () => new Promise<void>(() => undefined),
+          steer: () => Promise.resolve(),
+          abort: () => Promise.resolve(),
+          dispose: () => undefined,
+        },
+      });
+      const opened = await new PiAgentRuntime().open(
+        context.project,
+        sessionId,
+      );
+      const events: unknown[] = [];
+      opened.subscribe((value) => events.push(value));
+      listener?.(event);
+      return events;
+    }
+
+    it("names a provider retry, and raises it above info", async () => {
+      expect(
+        await emitted({
+          type: "auto_retry_start",
+          attempt: 2,
+          maxAttempts: 5,
+        }),
+      ).toEqual([
+        {
+          type: "diagnostic",
+          // `info` had this filtered out everywhere downstream, and the run
+          // is not progressing — that is not information, it is a warning.
+          level: "warning",
+          code: "provider_retry",
+          message: "Provider retry 2 of 5.",
+        },
+      ]);
+    });
+
+    it("names the routine unsupported-event noise as such", async () => {
+      expect(await emitted({ type: "tool_execution_start" })).toEqual([
+        {
+          type: "diagnostic",
+          level: "warning",
+          code: "unsupported_event",
+          message: "Pi emitted an unsupported event.",
+        },
+      ]);
+    });
+
+    it("names an unsupported message separately from an unsupported event", async () => {
+      expect(
+        await emitted({ type: "message_end", message: { role: "nonsense" } }),
+      ).toEqual([
+        {
+          type: "diagnostic",
+          level: "warning",
+          code: "unsupported_message",
+          message: "Pi emitted an unsupported message.",
+        },
+      ]);
+    });
+  });
 });

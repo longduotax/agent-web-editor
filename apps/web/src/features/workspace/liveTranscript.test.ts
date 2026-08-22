@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
 import {
+  dropSettledSteers,
+  isReaderFacingDiagnostic,
+  isSteerEcho,
   mergeLiveTurn,
+  mergePendingSteers,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
 } from "./liveTranscript.js";
@@ -171,5 +175,139 @@ describe("mergeLiveTurn", () => {
       streaming("The directory contains .git and README.md."),
     );
     expect(merged).toHaveLength(3);
+  });
+});
+
+// G3. A steer sent mid-run vanished for the entire rest of the run: the
+// composer cleared (the app's universal "sent" signal) and then nothing
+// appeared, in the pane OR in the server's own transcript, for five minutes.
+// The cause is structural and cannot be fixed on the server:
+// `WorkspaceService.steer` hands the text to the runtime and returns the
+// existing run, and `snapshot()` assigns its transcript wholesale from Pi's
+// PERSISTED session branch -- which does not hold a steering message until
+// Pi's agent loop drains its queue at the end of the turn in flight.
+describe("pending steers", () => {
+  function user(text: string, id = `pi-${text}`): TranscriptItem {
+    return {
+      id,
+      kind: "message",
+      role: "user",
+      text,
+      timestamp: "2026-01-01T00:00:00.000Z",
+    };
+  }
+  const runId = "50000000-0000-4000-8000-000000000009";
+
+  it("echoes an unpersisted steer at the foot of the transcript", () => {
+    const merged = mergePendingSteers(
+      [user("Explore the repo"), settled("Working on it.")],
+      [{ runId, text: "Actually, stop and reply BANANA" }],
+    );
+    expect(merged).toHaveLength(3);
+    const echo = merged.at(2);
+    if (echo === undefined) throw new Error("expected an echoed steer");
+    expect(echo).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "Actually, stop and reply BANANA",
+    });
+    // After the assistant turn, not before it: that is where Pi will put the
+    // persisted message, so the handover moves nothing on screen.
+    expect(isSteerEcho(echo)).toBe(true);
+  });
+
+  it("retires an echo once Pi has persisted the same words", () => {
+    const pending = [{ runId, text: "Reply BANANA" }];
+    expect(dropSettledSteers([user("Explore the repo")], pending)).toBe(
+      pending,
+    );
+    expect(
+      dropSettledSteers(
+        [user("Explore the repo"), user("Reply BANANA")],
+        pending,
+      ),
+    ).toEqual([]);
+  });
+
+  it("retires one echo per persisted copy when the same words are sent twice", () => {
+    const twice = [
+      { runId, text: "Hurry up" },
+      { runId, text: "Hurry up" },
+    ];
+    // Only one has landed, so exactly one echo may go.
+    expect(dropSettledSteers([user("Hurry up")], twice)).toEqual([
+      { runId, text: "Hurry up" },
+    ]);
+    expect(
+      dropSettledSteers([user("Hurry up", "a"), user("Hurry up", "b")], twice),
+    ).toEqual([]);
+  });
+
+  it("does not mistake the assistant repeating the words for the steer landing", () => {
+    const pending = [{ runId, text: "Reply BANANA" }];
+    expect(dropSettledSteers([settled("Reply BANANA")], pending)).toBe(pending);
+  });
+
+  it("leaves the transcript untouched when nothing is pending", () => {
+    const transcript = [user("Explore the repo")];
+    expect(mergePendingSteers(transcript, [])).toBe(transcript);
+  });
+});
+
+// G12. Live diagnostics were received, used purely as a refetch trigger, and
+// dropped -- so a provider retry looked exactly like a run that was merely
+// slow. Severity alone cannot select which to show: the adapter turns EVERY
+// Pi event it does not recognise into a `warning`, and Pi's tool activity
+// travels that path, so "render every warning" would print
+// "Pi emitted an unsupported event." several times per tool call.
+describe("isReaderFacingDiagnostic", () => {
+  it("shows a provider retry, which is the whole point", () => {
+    expect(
+      isReaderFacingDiagnostic({
+        type: "diagnostic",
+        level: "warning",
+        code: "provider_retry",
+        message: "Provider retry 2 of 5.",
+      }),
+    ).toBe(true);
+  });
+
+  it("stays silent about the adapter's routine unsupported-event noise", () => {
+    expect(
+      isReaderFacingDiagnostic({
+        type: "diagnostic",
+        level: "warning",
+        code: "unsupported_event",
+        message: "Pi emitted an unsupported event.",
+      }),
+    ).toBe(false);
+    expect(
+      isReaderFacingDiagnostic({
+        type: "diagnostic",
+        level: "warning",
+        code: "unsupported_message",
+        message: "Pi emitted an unsupported message.",
+      }),
+    ).toBe(false);
+  });
+
+  it("shows an error even when no code names it", () => {
+    expect(
+      isReaderFacingDiagnostic({
+        type: "diagnostic",
+        level: "error",
+        message: "The session died.",
+      }),
+    ).toBe(true);
+  });
+
+  it("stays silent about info", () => {
+    expect(
+      isReaderFacingDiagnostic({
+        type: "diagnostic",
+        level: "info",
+        message: "Compacted the session.",
+      }),
+    ).toBe(false);
   });
 });

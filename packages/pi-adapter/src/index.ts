@@ -723,6 +723,7 @@ function mapEvent(event: unknown): RuntimeEvent {
     return {
       type: "diagnostic",
       level: "warning",
+      code: "unsupported_event",
       message: "Pi emitted an unsupported event.",
     };
   if (parsed.data.type === "message_end") {
@@ -735,6 +736,7 @@ function mapEvent(event: unknown): RuntimeEvent {
       ? {
           type: "diagnostic",
           level: "warning",
+          code: "unsupported_message",
           message: "Pi emitted an unsupported message.",
         }
       : { type: "transcript", item };
@@ -749,6 +751,7 @@ function mapEvent(event: unknown): RuntimeEvent {
       ? {
           type: "diagnostic",
           level: "warning",
+          code: "unsupported_message",
           message: "Pi emitted an unsupported message.",
         }
       : { type: "transcript-update", item };
@@ -761,17 +764,23 @@ function mapEvent(event: unknown): RuntimeEvent {
       return {
         type: "diagnostic",
         level: "warning",
+        code: "unsupported_event",
         message: "Pi emitted an unsupported event.",
       };
+    // `warning`, not `info`: the run is not progressing, and the reason is
+    // outside Pi. This is the one diagnostic worth interrupting a reader
+    // with, and `info` had it filtered out everywhere downstream.
     return {
       type: "diagnostic",
-      level: "info",
+      level: "warning",
+      code: "provider_retry",
       message: `Provider retry ${String(retry.data.attempt)} of ${String(retry.data.maxAttempts)}.`,
     };
   }
   return {
     type: "diagnostic",
     level: "warning",
+    code: "unsupported_event",
     message: "Pi emitted an unsupported event.",
   };
 }

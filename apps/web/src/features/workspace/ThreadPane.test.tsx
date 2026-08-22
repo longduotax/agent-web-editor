@@ -22,10 +22,12 @@ import type {
 
 const api = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
+  getWorkspace: vi.fn(),
   markViewed: vi.fn(),
   prompt: vi.fn(),
   steer: vi.fn(),
   stop: vi.fn(),
+  unarchiveThread: vi.fn(),
 }));
 
 vi.mock("../../api/client.js", async (importOriginal) => {
@@ -33,8 +35,20 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { ApiClientError } from "../../api/client.js";
 import { isTextEntryTarget } from "./keybindings.js";
 import { ThreadPane } from "./ThreadPane.js";
+
+// The pane now asks the workspace listing whether its thread is still there
+// (see the archive derivation in ThreadPane). Every test that is not about
+// archiving wants the ordinary answer: yes.
+beforeEach(() => {
+  api.getWorkspace.mockResolvedValue({
+    projects: [],
+    threads: [{ id: threadId }],
+    diagnostics: [],
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -319,6 +333,80 @@ describe("ThreadPane", () => {
     expect(transcript.scrollTop).toBe(0);
   });
 
+  // G5, the half that was actually broken. The pin itself works — measured
+  // against a real Pi run, a genuine wheel scroll held scrollTop at 14320
+  // for eight seconds while scrollHeight grew by 1,142px. What did NOT work
+  // is getting back: the pin is never re-armed by content, so once a reader
+  // had scrolled away, SENDING a message no longer jumped them to the
+  // bottom. Measured in the browser: frozen at 10104 with a 4,900px gap for
+  // 5.6 seconds after send, with the user's own message off screen.
+  it("jumps back to the bottom when the user sends, even after scrolling away", async () => {
+    const geometry = stubScrollGeometry({
+      scrollHeight: 2000,
+      clientHeight: 400,
+    });
+    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.prompt.mockResolvedValue({ run: null });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const transcript = screen.getByLabelText("Conversation");
+    await waitFor(() => {
+      expect(transcript.scrollTop).toBe(2000);
+    });
+    transcript.scrollTop = 0;
+    fireEvent.scroll(transcript);
+    expect(transcript.scrollTop).toBe(0);
+
+    geometry.set({ scrollHeight: 3000, clientHeight: 400 });
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Pi" }),
+      "next question",
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(transcript.scrollTop).toBe(3000);
+    });
+  });
+
+  // During a fast run the transcript grows faster than a reader can scroll —
+  // 40 wheel ticks of scrolling down gained no net ground against a stream in
+  // the browser — so an explicit way back is not a nicety.
+  it("offers a way back to the newest content only while the reader is away from it", async () => {
+    stubScrollGeometry({ scrollHeight: 2000, clientHeight: 400 });
+    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const transcript = screen.getByLabelText("Conversation");
+    await waitFor(() => {
+      expect(transcript.scrollTop).toBe(2000);
+    });
+    // Pinned: nothing to offer.
+    expect(
+      screen.queryByRole("button", { name: /Jump to latest/ }),
+    ).not.toBeInTheDocument();
+
+    transcript.scrollTop = 0;
+    fireEvent.scroll(transcript);
+
+    const jump = await screen.findByRole("button", { name: /Jump to latest/ });
+    // In normal flow, not laid over the transcript: an overlay would cover
+    // the newest line, which is the line they scrolled away from.
+    expect(transcript.contains(jump)).toBe(false);
+
+    await user.click(jump);
+    await waitFor(() => {
+      expect(transcript.scrollTop).toBe(2000);
+    });
+    expect(
+      screen.queryByRole("button", { name: /Jump to latest/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps the pane header usable and offers a Retry when the snapshot fails to load", async () => {
     api.getSnapshot.mockRejectedValueOnce(new Error("connection refused"));
     const user = userEvent.setup();
@@ -404,6 +492,310 @@ describe("failed run reporting", () => {
 
     await screen.findByRole("heading", { name: "Example thread" });
     expect(document.querySelector(".run-failure")).toBeNull();
+  });
+});
+
+// G1. Press Stop and the pane rendered a green dot and the word "Done" —
+// byte-for-byte the presentation of a run that completed normally — while
+// the server held `state: "interrupted", failureCode: "user_stop",
+// failureMessage: "Stopped by the user."`. The same path swallowed
+// "Interrupted because the project was removed."
+describe("stopped run reporting", () => {
+  const stoppedSnapshot: ThreadSnapshot = {
+    ...snapshot,
+    thread: { ...snapshot.thread, runState: "interrupted" },
+    currentRun: null,
+    lastRun: {
+      id: "50000000-0000-4000-8000-000000000002" as RunId,
+      threadId,
+      projectId,
+      state: "interrupted",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      endedAt: "2026-01-01T00:00:23.000Z",
+      failureCode: "user_stop",
+      failureMessage: "Stopped by the user.",
+    },
+  };
+
+  it("labels a stopped run Stopped, never Done", async () => {
+    api.getSnapshot.mockResolvedValue(stoppedSnapshot);
+    const { container } = renderPane();
+
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
+    expect(screen.queryByText("Done")).not.toBeInTheDocument();
+    // And not on the success token, which is what made the dot green.
+    const status = container.querySelector(".pane-head .status");
+    expect(status?.className).toContain("stop");
+    expect(status?.className).not.toContain("done");
+  });
+
+  it("surfaces the server's reason, in a tone that is not failure", async () => {
+    api.getSnapshot.mockResolvedValue(stoppedSnapshot);
+    const { container } = renderPane();
+
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(await screen.findByText("Stopped by the user.")).toBeVisible();
+    const notice = container.querySelector(".run-failure");
+    expect(notice?.className).toContain("stopped");
+  });
+
+  it("carries the project-removal wording through the same path", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...stoppedSnapshot,
+      lastRun: {
+        ...stoppedSnapshot.lastRun,
+        failureCode: "project_removed",
+        failureMessage: "Interrupted because the project was removed.",
+      },
+    });
+    renderPane();
+
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(
+      await screen.findByText("Interrupted because the project was removed."),
+    ).toBeVisible();
+  });
+});
+
+// G2. Archiving a thread left its open pane completely unchanged: same
+// title, green "Done" header, and a fully enabled composer. Typing into it
+// cleared the box and THEN failed with the raw internal "Thread was not found
+// in this project." plus a Retry that could never succeed.
+describe("a pane whose thread is archived", () => {
+  const listed = {
+    projects: [],
+    threads: [{ id: threadId }],
+    diagnostics: [],
+  };
+  const gone = { projects: [], threads: [], diagnostics: [] };
+
+  it("says so, and stops inviting input, as soon as the thread leaves the listing", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.getWorkspace.mockResolvedValue(listed);
+    const { queryClient, container } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(
+      screen.getByRole("textbox", { name: "Message Pi" }),
+    ).toBeInTheDocument();
+
+    // The sidebar archives the thread and invalidates ["workspace"].
+    api.getWorkspace.mockResolvedValue(gone);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    });
+
+    expect(
+      await screen.findByText(
+        "This thread is archived. Restore it to keep working.",
+      ),
+    ).toBeVisible();
+    // No composer at all: the pane cannot take a message it would only lose.
+    expect(
+      screen.queryByRole("textbox", { name: "Message Pi" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Archived")).toBeInTheDocument();
+    expect(container.querySelector(".pane-head .status")?.className).toContain(
+      "archived",
+    );
+  });
+
+  it("offers Restore, which is an action that can actually succeed", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.getWorkspace.mockResolvedValue(listed);
+    api.unarchiveThread.mockResolvedValue({ archived: false });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    api.getWorkspace.mockResolvedValue(gone);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    });
+
+    await user.click(
+      await screen.findByRole("button", { name: "Restore thread" }),
+    );
+    await waitFor(() => {
+      expect(api.unarchiveThread).toHaveBeenCalledWith(projectId, threadId);
+    });
+  });
+
+  it("recognises an archived thread the pane was opened on directly, from the server's own refusal", async () => {
+    // A layout restored from storage can point straight at an archived
+    // thread. There is no listing history to consult, so the 404 is the
+    // signal — and it must not be shown raw.
+    api.getSnapshot.mockRejectedValue(
+      new ApiClientError(
+        404,
+        "thread_not_found",
+        "Thread was not found in this project.",
+      ),
+    );
+    api.getWorkspace.mockResolvedValue(gone);
+    renderPane();
+
+    expect(
+      await screen.findByText(
+        "This thread is archived. Restore it to keep working.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Thread was not found in this project."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not call a brand-new thread archived just because the listing is stale", async () => {
+    // The thread has never appeared in the listing, and the snapshot loads
+    // fine. Without the latch this flashed "Archived" on every new thread.
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.getWorkspace.mockResolvedValue(gone);
+    renderPane();
+
+    await screen.findByRole("heading", { name: "Example thread" });
+    expect(
+      screen.getByRole("textbox", { name: "Message Pi" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+  });
+
+  it("resolves while the retry ladder is still running, instead of sitting on Loading", async () => {
+    // Observed in the running app before this: two panes restored onto a
+    // just-archived thread stayed on "Loading workspace…". The app-wide
+    // default retries twice with backoff, and for the whole of that ladder
+    // `error` is null and `isPending` is true — so the pane read the outcome
+    // off `failureReason`, which is set by the FIRST failed attempt.
+    api.getSnapshot.mockRejectedValue(
+      new ApiClientError(
+        404,
+        "thread_not_found",
+        "Thread was not found in this project.",
+      ),
+    );
+    api.getWorkspace.mockResolvedValue(gone);
+    const queryClient = new QueryClient({
+      // The application's own retry policy (main.tsx), not the usual test
+      // opt-out — the point of this test is that the ladder does not matter.
+      defaultOptions: { queries: { retry: (count: number) => count < 2 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ThreadPane
+            projectId={projectId}
+            threadId={threadId}
+            focused
+            onFocus={vi.fn()}
+            onClose={vi.fn()}
+            onSplit={vi.fn()}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText(
+        "This thread is archived. Restore it to keep working.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Loading workspace…")).not.toBeInTheDocument();
+  });
+
+  it("keeps a genuine transport failure on the ordinary retryable notice", async () => {
+    api.getSnapshot.mockRejectedValue(new Error("connection refused"));
+    api.getWorkspace.mockResolvedValue(listed);
+    renderPane();
+
+    await screen.findByText("connection refused");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+});
+
+// The composer reads its saved draft ONCE, in a `useState` initialiser, and
+// `<ThreadPane>` is rendered without a React key while its `threadId` is a
+// prop (TilingSurface). So a pane rebound to another thread kept the previous
+// thread's text on screen AND its draft-writing effect immediately copied
+// that text over the NEW thread's saved draft, destroying it.
+describe("draft restore when a pane is rebound to another thread", () => {
+  const otherThreadId = "20000000-0000-4000-8000-000000000002" as ThreadId;
+
+  function renderRebindable(bound: ThreadId) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ThreadPane
+            projectId={projectId}
+            threadId={bound}
+            focused
+            onFocus={vi.fn()}
+            onClose={vi.fn()}
+            onSplit={vi.fn()}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return {
+      rerender: (next: ThreadId) => {
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+              <ThreadPane
+                projectId={projectId}
+                threadId={next}
+                focused
+                onFocus={vi.fn()}
+                onClose={vi.fn()}
+                onSplit={vi.fn()}
+              />
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+      },
+    };
+  }
+
+  it("shows the new thread's own draft and leaves it in storage", async () => {
+    window.localStorage.setItem("pi-draft:" + threadId, "draft for A");
+    window.localStorage.setItem("pi-draft:" + otherThreadId, "draft for B");
+    api.getSnapshot.mockImplementation((_project: unknown, id: ThreadId) =>
+      Promise.resolve({
+        ...snapshot,
+        thread: {
+          ...snapshot.thread,
+          id,
+          title: id === threadId ? "Thread A" : "Thread B",
+        },
+      }),
+    );
+    api.getWorkspace.mockResolvedValue({
+      projects: [],
+      threads: [{ id: threadId }, { id: otherThreadId }],
+      diagnostics: [],
+    });
+
+    const { rerender } = renderRebindable(threadId);
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    expect(composer).toHaveValue("draft for A");
+
+    rerender(otherThreadId);
+    await screen.findByRole("heading", { name: "Thread B" });
+
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+      "draft for B",
+    );
+    // And A's draft is still A's.
+    await waitFor(() => {
+      expect(window.localStorage.getItem("pi-draft:" + otherThreadId)).toBe(
+        "draft for B",
+      );
+    });
+    expect(window.localStorage.getItem("pi-draft:" + threadId)).toBe(
+      "draft for A",
+    );
+    window.localStorage.clear();
   });
 });
 
@@ -685,6 +1077,166 @@ describe("live streaming", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  function diagnosticFrame(sequence: number, payload: unknown) {
+    return { ...frame(sequence, payload), eventType: "diagnostic" };
+  }
+
+  // G12. The pane's onMessage handled only `eventType === "transcript"`;
+  // every other type fell through to scheduleRefetch() and the payload was
+  // discarded. Among what was discarded: "Provider retry N of M." So while
+  // the provider was retrying, the app looked like a run that was merely
+  // slow — the exact ambiguity the streaming work existed to remove.
+  it("shows a provider retry instead of using it only as a refetch trigger", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(
+      socket,
+      diagnosticFrame(1, {
+        type: "diagnostic",
+        level: "warning",
+        code: "provider_retry",
+        message: "Provider retry 2 of 5.",
+      }),
+    );
+
+    expect(await screen.findByText("Provider retry 2 of 5.")).toBeVisible();
+  });
+
+  it("stays silent about the unsupported-event diagnostics Pi's tool activity produces", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(
+      socket,
+      diagnosticFrame(1, {
+        type: "diagnostic",
+        level: "warning",
+        code: "unsupported_event",
+        message: "Pi emitted an unsupported event.",
+      }),
+    );
+
+    expect(
+      screen.queryByText("Pi emitted an unsupported event."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears the retry notice as soon as content moves again", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(
+      socket,
+      diagnosticFrame(1, {
+        type: "diagnostic",
+        level: "warning",
+        code: "provider_retry",
+        message: "Provider retry 2 of 5.",
+      }),
+    );
+    await screen.findByText("Provider retry 2 of 5.");
+
+    await deliver(socket, frame(2, streamed("Back on track.")));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Provider retry 2 of 5."),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  // G3. The composer cleared — the app's universal "sent" signal — and then
+  // nothing appeared for the whole of a five-minute run, in the pane or in
+  // the server's transcript. Nothing can be fetched here: `steer` writes no
+  // transcript state and Pi does not persist a steering message until it
+  // drains its queue at the end of the turn in flight.
+  it("echoes a steer into the transcript the moment the server accepts it", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "Stop and reply BANANA");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalled();
+    });
+    // Visible without any refetch having produced it: the snapshot mock has
+    // not changed and still returns an empty transcript.
+    expect(await screen.findByText("Stop and reply BANANA")).toBeVisible();
+    expect(composer).toHaveValue("");
+  });
+
+  it("hands the echo over to server truth without duplicating the message", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "Stop and reply BANANA",
+    );
+    await user.keyboard("{Enter}");
+    await screen.findByText("Stop and reply BANANA");
+
+    // The run settles and Pi has now persisted the steer.
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcript: [
+        {
+          id: "pi-1a2b3c4d",
+          kind: "message",
+          role: "user",
+          text: "Stop and reply BANANA",
+          timestamp: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Stop and reply BANANA")).toHaveLength(1);
+    });
+  });
+
+  it("says it is steering before the keystroke, not only on the submit button", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    expect(composer).toHaveAttribute(
+      "placeholder",
+      "Steer this run — Pi picks it up mid-task…",
+    );
+    expect(screen.getByText(/Enter to steer this run/)).toBeInTheDocument();
+  });
+
+  it("goes back to send wording once no run is in flight", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    expect(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+    ).toHaveAttribute("placeholder", "Ask Pi to work in this project…");
+    expect(screen.getByText(/^Enter to send/)).toBeInTheDocument();
   });
 
   // F9. The composer was a one-way door: Escape changed neither the value nor

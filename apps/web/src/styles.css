@@ -30,6 +30,16 @@
   --wait: #2f6feb;
   --done: #1e7b34;
   --fail: #d1453b;
+  /* A settled run that did not succeed and did not fail: the user stopped
+     it, or the project went away. Deliberately NOT amber -- amber is --run,
+     the colour of a run still GOING -- and deliberately not green. --muted is
+     this design's "settled, unremarkable" grey and already clears AA (4.76:1
+     on the darkest row fill it lands on) in both themes, because it is
+     defined per theme and this only references it. */
+  --stop: var(--muted);
+  /* An archived thread. Same neutral family as --stop: archiving is not an
+     error, it is a thread put away. */
+  --archived: var(--muted);
   /* Opaque, not 50% alpha: a half-transparent ring composites down to about
      2.3:1 on white, under the 3:1 that a focus indicator needs to be seen. */
   --focus-ring: var(--accent);
@@ -614,6 +624,12 @@ a:focus-visible {
 .sdot.fail {
   background: var(--fail);
 }
+.sdot.stop {
+  background: var(--stop);
+}
+.sdot.archived {
+  background: var(--archived);
+}
 @media (prefers-reduced-motion: reduce) {
   .sdot.run {
     animation: none;
@@ -777,6 +793,12 @@ a:focus-visible {
 .pane-head .status .sdot.fail {
   background: var(--fail);
 }
+.pane-head .status .sdot.stop {
+  background: var(--stop);
+}
+.pane-head .status .sdot.archived {
+  background: var(--archived);
+}
 .pane-head .status.run {
   color: var(--run);
 }
@@ -788,6 +810,12 @@ a:focus-visible {
 }
 .pane-head .status.fail {
   color: var(--fail);
+}
+.pane-head .status.stop {
+  color: var(--stop);
+}
+.pane-head .status.archived {
+  color: var(--archived);
 }
 .pane-head .status-elapsed {
   color: var(--muted);
@@ -1466,12 +1494,21 @@ a:focus-visible {
   font-size: 0.78rem;
   overflow-wrap: anywhere;
 }
+/* A stopped run is not a failure and must not be dressed as one. Same shape,
+   same position -- so "this run did not simply finish" is read in one place
+   either way -- in the neutral tone instead of red. */
+.run-failure.stopped .run-failure-body {
+  color: var(--stop);
+}
 .run-failure .sdot {
   width: 0.5rem;
   height: 0.5rem;
   flex: none;
   border-radius: 50%;
   background: var(--fail);
+}
+.run-failure .sdot.stop {
+  background: var(--stop);
 }
 /* The composer reserves EXACTLY the same scrollbar gutter as the transcript
    (NEW-R3-2). `.transcript` is a scroll container with
@@ -1486,12 +1523,134 @@ a:focus-visible {
    flex: none and sizes to its content) and no scrollbar is ever painted, so
    the only effect is the reserved gutter. Verified in Chrome: an
    `overflow: hidden` box with `stable both-edges` reserves 2×sbw. */
+/* The live diagnostic. Sits at the foot of the transcript column, under the
+   running activity group, so a reader watching a stalled run does not have to
+   look anywhere new to learn WHY it is stalled. `.diagnostic.error` was dead
+   code until this had a producer -- the only transcript-level diagnostic the
+   server mints is a compaction notice at level `info`. */
+.diagnostic.live {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+.diagnostic.live::before {
+  content: "";
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentcolor;
+  transform: translateY(-0.1rem);
+  animation: pane-status-pulse 1.6s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .diagnostic.live::before {
+    animation: none;
+  }
+}
+
+/* The way back to the newest content once the reader has scrolled away from
+   it. IN NORMAL FLOW between the transcript and the composer -- an overlay
+   would cover the last line of the answer, which is the line the reader
+   scrolled away from in the first place. Same padding and reserved gutter as
+   the composer so it lands on the shared surface axis. */
+.jump-latest {
+  overflow: hidden;
+  flex: none;
+  padding: 0.35rem 1.25rem 0;
+  scrollbar-gutter: stable both-edges;
+}
+.jump-latest-btn {
+  display: block;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.jump-latest-btn:hover {
+  background: var(--hover);
+}
+.jump-latest-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* What stands where the composer stands when the thread is archived. It
+   occupies the composer's box exactly, so the pane does not reflow when a
+   thread is archived or restored -- and, more to the point, there is no
+   text field left to type into. */
+.archived-notice {
+  overflow: hidden;
+  flex: none;
+  padding: 0.5rem 1.25rem 1rem;
+  background: var(--page);
+  scrollbar-gutter: stable both-edges;
+}
+.archived-notice-body {
+  display: flex;
+  max-width: var(--surface-measure);
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-inline: auto;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.85rem;
+  background: var(--card);
+}
+.archived-notice-text {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.85rem;
+}
+.archived-notice-restore {
+  flex: none;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.5rem;
+  background: var(--page);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.archived-notice-restore:hover:not(:disabled) {
+  background: var(--hover);
+}
+.archived-notice-restore:disabled {
+  color: var(--muted);
+  cursor: progress;
+}
+.archived-notice-restore:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .composer {
   overflow: hidden;
   flex: none;
   padding: 0.5rem 1.25rem 1rem;
   background: var(--page);
   scrollbar-gutter: stable both-edges;
+}
+/* Steering mode, said before the keystroke rather than after it. The only
+   signal used to be the submit button's aria-label, which a sighted user
+   reading the box never sees; the placeholder and hint line now say it too,
+   and this ring makes the mode legible at a glance across a four-pane
+   layout. */
+.composer.steering .composer-input {
+  border-color: color-mix(in srgb, var(--run) 55%, var(--hairline-2));
+}
+.composer.steering .composer-actions > span:first-child {
+  color: var(--run);
 }
 .composer-input {
   width: 100%;
