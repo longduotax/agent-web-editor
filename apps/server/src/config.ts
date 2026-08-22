@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
+import type { CodexSandbox } from "@pi-web/codex-adapter";
+import type { RuntimeKind } from "@pi-web/contracts";
 import { z } from "zod";
 
 const namingModelTextSchema = z
@@ -26,6 +28,14 @@ export function parseNamingModelSelector(
   };
 }
 
+const runtimeKindTextSchema = z.enum(["pi", "codex"]);
+const codexSandboxTextSchema = z.enum([
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+]);
+const codexCommandTextSchema = z.string().min(1);
+
 export interface ServerConfig {
   host: "127.0.0.1";
   port: number;
@@ -34,6 +44,11 @@ export interface ServerConfig {
   bodyLimit: number;
   production: boolean;
   namingModel: NamingModelSelector | null;
+  /** Backend for chats created without an explicit choice (AGB-02). */
+  defaultRuntime: RuntimeKind;
+  /** File and network boundary every Codex chat runs under (AGB-06). */
+  codexSandbox: CodexSandbox;
+  codexCommand: string;
   allowedHosts: ReadonlySet<string>;
   allowedOrigins: ReadonlySet<string>;
 }
@@ -93,6 +108,23 @@ export function parsePort(raw: string | undefined, allowZero = false): number {
   return port;
 }
 
+/**
+ * Reads one optional environment value, falling back to a default and naming
+ * the variable on failure so a misconfigured machine says which line to fix.
+ */
+function parseEnum<T>(
+  schema: z.ZodType<T>,
+  value: string | undefined,
+  fallback: T,
+  variable: string,
+): T {
+  if (value === undefined) return fallback;
+  const parsed = schema.safeParse(value);
+  if (!parsed.success)
+    throw new Error(`${variable} is not a supported value: ${value}`);
+  return parsed.data;
+}
+
 export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
   const argv = options.argv ?? process.argv.slice(2);
   const environment = options.environment ?? process.env;
@@ -102,6 +134,24 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
   );
   const devPort = parsePort(environment.PI_WEB_DEV_PORT ?? "5173");
   const namingModel = parseNamingModelSelector(environment.PI_WEB_NAMING_MODEL);
+  const defaultRuntime = parseEnum(
+    runtimeKindTextSchema,
+    environment.PI_WEB_DEFAULT_RUNTIME,
+    "codex",
+    "PI_WEB_DEFAULT_RUNTIME",
+  );
+  const codexSandbox = parseEnum(
+    codexSandboxTextSchema,
+    environment.PI_WEB_CODEX_SANDBOX,
+    "workspace-write",
+    "PI_WEB_CODEX_SANDBOX",
+  );
+  const codexCommand = parseEnum(
+    codexCommandTextSchema,
+    environment.PI_WEB_CODEX_BIN,
+    "codex",
+    "PI_WEB_CODEX_BIN",
+  );
   const configuredState = environment.PI_WEB_STATE_DIR;
   const stateDirectory =
     configuredState ?? join(homedir(), ".pi", "web-workspace");
@@ -128,6 +178,9 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     bodyLimit: 1_048_576,
     production,
     namingModel,
+    defaultRuntime,
+    codexSandbox,
+    codexCommand,
     allowedHosts: hosts,
     allowedOrigins: origins,
   };

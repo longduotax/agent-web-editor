@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import type { AgentRuntime } from "@pi-web/agent-runtime";
+import type { RuntimeKind } from "@pi-web/contracts";
 import type { RawData } from "ws";
 import {
   ArchiveThreadRequestSchema,
@@ -24,6 +25,7 @@ import {
   ThreadIdSchema,
   UpdateProjectRequestSchema,
 } from "@pi-web/contracts";
+import { CodexAgentRuntime } from "@pi-web/codex-adapter";
 import { PiAgentRuntime } from "@pi-web/pi-adapter";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
@@ -39,6 +41,7 @@ import {
   createNativeDirectoryPicker,
   type DirectoryPicker,
 } from "./directory-picker/native.js";
+import { RuntimeRegistry } from "./domain/runtimes.js";
 import { WorkspaceService } from "./domain/workspace.js";
 import { previewProjectFile, listProjectFiles } from "./inspector/files.js";
 import { getGitDiff, getGitStatus } from "./inspector/git.js";
@@ -63,7 +66,13 @@ const fileQuerySchema = z.object({
 export interface BuildServerOptions {
   config?: ServerConfig;
   store?: MetadataStore;
+  /**
+   * Test seam: a single adapter registered as every backend, so existing
+   * fixtures keep working without knowing about the registry.
+   */
   runtime?: AgentRuntime;
+  /** Explicit per-backend adapters; takes precedence over `runtime`. */
+  runtimes?: Partial<Record<RuntimeKind, AgentRuntime>>;
   ptyFactory?: PtyFactory;
   directoryPicker?: DirectoryPicker;
   logger?: boolean;
@@ -269,7 +278,19 @@ export async function buildServer(
   const terminals = new ProjectTerminalManager(options.ptyFactory);
   const workspace = new WorkspaceService(
     store,
-    options.runtime ?? new PiAgentRuntime(undefined, config.namingModel),
+    new RuntimeRegistry(
+      options.runtimes ??
+        (options.runtime === undefined
+          ? {
+              pi: new PiAgentRuntime(undefined, config.namingModel),
+              codex: new CodexAgentRuntime({
+                command: config.codexCommand,
+                sandbox: config.codexSandbox,
+              }),
+            }
+          : { pi: options.runtime, codex: options.runtime }),
+      config.defaultRuntime,
+    ),
     broker,
     terminals,
   );

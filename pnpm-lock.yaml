@@ -53,6 +53,9 @@ importers:
       '@pi-web/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
+      '@pi-web/codex-adapter':
+        specifier: workspace:*
+        version: link:../../packages/codex-adapter
       '@pi-web/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

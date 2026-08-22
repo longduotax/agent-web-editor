@@ -311,6 +311,7 @@ export const SessionDescriptorSchema = z.object({
   imported: z.boolean(),
   runtime: RuntimeKindSchema,
 });
+export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>;
 export const SessionsResponseSchema = z.object({
   sessions: z.array(SessionDescriptorSchema),
   diagnostics: z.array(z.string()),

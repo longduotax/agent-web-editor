@@ -18,6 +18,7 @@ import {
   type PtyFactory,
   type PtyProcess,
 } from "../terminal/manager.js";
+import { RuntimeRegistry } from "./runtimes.js";
 import { WorkspaceService } from "./workspace.js";
 
 const roots: string[] = [];
@@ -178,7 +179,7 @@ async function fixture(terminalCleanup?: {
   const runtime = new ControlledRuntime();
   const service = new WorkspaceService(
     store,
-    runtime,
+    new RuntimeRegistry({ pi: runtime, codex: runtime }, "pi"),
     new LiveBroker(),
     terminalCleanup,
   );
@@ -255,7 +256,10 @@ describe("run coordination", () => {
     await context.service.close();
     const restarted = new WorkspaceService(
       context.store,
-      context.runtime,
+      new RuntimeRegistry(
+        { pi: context.runtime, codex: context.runtime },
+        "pi",
+      ),
       new LiveBroker(),
     );
     const recovered = await restarted.startThread(
@@ -306,7 +310,10 @@ describe("run coordination", () => {
     });
     const service = new WorkspaceService(
       store,
-      context.runtime,
+      new RuntimeRegistry(
+        { pi: context.runtime, codex: context.runtime },
+        "pi",
+      ),
       new LiveBroker(),
     );
     const listed = await service.list();

@@ -3,7 +3,6 @@ import { basename, isAbsolute } from "node:path";
 import { spawn } from "node:child_process";
 
 import type {
-  AgentRuntime,
   OpenRuntimeSession,
   TitleSuggestion,
   PromptAcceptance,
@@ -27,6 +26,7 @@ import {
   type Run,
   type RuntimeKind,
   type ThreadId,
+  type SessionDescriptor,
   type ThreadSnapshot,
   type ThreadSummary,
   type TranscriptItem,
@@ -34,6 +34,7 @@ import {
 } from "@pi-web/contracts";
 import { z } from "zod";
 
+import { RuntimeRegistry } from "./runtimes.js";
 import {
   canonicalRequestHash,
   MetadataStore,
@@ -139,13 +140,12 @@ export class WorkspaceService {
 
   public constructor(
     public readonly store: MetadataStore,
-    private readonly runtime: AgentRuntime,
+    private readonly adapters: RuntimeRegistry,
     public readonly broker: LiveBroker,
     private readonly terminalCleanup: { terminate(projectId: string): void } = {
       terminate: () => undefined,
     },
     private readonly worktreeManager = new GitWorktreeManager(),
-    private readonly runtimeKind: RuntimeKind = "pi",
   ) {
     this.executionContexts = new ThreadExecutionContextResolver(store);
   }
@@ -234,12 +234,14 @@ export class WorkspaceService {
     prompt: string,
     workspace: z.infer<typeof ThreadWorkspaceRequestSchema>,
     idempotencyKey: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ) {
     const operation = "start-thread";
     const hash = canonicalRequestHash(operation, {
       projectId,
       prompt,
       workspace,
+      runtime,
     });
     return await this.serialized(
       projectId,
@@ -262,7 +264,7 @@ export class WorkspaceService {
           projectId,
           idempotencyKey,
           requestHash: hash,
-          runtime: this.runtimeKind,
+          runtime,
           workspaceMode: workspace.mode,
           baseBranch:
             workspace.mode === "worktree" ? workspace.baseBranch : null,
@@ -282,8 +284,9 @@ export class WorkspaceService {
           let suggested: TitleSuggestion = { outcome: "unavailable" };
           try {
             suggested =
-              (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
-              suggested;
+              (await this.adapters
+                .get(creation.runtime)
+                .suggestTitle?.(projectRoot, prompt)) ?? suggested;
           } catch {
             // Naming is optional; use the deterministic product fallback.
           }
@@ -401,11 +404,13 @@ export class WorkspaceService {
             projectId,
             idempotencyKey,
           );
-          const session = await this.runtime.create(
-            executionRoot,
-            creation.title ?? fallbackTitle(prompt),
-            creation.session_creation_id ?? undefined,
-          );
+          const session = await this.adapters
+            .get(creation.runtime)
+            .create(
+              executionRoot,
+              creation.title ?? fallbackTitle(prompt),
+              creation.session_creation_id ?? undefined,
+            );
           creation = this.store.attachCreationSession(
             projectId,
             idempotencyKey,
@@ -745,11 +750,16 @@ export class WorkspaceService {
     projectId: ProjectId,
     title?: string,
     idempotencyKey?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
     if (idempotencyKey === undefined)
-      return await this.createThreadUnprotected(projectId, title);
+      return await this.createThreadUnprotected(projectId, title, runtime);
     const operation = "create-thread";
-    const hash = canonicalRequestHash(operation, { projectId, title });
+    const hash = canonicalRequestHash(operation, {
+      projectId,
+      title,
+      runtime,
+    });
     return await this.serialized(
       projectId,
       idempotencyKey,
@@ -766,9 +776,9 @@ export class WorkspaceService {
         );
         if (prior !== null)
           return this.threadDto(this.requireThread(projectId, prior));
-        const created = await this.runtime.create(
-          await this.requireProjectRoot(projectId),
-        );
+        const created = await this.adapters
+          .get(runtime)
+          .create(await this.requireProjectRoot(projectId));
         const receipt = this.store.withReceipt(
           projectId,
           idempotencyKey,
@@ -778,7 +788,7 @@ export class WorkspaceService {
           () =>
             this.store.createThread(
               projectId,
-              this.runtimeKind,
+              runtime,
               created.sessionId,
               title,
             ).id,
@@ -791,17 +801,13 @@ export class WorkspaceService {
   private async createThreadUnprotected(
     projectId: ProjectId,
     title?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
-    const created = await this.runtime.create(
-      await this.requireProjectRoot(projectId),
-    );
+    const created = await this.adapters
+      .get(runtime)
+      .create(await this.requireProjectRoot(projectId));
     return this.threadDto(
-      this.store.createThread(
-        projectId,
-        this.runtimeKind,
-        created.sessionId,
-        title,
-      ),
+      this.store.createThread(projectId, runtime, created.sessionId, title),
     );
   }
 
@@ -810,6 +816,7 @@ export class WorkspaceService {
     sessionId: string,
     title?: string,
     idempotencyKey?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
     if (idempotencyKey !== undefined) {
       const operation = "import-thread";
@@ -817,6 +824,7 @@ export class WorkspaceService {
         projectId,
         sessionId,
         title,
+        runtime,
       });
       return await this.serialized(
         projectId,
@@ -834,9 +842,9 @@ export class WorkspaceService {
           );
           if (prior !== null)
             return this.threadDto(this.requireThread(projectId, prior));
-          const sessions = await this.runtime.discover(
-            await this.requireProjectRoot(projectId),
-          );
+          const sessions = await this.adapters
+            .get(runtime)
+            .discover(await this.requireProjectRoot(projectId));
           const descriptor = sessions.sessions.find(
             (session) => session.id === sessionId,
           );
@@ -850,7 +858,7 @@ export class WorkspaceService {
             () =>
               this.store.createThread(
                 projectId,
-                this.runtimeKind,
+                runtime,
                 descriptor.id,
                 title ??
                   descriptor.name ??
@@ -863,9 +871,9 @@ export class WorkspaceService {
         },
       );
     }
-    const sessions = await this.runtime.discover(
-      await this.requireProjectRoot(projectId),
-    );
+    const sessions = await this.adapters
+      .get(runtime)
+      .discover(await this.requireProjectRoot(projectId));
     const descriptor = sessions.sessions.find(
       (session) => session.id === sessionId,
     );
@@ -873,7 +881,7 @@ export class WorkspaceService {
     return this.threadDto(
       this.store.createThread(
         projectId,
-        this.runtimeKind,
+        runtime,
         descriptor.id,
         title ??
           descriptor.name ??
@@ -883,22 +891,40 @@ export class WorkspaceService {
   }
 
   public async discoverSessions(projectId: ProjectId) {
-    const result = await this.runtime.discover(
-      await this.requireProjectRoot(projectId),
-    );
+    const projectRoot = await this.requireProjectRoot(projectId);
+    // A session identifier is only unique within its backend, so "already
+    // imported" is keyed by both (AGB-01, AGB-09).
     const imported = new Set(
       this.store
         .listThreads(projectId, { includeArchived: true })
-        .map((thread) => thread.runtime_session_id),
+        .map((thread) => `${thread.runtime}:${thread.runtime_session_id}`),
     );
-    return {
-      sessions: result.sessions.map((session) => ({
-        ...session,
-        runtime: this.runtimeKind,
-        imported: imported.has(session.id),
-      })),
-      diagnostics: result.diagnostics,
-    };
+    const sessions: (SessionDescriptor & {
+      runtime: RuntimeKind;
+      imported: boolean;
+    })[] = [];
+    const diagnostics: string[] = [];
+    // Every installed backend is listed, each labelled with the one that owns
+    // it. One backend being unusable must not hide the others.
+    for (const kind of this.adapters.kinds()) {
+      try {
+        const result = await this.adapters.get(kind).discover(projectRoot);
+        for (const session of result.sessions)
+          sessions.push({
+            ...session,
+            runtime: kind,
+            imported: imported.has(`${kind}:${session.id}`),
+          });
+        diagnostics.push(...result.diagnostics);
+      } catch (error) {
+        diagnostics.push(
+          `${kind === "codex" ? "Codex" : "Pi"} sessions could not be listed: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
+    }
+    return { sessions, diagnostics };
   }
 
   public async archiveThread(
@@ -1069,10 +1095,9 @@ export class WorkspaceService {
     const current = this.runtimes.get(thread.id);
     if (current !== undefined) return current.runtime;
     const context = await this.executionContexts.resolve(thread);
-    const runtime = await this.runtime.open(
-      context.executionRoot,
-      thread.runtime_session_id,
-    );
+    const runtime = await this.adapters
+      .get(thread.runtime)
+      .open(context.executionRoot, thread.runtime_session_id);
     const unsubscribe = runtime.subscribe((event) => {
       this.onRuntimeEvent(thread, event);
     });

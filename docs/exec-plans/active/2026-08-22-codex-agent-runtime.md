@@ -233,7 +233,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       `expectedTurnId`; `stop` → `turn/interrupt`. Approval `ServerRequest`s are
       answered `denied` immediately and reported as a diagnostic.
 
-- [ ] **Task 8 — Server runtime registry and config.** `parseConfig` gains
+- [x] **Task 8 — Server runtime registry and config.** `parseConfig` gains
       `defaultRuntime` (`PI_WEB_DEFAULT_RUNTIME`, default `codex`), `codexSandbox`
       (`PI_WEB_CODEX_SANDBOX`, default `workspace-write`), and `codexBin`
       (`PI_WEB_CODEX_BIN`). `BuildServerOptions` gains a `runtimes` map while
@@ -353,6 +353,10 @@ checkboxes above for the current position.
 - 2026-08-22: Tasks 5, 6, and 7 complete. `CodexAgentRuntime` and
   `CodexOpenSession` implement the full `AgentRuntime` surface against a
   scripted app-server, 19 tests. 54 adapter tests green.
+- 2026-08-22: Task 8 complete. `RuntimeRegistry` resolves a thread's
+  recorded backend to its adapter; `parseConfig` gains
+  `PI_WEB_DEFAULT_RUNTIME` (default `codex`), `PI_WEB_CODEX_SANDBOX`
+  (default `workspace-write`), and `PI_WEB_CODEX_BIN`. 428 unit tests green.
 
 ## Discoveries and blockers
 
