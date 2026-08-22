@@ -83,6 +83,20 @@ project may hold the same underlying agent session identifier only if they run
 on different backends; within a single backend, a session still belongs to at
 most one chat in a project.
 
+**Continuing a chat never offers a backend choice.** No surface that resumes an
+existing conversation — the chat composer, a reopened pane, a restored archived
+chat, or a reconnect after a server restart — presents a backend or provider
+control. The choice exists at creation and nowhere else.
+
+**A chat derived from another chat inherits that chat's backend.** Where a
+future start state creates a chat from an existing one (a fork of a running
+chat, per the governing design), the derived chat runs on its parent's backend,
+and the backend control is fixed rather than offered. This is not a policy
+preference: a chat is continued by resuming the backend's own native session,
+and no transcript, reasoning, or tool history transfers between agents. A
+switch could only be faked by replaying a foreign transcript as text or by
+silently starting empty, and both are worse than declining.
+
 ### AGB-02 — Codex is the default backend for new chats
 
 When a user starts a new chat without expressing a preference, it is a **Codex**
@@ -105,6 +119,9 @@ chat says so for that chat.
 
 If a backend is unavailable on the machine (AGB-08), it is still listed but is
 not selectable, and the reason is stated where the user makes the choice.
+
+When the chosen start state derives the chat from an existing one, the control
+shows the inherited backend and is not editable (AGB-01).
 
 ### AGB-04 — A chat's backend is visible wherever the chat is
 
@@ -187,22 +204,25 @@ A session already imported into a chat in that project is not offered twice.
    opens, prompts, and streams exactly as before. (AGB-01)
 4. A chat's backend is unchanged after rename, archive, restore, pane close and
    reopen, worktree provisioning, and server restart. (AGB-01)
-5. The backend is legible as text on the pane header and in the thread list for
+5. No surface for continuing an existing chat exposes a backend or provider
+   control: the chat composer, a reopened pane, and a restored archived chat all
+   present none. (AGB-01)
+6. The backend is legible as text on the pane header and in the thread list for
    both a Pi and a Codex chat. (AGB-04)
-6. A Codex chat completes a prompt, streams assistant text, shell commands and
+7. A Codex chat completes a prompt, streams assistant text, shell commands and
    file edits into the shared transcript, can be steered mid-run, can be
    stopped, and reports a settled run state — with no Codex-specific UI.
    (AGB-05)
-7. A Codex chat asked to write outside its execution root, or to reach the
+8. A Codex chat asked to write outside its execution root, or to reach the
    network under the default boundary, produces a visible failed command in the
    transcript and a settled run. It does not hang. (AGB-06, AGB-07)
-8. With the Codex program absent, creating a Codex chat fails with a message
+9. With the Codex program absent, creating a Codex chat fails with a message
    naming Codex as the cause, leaves no thread behind, and leaves Pi chat
    creation working. (AGB-08)
-9. Opening an existing Codex chat with the Codex program absent shows the stored
-   transcript and an unavailable backend rather than an empty or errored chat.
-   (AGB-08)
-10. Session discovery for a folder that has both Pi and Codex history lists both,
+10. Opening an existing Codex chat with the Codex program absent shows the stored
+    transcript and an unavailable backend rather than an empty or errored chat.
+    (AGB-08)
+11. Session discovery for a folder that has both Pi and Codex history lists both,
     labelled, and importing one produces a chat on the matching backend. (AGB-09)
 
 ### Non-goals

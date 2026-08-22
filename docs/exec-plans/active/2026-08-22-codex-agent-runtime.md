@@ -47,17 +47,17 @@ restated here.
 
 ## Requirement traceability
 
-| Spec requirement                                                                                                           | Technical consequence                                                                                                                                                                                                                                                        | Verification                                                                         |
-| -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [AGB-01](../../product-specs/agent-backends.md#agb-01--every-chat-has-one-durable-immutable-backend)                       | `threads.runtime` and `thread_creation_operations.runtime` columns; migration `0008` backfills existing rows to `'pi'`; the `(project_id, runtime_session_id)` unique index becomes `(project_id, runtime, runtime_session_id)`; `getThreadByRuntimeSession` takes a runtime | Task 2 store tests including a 0007→0008 upgrade-with-existing-rows test             |
-| [AGB-02](../../product-specs/agent-backends.md#agb-02--codex-is-the-default-backend-for-new-chats)                         | `PI_WEB_DEFAULT_RUNTIME` config value defaulting to `codex`; the server resolves an omitted request `runtime` to it                                                                                                                                                          | Task 8 config tests; Task 9 route test asserting an omitted `runtime` yields `codex` |
-| [AGB-03](../../product-specs/agent-backends.md#agb-03--the-user-chooses-the-backend-when-starting-a-chat)                  | Optional `runtime` on `StartThreadRequest`/`CreateThreadRequest`; a backend `<select>` in `NewChatPane`, preselected to the server-reported default, non-sticky, disabled options for unavailable backends                                                                   | Task 10 Vitest + Task 11 Playwright                                                  |
-| [AGB-04](../../product-specs/agent-backends.md#agb-04--a-chats-backend-is-visible-wherever-the-chat-is)                    | `runtime` on `ThreadSummary`; a textual badge in `PaneHeader` and the thread/Archived lists                                                                                                                                                                                  | Task 10 Vitest with an accessible-name assertion                                     |
-| [AGB-05](../../product-specs/agent-backends.md#agb-05--a-codex-chat-behaves-like-any-other-chat)                           | Codex events map onto the existing `RuntimeEvent`/`TranscriptItem` union; no new contract kinds                                                                                                                                                                              | Tasks 4, 6, 7 adapter tests; Task 11 end-to-end parity spec                          |
-| [AGB-06](../../product-specs/agent-backends.md#agb-06--a-codex-chats-file-and-network-boundary-is-explicit-and-honest)     | `PI_WEB_CODEX_SANDBOX` defaulting to `workspace-write`; `cwd` pinned to the thread's execution root; sandbox refusals map to a failed `tool` transcript item and a settled run                                                                                               | Task 5/7 adapter tests; Task 12 README and `.env.example`                            |
-| [AGB-07](../../product-specs/agent-backends.md#agb-07--a-codex-chat-never-waits-for-an-approval-the-workspace-cannot-give) | `approvalPolicy: "never"` pinned, non-configurable; any inbound approval `ServerRequest` is answered `denied` and surfaced as a diagnostic rather than left pending                                                                                                          | Task 7 test driving an approval request through the fake transport                   |
-| [AGB-08](../../product-specs/agent-backends.md#agb-08--a-missing-or-unusable-codex-installation-degrades-honestly)         | Spawn/handshake failure raises `RuntimeFailure("unavailable")`; creation is transactional so no thread row survives; `runtimeAvailable` on `ThreadSummary` already carries the open-time signal                                                                              | Task 3 supervisor tests; Task 9 route test asserting no orphan thread                |
-| [AGB-09](../../product-specs/agent-backends.md#agb-09--existing-codex-sessions-in-a-folder-can-be-imported)                | `discover` per backend via `thread/list` filtered by `cwd`; `runtime` added to `ImportThreadRequest` and the session descriptor listing                                                                                                                                      | Task 5 adapter tests; Task 9 route test                                              |
+| Spec requirement                                                                                                           | Technical consequence                                                                                                                                                                                                                                                        | Verification                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [AGB-01](../../product-specs/agent-backends.md#agb-01--every-chat-has-one-durable-immutable-backend)                       | `threads.runtime` and `thread_creation_operations.runtime` columns; migration `0008` backfills existing rows to `'pi'`; the `(project_id, runtime_session_id)` unique index becomes `(project_id, runtime, runtime_session_id)`; `getThreadByRuntimeSession` takes a runtime | Task 2 store tests including a 0007→0008 upgrade-with-existing-rows test, plus a Task 10 test asserting the thread composer renders no backend control |
+| [AGB-02](../../product-specs/agent-backends.md#agb-02--codex-is-the-default-backend-for-new-chats)                         | `PI_WEB_DEFAULT_RUNTIME` config value defaulting to `codex`; the server resolves an omitted request `runtime` to it                                                                                                                                                          | Task 8 config tests; Task 9 route test asserting an omitted `runtime` yields `codex`                                                                   |
+| [AGB-03](../../product-specs/agent-backends.md#agb-03--the-user-chooses-the-backend-when-starting-a-chat)                  | Optional `runtime` on `StartThreadRequest`/`CreateThreadRequest`; a backend `<select>` in `NewChatPane`, preselected to the server-reported default, non-sticky, disabled options for unavailable backends                                                                   | Task 10 Vitest + Task 11 Playwright                                                                                                                    |
+| [AGB-04](../../product-specs/agent-backends.md#agb-04--a-chats-backend-is-visible-wherever-the-chat-is)                    | `runtime` on `ThreadSummary`; a textual badge in `PaneHeader` and the thread/Archived lists                                                                                                                                                                                  | Task 10 Vitest with an accessible-name assertion                                                                                                       |
+| [AGB-05](../../product-specs/agent-backends.md#agb-05--a-codex-chat-behaves-like-any-other-chat)                           | Codex events map onto the existing `RuntimeEvent`/`TranscriptItem` union; no new contract kinds                                                                                                                                                                              | Tasks 4, 6, 7 adapter tests; Task 11 end-to-end parity spec                                                                                            |
+| [AGB-06](../../product-specs/agent-backends.md#agb-06--a-codex-chats-file-and-network-boundary-is-explicit-and-honest)     | `PI_WEB_CODEX_SANDBOX` defaulting to `workspace-write`; `cwd` pinned to the thread's execution root; sandbox refusals map to a failed `tool` transcript item and a settled run                                                                                               | Task 5/7 adapter tests; Task 12 README and `.env.example`                                                                                              |
+| [AGB-07](../../product-specs/agent-backends.md#agb-07--a-codex-chat-never-waits-for-an-approval-the-workspace-cannot-give) | `approvalPolicy: "never"` pinned, non-configurable; any inbound approval `ServerRequest` is answered `denied` and surfaced as a diagnostic rather than left pending                                                                                                          | Task 7 test driving an approval request through the fake transport                                                                                     |
+| [AGB-08](../../product-specs/agent-backends.md#agb-08--a-missing-or-unusable-codex-installation-degrades-honestly)         | Spawn/handshake failure raises `RuntimeFailure("unavailable")`; creation is transactional so no thread row survives; `runtimeAvailable` on `ThreadSummary` already carries the open-time signal                                                                              | Task 3 supervisor tests; Task 9 route test asserting no orphan thread                                                                                  |
+| [AGB-09](../../product-specs/agent-backends.md#agb-09--existing-codex-sessions-in-a-folder-can-be-imported)                | `discover` per backend via `thread/list` filtered by `cwd`; `runtime` added to `ImportThreadRequest` and the session descriptor listing                                                                                                                                      | Task 5 adapter tests; Task 9 route test                                                                                                                |
 
 ## Current behavior and affected invariants
 
@@ -121,7 +121,14 @@ any change to run orchestration or the lease.
    matching `pi-adapter`'s existing parse-at-the-boundary posture, and treats
    the generated output as a development-time reference only. Reconsider if the
    message set grows past roughly a dozen.
-3. **`suggestTitle` for Codex.** Left unimplemented in v1. The interface member
+3. **Fork inherits, never chooses.** The governing design's later
+   "fork of a running chat" start state is created through the _same_ new-chat
+   composer this plan adds a backend picker to. A fork resumes the parent's
+   native agent session, so it cannot cross backends. When that phase lands, the
+   picker must render the inherited backend read-only rather than offered. No
+   code in this plan implements forking; this is recorded so the phase that does
+   inherits the constraint instead of rediscovering it as a bug.
+4. **`suggestTitle` for Codex.** Left unimplemented in v1. The interface member
    is optional and `workspace.ts:281` already falls back to the deterministic
    product title, so a Codex chat gets the fallback name. Not a spec
    requirement; noted so it is a deliberate gap rather than an oversight.
@@ -237,13 +244,18 @@ the failing test, watch it fail, implement, watch it pass, commit.
       it before any session is created, so recovery reopens on the right backend;
       `ThreadSummary` DTOs report it; session discovery reports per-backend
       descriptors. A creation failure on an unusable backend must leave **no** thread
-      row (AGB-08).
+      row (AGB-08). `runtime` is **write-once**: no route, store method, or DTO path
+      may update it on an existing thread, and the store exposes no setter for it
+      (AGB-01). Add a store test asserting no path mutates a persisted `runtime`.
 
 - [ ] **Task 10 — Composer choice and backend badge.** A backend `<select>` in
       `NewChatPane` beside the existing workspace-mode controls, preselected to the
       server-reported default and non-sticky; unavailable backends rendered disabled
       with a reason. A textual badge in `PaneHeader` and the thread/Archived lists.
-      Tests assert accessible names, not colour.
+      Tests assert accessible names, not colour. Also assert the **absence** of any
+      backend or provider control in `ThreadPane`'s composer (AGB-01) — a
+      regression here is silent, so it needs a standing test rather than review
+      attention.
 
 - [ ] **Task 11 — End-to-end coverage.** A Playwright spec creating a Codex chat
       and a Pi chat in one project against the fake-runtime harness, asserting the
@@ -332,6 +344,12 @@ No blockers.
   protocol. Recorded three technical decisions: one shared supervised
   app-server child; hand-written Zod schemas rather than build-time generated
   types; no `suggestTitle` in v1.
+- 2026-08-22: Clarified, at the user's prompting and before any approval, that
+  continuing a chat offers no backend or provider control and that a derived
+  chat inherits its parent's backend. AGB-01 already made the backend immutable;
+  this makes the continue and fork surfaces explicit and adds standing tests, so
+  the constraint is enforced rather than assumed. No change to scope or
+  approach; the plan remains version 1.
 
 ## Final outcomes
 
