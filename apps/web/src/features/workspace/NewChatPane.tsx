@@ -1,13 +1,18 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import type { ProjectId, RuntimeKind, ThreadId } from "@pi-web/contracts";
 
 import {
   commandId,
+  getAgentBackends,
   getWorkspace,
   getWorkspacePreflight,
   startThread,
 } from "../../api/client.js";
+import {
+  readBackendChoice,
+  resolveDefaultBackend,
+} from "../settings/backendPreferences.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import {
   newChatDraftKey,
@@ -29,6 +34,11 @@ export interface NewChatPaneProps {
   onThreadStarted(threadId: ThreadId): void;
 }
 
+const AGENT_OPTIONS: readonly { value: RuntimeKind; label: string }[] = [
+  { value: "codex", label: "Codex" },
+  { value: "pi", label: "Pi" },
+];
+
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
   const draftKey = newChatDraftKey(projectId, paneId);
@@ -47,6 +57,18 @@ export function NewChatPane(props: NewChatPaneProps) {
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
+  const backends = useQuery({
+    queryKey: ["agent-backends"],
+    queryFn: getAgentBackends,
+  });
+  // Non-sticky by design: the composer opens on the resolved default every
+  // time, so an incidental one-off pick never becomes a standing choice.
+  const resolvedDefault = resolveDefaultBackend(
+    readBackendChoice(),
+    backends.data?.defaultRuntime,
+  );
+  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
+  const selectedRuntime = runtime ?? resolvedDefault;
   const [text, setText] = useState(() => readDraft(draftKey));
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   useEffect(() => {
@@ -81,6 +103,7 @@ export function NewChatPane(props: NewChatPaneProps) {
                 : {}),
             },
         creationKey,
+        selectedRuntime,
       ),
     onSuccess: async (result) => {
       removeDraft(draftKey);
@@ -115,6 +138,7 @@ export function NewChatPane(props: NewChatPaneProps) {
         elapsed={null}
         title="New chat"
         projectLabel={project?.displayName ?? ""}
+        runtime={null}
         focused={focused}
         detail={
           <span className="pane-meta">
@@ -131,6 +155,35 @@ export function NewChatPane(props: NewChatPaneProps) {
       <main className="center new-chat">
         <form className="new-chat-card" onSubmit={submit}>
           <div className="new-chat-toolbar" aria-label="New chat configuration">
+            <label>
+              <span className="sr-only">Agent</span>
+              <select
+                aria-label="Agent"
+                value={selectedRuntime}
+                onChange={(event) => {
+                  setRuntime(event.target.value === "pi" ? "pi" : "codex");
+                  setCreationKey(commandId());
+                }}
+              >
+                {AGENT_OPTIONS.map((option) => {
+                  const backend = backends.data?.backends.find(
+                    (entry) => entry.kind === option.value,
+                  );
+                  const unusable = backend !== undefined && !backend.available;
+                  return (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={unusable}
+                    >
+                      {unusable
+                        ? `${option.label} — ${backend.reason ?? "unavailable"}`
+                        : option.label}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
             <label>
               <span className="sr-only">Execution location</span>
               <select

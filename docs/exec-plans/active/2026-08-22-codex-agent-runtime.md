@@ -249,7 +249,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       may update it on an existing thread, and the store exposes no setter for it
       (AGB-01). Add a store test asserting no path mutates a persisted `runtime`.
 
-- [ ] **Task 10 — Composer choice and backend badge.** A backend `<select>` in
+- [x] **Task 10 — Composer choice and backend badge.** A backend `<select>` in
       `NewChatPane` beside the existing workspace-mode controls, preselected to the
       server-reported default and non-sticky; unavailable backends rendered disabled
       with a reason. A textual badge in `PaneHeader` and the thread/Archived lists.
@@ -258,7 +258,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       regression here is silent, so it needs a standing test rather than review
       attention.
 
-- [ ] **Task 11 — Device backend preference and its Settings control.** Add
+- [x] **Task 11 — Device backend preference and its Settings control.** Add
       `apps/web/src/features/settings/backendPreferences.ts` following
       `themePreferences.ts` **exactly** — same storage guard, JSON guard, `safeParse`,
       and remove-on-malformed behaviour — with
@@ -361,6 +361,9 @@ checkboxes above for the current position.
   `GET /api/agent-backends` reports the machine default plus per-backend
   availability, probed through an optional `probe()` the Codex adapter
   implements and in-process adapters do not need. 433 unit tests green.
+- 2026-08-22: Tasks 10 and 11 complete. Composer picker, pane badge,
+  device preference store, and the Settings "Default agent" control.
+  453 unit tests green.
 
 ## Discoveries and blockers
 
@@ -411,6 +414,12 @@ Discovered while implementing Tasks 1 and 2:
   A Codex chat therefore shows reasoning and final answers in the same visual
   register, which Codex's own UI distinguishes. Accepted for v1; a distinct
   transcript kind would be a contract change well beyond this plan.
+- **The pane's execution notice was Pi-specific and would have lied about
+  Codex.** It read "Pi tools run with your user permissions, without
+  application approval or an OS sandbox" on every pane. A Codex chat under
+  `workspace-write` is confined, so the notice now branches on the thread's
+  backend and a standing test asserts a Codex pane does not show Pi's
+  wording. Not called out in the plan; found while adding the badge.
 - **Codex timestamps are Unix milliseconds, not ISO strings**, so every mapped
   timestamp is converted and an unparseable one becomes `null` rather than
   failing the item.

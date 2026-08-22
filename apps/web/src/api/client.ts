@@ -1,4 +1,5 @@
 import {
+  AgentBackendsResponseSchema,
   ApiErrorSchema,
   ArchivedThreadsResponseSchema,
   ArchiveThreadResponseSchema,
@@ -19,6 +20,7 @@ import {
   type ProjectId,
   type RunId,
   type ThreadId,
+  type RuntimeKind,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -121,15 +123,24 @@ export async function startThread(
         sourceStateToken?: string;
       },
   idempotencyKey: string,
+  runtime?: RuntimeKind,
 ) {
   return await request(
     `/api/projects/${projectId}/threads/start`,
     StartThreadResponseSchema,
     {
       method: "POST",
-      body: body({ prompt, workspace, idempotencyKey }),
+      body: body({
+        prompt,
+        workspace,
+        idempotencyKey,
+        ...(runtime === undefined ? {} : { runtime }),
+      }),
     },
   );
+}
+export async function getAgentBackends() {
+  return await request("/api/agent-backends", AgentBackendsResponseSchema);
 }
 export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
   return await request(

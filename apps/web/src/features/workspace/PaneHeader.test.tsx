@@ -45,6 +45,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="fix the merge conflict"
         projectLabel="valai"
+        runtime="pi"
         focused
         onSplit={onSplit}
         onClose={onClose}
@@ -82,6 +83,7 @@ describe("PaneHeader", () => {
         elapsed="2m 14s"
         title="Refactor the auth module"
         projectLabel="pi-web-app"
+        runtime="pi"
         focused={false}
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -99,6 +101,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="New chat"
         projectLabel="valai"
+        runtime="pi"
         focused={false}
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -152,6 +155,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="Investigate flaky test"
         projectLabel="valai"
+        runtime="pi"
         focused
         detail={<span className="pane-meta">⌂ Local checkout</span>}
         detailTitle="⌂ Local checkout · Direct execution: Pi tools run with your user permissions."
@@ -174,6 +178,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="Investigate flaky test"
         projectLabel="valai"
+        runtime="pi"
         focused
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -182,5 +187,40 @@ describe("PaneHeader", () => {
 
     const results = await axe.run(container);
     expect(results.violations).toEqual([]);
+  });
+});
+
+describe("PaneHeader agent badge", () => {
+  it("names the backend as text, not colour alone", () => {
+    render(
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="Fix the parser"
+        projectLabel="pi-web-app"
+        runtime="codex"
+        focused={false}
+        onSplit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+  });
+
+  it("shows no badge on a pane that has no chat yet", () => {
+    render(
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="New chat"
+        projectLabel="pi-web-app"
+        runtime={null}
+        focused={false}
+        onSplit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pi")).not.toBeInTheDocument();
   });
 });

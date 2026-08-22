@@ -721,6 +721,17 @@ a:focus-visible {
   background: var(--hover);
   font-size: 0.72rem;
 }
+/* Which agent runs this chat. Text, never colour alone, and visually quieter
+   than the title so it reads as provenance rather than status. */
+.pane-head .agent-badge {
+  flex: none;
+  padding: 0.125rem 0.44rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+}
 .pane-head .acts {
   display: flex;
   flex: none;
@@ -1813,6 +1824,12 @@ a:focus-visible {
   margin: 0 0 1rem;
   color: var(--muted);
   font-size: 0.82rem;
+}
+/* Why a backend cannot be chosen, shown beside the option rather than hidden
+   behind a disabled control with no explanation. */
+.settings-option-note {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 .shortcut-list {
   display: grid;

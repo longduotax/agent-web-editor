@@ -379,16 +379,26 @@ export function ThreadPane(props: ThreadPaneProps) {
         elapsed={elapsed}
         title={snapshot.data?.thread.title ?? "Thread"}
         projectLabel={snapshot.data?.project.displayName ?? ""}
+        runtime={snapshot.data?.thread.runtime ?? null}
         focused={focused}
         detailTitle={detailTitle}
         detail={
           <>
             <span className="pane-meta">{workspaceLabel}</span>
-            <span className="trust-note">
-              <span className="trust-dot" aria-hidden="true" />
-              <strong>Direct execution:</strong> Pi tools run with your user
-              permissions, without application approval or an OS sandbox.
-            </span>
+            {snapshot.data?.thread.runtime === "codex" ? (
+              <span className="trust-note">
+                <span className="trust-dot" aria-hidden="true" />
+                <strong>Confined execution:</strong> Codex runs without
+                application approval, inside the boundary this server was
+                configured with.
+              </span>
+            ) : (
+              <span className="trust-note">
+                <span className="trust-dot" aria-hidden="true" />
+                <strong>Direct execution:</strong> Pi tools run with your user
+                permissions, without application approval or an OS sandbox.
+              </span>
+            )}
           </>
         }
         onSplit={() => {

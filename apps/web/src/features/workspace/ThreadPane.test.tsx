@@ -406,3 +406,42 @@ describe("failed run reporting", () => {
     expect(document.querySelector(".run-failure")).toBeNull();
   });
 });
+
+describe("a continued chat exposes no backend control", () => {
+  // AGB-01: a chat's backend is immutable, and no resuming surface offers to
+  // change it. A regression here would be silent, so it is asserted rather
+  // than left to review.
+  it("offers no agent or provider control anywhere in the pane", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByText("Example thread");
+
+    expect(
+      screen.queryByRole("combobox", { name: /agent/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("radiogroup", { name: /agent/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: /provider|model|backend/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows which agent runs the chat, without offering to change it", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByText("Example thread");
+    expect(screen.getByText("Pi")).toBeInTheDocument();
+  });
+
+  it("describes Codex execution as confined rather than as Pi's", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtime: "codex" as const },
+    });
+    renderPane();
+    await screen.findByText("Example thread");
+    expect(screen.getByText(/Confined execution/)).toBeInTheDocument();
+    expect(screen.queryByText(/Direct execution/)).not.toBeInTheDocument();
+  });
+});
