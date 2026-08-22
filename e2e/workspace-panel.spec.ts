@@ -1286,6 +1286,53 @@ test("panel drag: releasing outside every drop target changes nothing", async ({
   expect(await page.evaluate(panelLayout)).toEqual(before);
 });
 
+// G3. A fast flick used to drop the whole gesture on the floor.
+//
+// `onTabPointerMove` is bound to the tab, and the pointer was captured only
+// INSIDE `startDrag` — after a first `pointermove` that both crossed the 4px
+// threshold and was still delivered to the tab. A tab is 78 x 43px, so a
+// pointer leaving its box in one event (a downward yank at about 1300px/s)
+// delivered no move to it at all and nothing happened: no announcement, no
+// drop zones, no layout change. Measured with real input, the same start and
+// end, differing only in step size: 47 x 28px landed on `panel-tabpanel` and
+// did nothing; 8px steps armed the drag and dropped.
+test("panel drag: a single large first move arms the drag", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  expect((await page.evaluate(panelLayout)).groups).toHaveLength(1);
+
+  const only = await pointsOfGroup(page, 0);
+  const tab = page.getByRole("tab", { name: "Changes" }).first();
+  const box = await tab.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  // The measurement the reporter took: the tab really is small enough for
+  // one event to leave it.
+  expect(box.width).toBeLessThan(2 * 47);
+  expect(box.height).toBeLessThan(2 * 28);
+
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // ONE move, off the tab, with no intermediate steps.
+  await page.mouse.move(
+    box.x + box.width / 2 + 47,
+    box.y + box.height / 2 + 28,
+  );
+
+  expect((await page.evaluate(panelLayout)).dropZones).toBe(1);
+  await expect(page.getByRole("status")).toContainText("Dragging Changes");
+
+  await page.mouse.move(only.right.x, only.right.y);
+  await page.mouse.up();
+
+  const layout = await page.evaluate(panelLayout);
+  expect(layout.groups).toHaveLength(2);
+  expect(layout.rowSplits).toBe(1);
+});
+
 // G2. The ghost is the whole of the drag's pick-up feedback, and it was
 // drawn off screen every time.
 //

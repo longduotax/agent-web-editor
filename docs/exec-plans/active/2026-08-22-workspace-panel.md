@@ -1550,6 +1550,26 @@ case asserting either would pass in both directions.
    within its own size of an edge: clamping needs the ghost's measured size
    on every pointer move, and that is the per-move layout WSP-09 forbids.
 
+3. **A fast flick dropped the entire gesture (G3).** `onTabPointerMove` is
+   bound to the tab, and `setPointerCapture` was taken **inside** `startDrag`
+   — that is, only after a first `pointermove` that both crossed the 4px
+   threshold and was still delivered to the tab. A tab is 78 x 43px, about
+   21px from centre to edge, so a downward yank at roughly 1300px/s leaves
+   its box in one event and no move is delivered at all. Reproduced at the
+   reported measurement, same start and end, differing only in step size: a
+   single 47 x 28px move mounted no drop zones, announced nothing, and
+   changed no layout; 8px steps armed the drag and dropped normally.
+
+   Fixed by capturing the pointer on `pointerdown`, so every subsequent move
+   belongs to the tab wherever the pointer is, and releasing that capture on
+   a release that never became a drag. The 4px threshold is untouched and is
+   still what separates a click from a drag; the close affordance still takes
+   no capture at all, because the press handler returns before it.
+
+   Pinned by an e2e case that presses, moves once by 47 x 28px, and asserts
+   the drop zones mount and the drop commits, plus a jsdom case asserting
+   where the capture is taken and that a plain click gets it back.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.

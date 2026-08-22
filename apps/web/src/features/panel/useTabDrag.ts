@@ -92,7 +92,7 @@ interface Tracking {
   groupId: GroupId;
   startX: number;
   startY: number;
-  /** The tab element, which captures the pointer once a drag begins. */
+  /** The tab element, which captured the pointer on the press (G3). */
   element: HTMLElement;
   dragging: boolean;
 }
@@ -326,16 +326,9 @@ export function useTabDrag(
     };
   });
 
-  const startDrag = (
-    current: Tracking,
-    event: ReactPointerEvent<HTMLElement>,
-  ) => {
+  const startDrag = (current: Tracking) => {
     current.dragging = true;
-    // Capture on the tab itself, so the rest of the gesture belongs to this
-    // drag and cannot be stolen by a resize separator, a scroll container,
-    // or another group's strip once the pointer leaves the tab.
-    if (typeof current.element.setPointerCapture === "function")
-      current.element.setPointerCapture(event.pointerId);
+    // The pointer was captured on `pointerdown`, not here (G3).
     zones.current = measureZones(latest.current, listElements.current);
     const next = resolveDropTarget(point.current, zones.current);
     target.current = next;
@@ -378,6 +371,18 @@ export function useTabDrag(
       // finger, which must not start a second drag.
       if (event.button !== 0 || !event.isPrimary) return;
       swallowClickFor.current = null;
+      // Captured HERE, on the press, rather than once the threshold is
+      // crossed (G3). `onTabPointerMove` is bound to the tab, so before this
+      // the first move had to land on the tab to be delivered at all — and a
+      // tab is 78 x 43px, so a flick at about 1300px/s left its box in one
+      // event, no move ever reached the handler, and the whole gesture was
+      // silently dropped: no announcement, no drop zones, no layout change.
+      // Capturing on the press makes every subsequent move this tab's,
+      // wherever the pointer is. The 4px threshold below is untouched, and
+      // is what still protects a plain click; the capture is released again
+      // on a release that never became a drag.
+      if (typeof event.currentTarget.setPointerCapture === "function")
+        event.currentTarget.setPointerCapture(event.pointerId);
       tracking.current = {
         pointerId: event.pointerId,
         tabId: tab.tabId,
@@ -404,7 +409,7 @@ export function useTabDrag(
           Math.abs(event.clientY - current.startY) < DRAG_THRESHOLD_PX
         )
           return;
-        startDrag(current, event);
+        startDrag(current);
         return;
       }
       positionGhost();
@@ -416,7 +421,9 @@ export function useTabDrag(
       if (current?.pointerId !== event.pointerId) return;
       if (!current.dragging) {
         // A press that never became a drag: the click that follows is a
-        // plain click and belongs to the tab.
+        // plain click and belongs to the tab, so the capture taken on the
+        // press is given back.
+        releaseCapture(current);
         tracking.current = null;
         return;
       }

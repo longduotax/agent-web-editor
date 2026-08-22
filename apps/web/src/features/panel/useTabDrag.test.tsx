@@ -310,6 +310,41 @@ describe("dragging a panel tab", () => {
     expect(files).toHaveAttribute("aria-selected", "true");
   });
 
+  // G3. The gesture used to be lost outright when the pointer left the tab
+  // in a single event: `onTabPointerMove` is bound to the tab, and the
+  // capture was taken only once a move had already been delivered to it.
+  // Whether a real browser then delivers the move is not a jsdom question —
+  // that is measured end to end — but WHERE the capture is taken is, and it
+  // is the whole of the fix.
+  it("captures the pointer on the press, and gives it back to a plain click", () => {
+    const store = stubStorage();
+    seedTwoGroups(store);
+    renderPanel();
+
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    const captured: number[] = [];
+    const released: number[] = [];
+    changes.setPointerCapture = (pointerId: number) => {
+      captured.push(pointerId);
+    };
+    changes.releasePointerCapture = (pointerId: number) => {
+      released.push(pointerId);
+    };
+    changes.hasPointerCapture = () => captured.length > released.length;
+
+    press(changes, ON_TAB);
+    // Before any move at all, and before the threshold has been crossed.
+    expect(captured).toEqual([1]);
+    expect(released).toEqual([]);
+
+    // A press that never became a drag is a click, and a click does not own
+    // the pointer.
+    release(changes, ON_TAB);
+    expect(released).toEqual([1]);
+    fireEvent.click(changes);
+    expect(changes).toHaveAttribute("aria-selected", "true");
+  });
+
   it("shows drop targets on every group only while a drag is in progress", () => {
     const store = stubStorage();
     seedTwoGroups(store);
