@@ -100,15 +100,15 @@ describe("TabStrip", () => {
     const strip = within(list).getAllByRole("tab");
 
     expect(strip).toHaveLength(3);
-    expect(within(strip[0] as HTMLElement).getByText("Changes")).toBeVisible();
-    expect(within(strip[1] as HTMLElement).getByText("Files")).toBeVisible();
-    expect(within(strip[2] as HTMLElement).getByText("main.ts")).toBeVisible();
-    expect(strip[0]).toHaveAttribute("aria-selected", "true");
-    expect(strip[1]).toHaveAttribute("aria-selected", "false");
-    expect(strip[0]).toHaveAttribute("aria-controls", "panel-tabpanel-tab-1");
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    const files = screen.getByRole("tab", { name: "Files" });
+    expect(screen.getByRole("tab", { name: /main\.ts/ })).toBeVisible();
+    expect(changes).toHaveAttribute("aria-selected", "true");
+    expect(files).toHaveAttribute("aria-selected", "false");
+    expect(changes).toHaveAttribute("aria-controls", "panel-tabpanel-tab-1");
     // A tab that has never been activated has no body mounted, so it must
     // not claim one.
-    expect(strip[1]).not.toHaveAttribute("aria-controls");
+    expect(files).not.toHaveAttribute("aria-controls");
   });
 
   // One stop in the page's tab order per group: arrows move within the

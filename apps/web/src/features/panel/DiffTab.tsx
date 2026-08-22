@@ -31,8 +31,7 @@ export const DiffTab = memo(function DiffTab({
   if (context === null) return <UnboundNotice />;
 
   const data = diff.data;
-  const empty =
-    data !== undefined && data.staged === "" && data.unstaged === "";
+  const empty = data?.staged === "" && data.unstaged === "";
   return (
     <div className="diff-view">
       <header>

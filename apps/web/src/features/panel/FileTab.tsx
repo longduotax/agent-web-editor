@@ -39,7 +39,7 @@ export const FileTab = memo(function FileTab({
         <button
           type="button"
           onClick={() => {
-            void navigator.clipboard?.writeText(file?.path ?? tab.path);
+            void navigator.clipboard.writeText(file?.path ?? tab.path);
           }}
         >
           Copy path
@@ -49,7 +49,7 @@ export const FileTab = memo(function FileTab({
           disabled={file === undefined || file.binary}
           onClick={() => {
             if (file === undefined) return;
-            void navigator.clipboard?.writeText(file.content);
+            void navigator.clipboard.writeText(file.content);
           }}
         >
           Copy contents

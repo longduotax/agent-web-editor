@@ -13,10 +13,10 @@ import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 export const PANEL_STORAGE_KEY = "pi-workspace:panel";
 export const PANEL_STATE_VERSION = 2;
 
-// The shipped inspector's own key. Duplicated rather than imported from
-// `inspectorPreferences.ts` because this migration has to outlive that
-// module — the next phase deletes it, and users who skip a release still
-// need their preference carried forward.
+// The shipped inspector's own key. Held here rather than imported, because
+// this migration has to outlive the module that wrote it: that module is
+// gone, and a user who skips a release still needs their preference carried
+// forward.
 export const INSPECTOR_MIGRATION_KEY = "pi-workspace:inspector";
 
 const TabContextSchema = z.object({

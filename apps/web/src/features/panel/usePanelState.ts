@@ -35,20 +35,24 @@ import { readPanelState, writePanelState } from "./panelStorage.js";
 // same way and persist the same way, and a reader who knows one should not
 // have to learn a second shape to read the other.
 
+// Declared as function properties rather than methods on purpose: callers
+// destructure them (`const { bindPendingContexts } = actions`) to use as
+// effect dependencies, which is only sound because none of them reads
+// `this`.
 export interface PanelActions {
-  openTab(tab: NewPanelTab, options?: { groupId?: GroupId }): void;
-  closeTab(tabId: TabId): void;
-  activateTab(tabId: TabId): void;
-  moveTab(tabId: TabId, groupId: GroupId, index: number): void;
-  splitWithTab(tabId: TabId, groupId: GroupId, edge: PanelEdge): void;
-  closeGroup(groupId: GroupId): void;
-  focusGroup(groupId: GroupId): void;
-  resizeGroups(splitId: string, sizes: [number, number]): void;
-  setWidth(width: number): void;
-  setOpen(open: boolean): void;
-  updateTab(tabId: TabId, patch: TabPatch): void;
+  openTab: (tab: NewPanelTab, options?: { groupId?: GroupId }) => void;
+  closeTab: (tabId: TabId) => void;
+  activateTab: (tabId: TabId) => void;
+  moveTab: (tabId: TabId, groupId: GroupId, index: number) => void;
+  splitWithTab: (tabId: TabId, groupId: GroupId, edge: PanelEdge) => void;
+  closeGroup: (groupId: GroupId) => void;
+  focusGroup: (groupId: GroupId) => void;
+  resizeGroups: (splitId: string, sizes: [number, number]) => void;
+  setWidth: (width: number) => void;
+  setOpen: (open: boolean) => void;
+  updateTab: (tabId: TabId, patch: TabPatch) => void;
   /** Binds every tab still carrying a null context (see D-1 below). */
-  bindPendingContexts(context: TabContext): void;
+  bindPendingContexts: (context: TabContext) => void;
 }
 
 export interface PanelController {
@@ -77,42 +81,42 @@ export function usePanelState(): PanelController {
 
   const actions = useMemo<PanelActions>(
     () => ({
-      openTab(tab, options) {
+      openTab: (tab, options) => {
         setState((current) => openTab(current, tab, makeId, options));
       },
-      closeTab(tabId) {
+      closeTab: (tabId) => {
         setState((current) => closeTab(current, tabId));
       },
-      activateTab(tabId) {
+      activateTab: (tabId) => {
         setState((current) => activateTab(current, tabId));
       },
-      moveTab(tabId, groupId, index) {
+      moveTab: (tabId, groupId, index) => {
         setState((current) => moveTab(current, tabId, groupId, index));
       },
-      splitWithTab(tabId, groupId, edge) {
+      splitWithTab: (tabId, groupId, edge) => {
         setState((current) =>
           splitGroupWithTab(current, tabId, groupId, edge, makeId),
         );
       },
-      closeGroup(groupId) {
+      closeGroup: (groupId) => {
         setState((current) => closeGroup(current, groupId));
       },
-      focusGroup(groupId) {
+      focusGroup: (groupId) => {
         setState((current) => focusGroup(current, groupId));
       },
-      resizeGroups(splitId, sizes) {
+      resizeGroups: (splitId, sizes) => {
         setState((current) => setGroupSizes(current, splitId, sizes));
       },
-      setWidth(width) {
+      setWidth: (width) => {
         setState((current) => setPanelWidth(current, width));
       },
-      setOpen(open) {
+      setOpen: (open) => {
         setState((current) => setPanelOpen(current, open));
       },
-      updateTab(tabId, patch) {
+      updateTab: (tabId, patch) => {
         setState((current) => updateTab(current, tabId, patch));
       },
-      bindPendingContexts(context) {
+      bindPendingContexts: (context) => {
         setState((current) => bindPendingContexts(current, context));
       },
     }),
@@ -169,8 +173,7 @@ function bindPendingContexts(
 ): PanelState {
   let next = state;
   for (const id of Object.keys(state.tabs)) {
-    const tab = next.tabs[id];
-    if (tab === undefined || tab.context !== null) continue;
+    if (next.tabs[id]?.context !== null) continue;
     next = bindTabContext(next, id, context);
   }
   return next;

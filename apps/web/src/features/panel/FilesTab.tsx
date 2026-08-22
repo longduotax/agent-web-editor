@@ -9,8 +9,8 @@ import type { TabBodyProps } from "./tabBody.js";
 
 // How many file rows are painted at once. The unsearched listing on a real
 // repository is ~20,000 entries; rendering them all is what made the shipped
-// inspector slow to open and to scroll (NEW-R3-4). This is a render budget,
-// not a filter: the notice below always names the true total.
+// file list slow to open and to scroll (NEW-R3-4). It is a render
+// budget, not a filter: the notice below always names the true total.
 export const FILE_LIST_RENDER_LIMIT = 200;
 
 export const FilesTab = memo(function FilesTab({

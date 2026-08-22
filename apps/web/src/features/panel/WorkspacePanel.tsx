@@ -86,7 +86,7 @@ export function WorkspacePanel({
     actions.setOpen(false);
   };
   // One close control for the whole panel, on the first group in reading
-  // order — where the shipped inspector's was, and where it still is when
+  // order — where the shipped one was, and where it still is whenever
   // the panel holds a single group.
   const closeControlGroupId = leafIds(state.root)[0] ?? null;
 

@@ -33,8 +33,8 @@
    component may hardcode its own measure. */
 :root {
   --surface-measure: 48rem;
-  /* One height for the top-of-column header rows (inspector tabs and the
-     collapsed inspector rail). */
+  /* One height for the top-of-column header rows (the panel's tab strip and
+     its collapsed rail). */
   --header-h: 3.8rem;
 }
 /* keep the repo's legacy alias names pointing at the new tokens so existing
@@ -161,17 +161,17 @@ a:focus-visible {
   overflow: hidden;
   background: var(--surface-0);
 }
-.workspace.inspector-available {
+.workspace.panel-available {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 0;
   transition: grid-template-columns 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.workspace.inspector-railed {
+.workspace.panel-railed {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 2.75rem;
 }
-.workspace.inspector-visible {
+.workspace.panel-visible {
   grid-template-columns:
     minmax(220px, 17rem) minmax(360px, 1fr)
-    var(--inspector-width, 400px);
+    var(--panel-width, 400px);
 }
 .mobile-toolbar {
   display: none;
@@ -587,7 +587,7 @@ a:focus-visible {
    Nothing below it restates the title, the run status or the trust note. */
 .pane-head {
   display: flex;
-  /* Pinned, not content-derived: every pane header and the inspector's own
+  /* Pinned, not content-derived: every pane header and the panel's own
      top row share --header-h, so their bottom hairlines land on one line in
      a multi-pane layout at every width. A wrapping detail line used to make
      one header 34px taller than its neighbour. */
@@ -1386,7 +1386,7 @@ a:focus-visible {
   background: var(--hover);
   cursor: not-allowed;
 }
-.inspector {
+.panel {
   position: relative;
   display: flex;
   min-width: 0;
@@ -1396,7 +1396,7 @@ a:focus-visible {
   background: var(--surface-1);
   z-index: 20;
 }
-.inspector[aria-hidden="true"] {
+.panel[aria-hidden="true"] {
   pointer-events: none;
 }
 .panel-right-icon {
@@ -1408,7 +1408,7 @@ a:focus-visible {
   stroke-linejoin: round;
   stroke-width: 1.15;
 }
-.inspector-resizer {
+.panel-resizer {
   position: absolute;
   z-index: 2;
   top: 0;
@@ -1418,7 +1418,7 @@ a:focus-visible {
   cursor: col-resize;
   touch-action: none;
 }
-.inspector-resizer::after {
+.panel-resizer::after {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -1427,42 +1427,139 @@ a:focus-visible {
   background: transparent;
   content: "";
 }
-.inspector-resizer:hover::after,
-.inspector-resizer:focus-visible::after,
-.inspector-resizer.resizing::after {
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer.resizing::after {
   background: var(--blue);
 }
-.inspector-resizer:focus-visible {
+.panel-resizer:focus-visible {
   outline: none;
 }
-.inspector-tabs {
+.panel-tabstrip {
   display: flex;
   height: var(--header-h);
   align-items: end;
   border-bottom: 1px solid var(--border);
 }
-.inspector-tab-options {
+/* The strip scrolls rather than squeezing tabs into unreadable slivers, and
+   the active tab is scrolled back into view whenever it changes, so overflow
+   can never hide the tab the user is looking at (WSP-09). */
+.panel-tab-options {
   display: flex;
   min-width: 0;
   flex: 1;
   align-items: end;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.inspector-tab-options button {
+.panel-tab {
+  display: flex;
+  max-width: 12rem;
   min-width: 0;
-  flex: 1;
-  padding: 0.8rem 0.2rem;
+  /* Never shrinks: the strip scrolls instead. */
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.8rem 0.4rem;
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
   background: transparent;
-  text-transform: capitalize;
   cursor: pointer;
+  font-size: 0.78rem;
 }
-.inspector-tab-options button[aria-selected="true"] {
+.panel-tab.active {
   border-bottom-color: var(--blue);
   color: var(--text);
 }
-.inspector-close {
+.panel-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Names the execution scope a tab reads when it is not the focused chat
+   pane's own (WSP-02). */
+.panel-tab-chip {
+  max-width: 7rem;
+  flex: none;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.7rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+}
+.panel-tab-close {
+  flex: none;
+  color: var(--muted);
+  opacity: 0;
+  font-size: 0.9rem;
+}
+.panel-tab:hover .panel-tab-close,
+.panel-tab.active .panel-tab-close {
+  opacity: 1;
+}
+.panel-close-tab,
+.panel-new-tab-button {
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: none;
+  margin: 0 0 0.45rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.panel-close-tab:hover,
+.panel-new-tab-button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.panel-new-tab {
+  position: relative;
+  flex: none;
+}
+.panel-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  min-width: 12rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  box-shadow: var(--pop-shadow);
+}
+.panel-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.8rem;
+}
+.panel-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.panel-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.panel-menu-note {
+  margin: 0.3rem 0.5rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.panel-close {
   width: 2rem;
   height: 2rem;
   flex: none;
@@ -1475,14 +1572,14 @@ a:focus-visible {
   cursor: pointer;
   font-size: 1.1rem;
 }
-.inspector-close:hover {
+.panel-close:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 /* A docked rail rather than a button floating over the transcript: it owns
    its own grid column, and its top segment shares the pane header's height
    so the two hairlines land on one line. */
-.inspector-rail {
+.panel-rail {
   display: flex;
   grid-area: 1 / 3;
   flex-direction: column;
@@ -1491,14 +1588,14 @@ a:focus-visible {
   background: var(--surface-1);
   z-index: 20;
 }
-.inspector-rail-head {
+.panel-rail-head {
   display: grid;
   height: var(--header-h);
   flex: none;
   place-items: center;
   border-bottom: 1px solid var(--hairline);
 }
-.inspector-reopen {
+.panel-reopen {
   display: grid;
   width: 1.85rem;
   height: 1.85rem;
@@ -1510,14 +1607,14 @@ a:focus-visible {
   background: transparent;
   cursor: pointer;
 }
-.inspector-reopen:hover {
+.panel-reopen:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 @media (min-width: 901px) {
-  .workspace.inspector-available .inspector {
+  .workspace.panel-available .panel {
     grid-area: 1 / 3;
-    width: var(--inspector-width, 400px);
+    width: var(--panel-width, 400px);
     justify-self: end;
     opacity: 0;
     visibility: hidden;
@@ -1527,7 +1624,7 @@ a:focus-visible {
       opacity 140ms ease,
       visibility 0s linear 180ms;
   }
-  .workspace.inspector-visible .inspector {
+  .workspace.panel-visible .panel {
     opacity: 1;
     visibility: visible;
     transform: translateX(0);
@@ -1537,10 +1634,91 @@ a:focus-visible {
       visibility 0s;
   }
 }
-.inspector-content {
+/* One tab group: its strip, and the bodies of the tabs it has mounted. */
+.panel-group {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.panel-bodies {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.panel-tabpanel {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+/* A hidden tab body stays mounted — that is what keeps its scroll position
+   and its data — so it must contribute no layout at all. */
+.panel-tabpanel[hidden] {
+  display: none;
+}
+/* The panel's own tiling tree (WSP-01), with the chat surface's divider
+   affordance: a hairline at rest that turns blue when it is grabbed. */
+.panel-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+.panel-split-row {
+  flex-direction: row;
+}
+.panel-split-column {
+  flex-direction: column;
+}
+.panel-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.panel-divider {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  touch-action: none;
+}
+.panel-split-row > .panel-divider {
+  width: 10px;
+  margin: 0 -5px;
+  cursor: col-resize;
+}
+.panel-split-column > .panel-divider {
+  height: 10px;
+  margin: -5px 0;
+  cursor: row-resize;
+}
+.panel-divider::after {
+  position: absolute;
+  background: var(--hairline-2);
+  content: "";
+}
+.panel-split-row > .panel-divider::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+.panel-split-column > .panel-divider::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.panel-divider:hover::after,
+.panel-divider:focus-visible::after,
+.panel-divider.resizing::after {
+  background: var(--blue);
+}
+.panel-divider:focus-visible {
+  outline: none;
 }
 .scope-note,
 .terminal-warning {
@@ -1929,7 +2107,7 @@ a:focus-visible {
     height: calc(100dvh - 2.6rem);
   }
   .sidebar,
-  .inspector {
+  .panel {
     position: fixed;
     z-index: 50;
     top: 0;
@@ -1943,16 +2121,16 @@ a:focus-visible {
     left: 0;
     transform: translateX(-105%);
   }
-  .inspector {
+  .panel {
     right: 0;
     transform: translateX(105%);
   }
-  .inspector-resizer,
-  .inspector-rail {
+  .panel-resizer,
+  .panel-rail {
     display: none;
   }
   .sidebar-open .sidebar,
-  .inspector-open .inspector {
+  .panel-open .panel {
     transform: translateX(0);
   }
   .drawer-backdrop {

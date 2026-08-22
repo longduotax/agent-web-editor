@@ -28,7 +28,7 @@ import { parseConfig } from "../apps/server/src/config.js";
 // apps/web/src/components/Activity.test.tsx), which control the transcript
 // items directly. This spec covers what the stub CAN produce end-to-end:
 // pane run-status, split (button + chord), theme persistence, the single
-// workspace inspector, the non-destructive close and the sidebar's
+// workspace panel, the non-destructive close and the sidebar's
 // archive/undo flow, and the absence of any dock chrome or horizontal page
 // scroll.
 class BrowserSession implements OpenRuntimeSession {
@@ -194,7 +194,7 @@ async function startThreadInNewChatPane(pane: Locator, message: string) {
   await pane.getByRole("button", { name: "Create chat and send" }).click();
 }
 
-test("codex workspace surface: run status, split (button + chord), single inspector, non-destructive close, visible sidebar actions, no dock", async ({
+test("codex workspace surface: run status, split (button + chord), one docked panel, non-destructive close, visible sidebar actions, no dock", async ({
   page,
 }) => {
   await page.goto(launchUrl);
@@ -267,9 +267,9 @@ test("codex workspace surface: run status, split (button + chord), single inspec
   await expect(page.getByRole("region")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
 
-  // CWS-06: exactly one panel is docked right of the pane surface, and it is
-  // the Changes | Files | Terminal inspector. No standalone Environment
-  // column and no control for one exists at any width.
+  // CWS-06, as superseded by WSP-01: exactly one region is docked right of
+  // the pane surface, and it is the workspace panel. No standalone
+  // Environment column and no control for one exists at any width.
   await expect(
     page.getByRole("complementary", { name: "Environment" }),
   ).toHaveCount(0);

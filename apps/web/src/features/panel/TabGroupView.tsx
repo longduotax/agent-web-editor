@@ -51,12 +51,18 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
   const [mounted, setMounted] = useState<readonly TabId[]>(() =>
     activeTabId === null ? [] : [activeTabId],
   );
+  // Mounted, minus tabs that have since been closed, plus the active one if
+  // this is its first activation.
   const live = mounted.filter((tabId) => group.tabIds.includes(tabId));
-  const missing = activeTabId !== null && !live.includes(activeTabId);
-  if (missing || live.length !== mounted.length)
-    setMounted(missing && activeTabId !== null ? [...live, activeTabId] : live);
   const bodies =
-    missing && activeTabId !== null ? [...live, activeTabId] : live;
+    activeTabId !== null && !live.includes(activeTabId)
+      ? [...live, activeTabId]
+      : live;
+  if (
+    bodies.length !== mounted.length ||
+    bodies.some((tabId, index) => tabId !== mounted[index])
+  )
+    setMounted(bodies);
 
   return (
     <section
