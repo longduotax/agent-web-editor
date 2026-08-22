@@ -167,10 +167,24 @@ function themeTokens(theme: "light" | "dark"): Record<string, string> {
   return tokens;
 }
 
-/** A `var(--x)` chain followed to the colour at the end of it. */
+/**
+ * A `var(--x)` chain followed to the colour at the end of it, and a
+ * `color-mix()` around it carried out.
+ *
+ * The mixing is here rather than left unresolved because of K2, which is the
+ * shape of defect this file exists to catch and nearly got away. The Changes
+ * tab's `.change-kind` chips paint `color-mix(in srgb, var(--done) 20%,
+ * var(--card))`; a reader that stops at `color-mix` measures nothing, and a
+ * reader that quietly falls through to the page background measures the
+ * wrong thing and reports a pass. Every one of the six chips was below the
+ * AA bar in the light theme and two of them in dark, and the first attempt
+ * at the case reported four of the six as passing.
+ */
 function resolve(value: string, tokens: Record<string, string>): string {
   let current = value.trim();
   for (let step = 0; step < 12; step += 1) {
+    const mix = /^color-mix\(\s*in\s+srgb\s*,(.+)\)$/is.exec(current);
+    if (mix !== null) return mixed(mix[1] ?? "", tokens);
     const reference = /^var\((--[a-z0-9-]+)\)$/i.exec(current);
     if (reference === null) return current;
     const name = reference[1] ?? "";
@@ -179,6 +193,52 @@ function resolve(value: string, tokens: Record<string, string>): string {
     current = next.trim();
   }
   return current;
+}
+
+/**
+ * `color-mix(in srgb, …)`'s two components, mixed as the specification says.
+ *
+ * `transparent` is refused rather than approximated: a mix with it carries
+ * an alpha, and the contrast of a translucent colour is a question about the
+ * backdrop behind it, which this reader cannot see. A test that needs one
+ * has to name the backdrop itself.
+ */
+function mixed(components: string, tokens: Record<string, string>): string {
+  const parts = splitSelectors(components);
+  const read = (part: string): { colour: string; weight: number | null } => {
+    const percent = /\s(\d+(?:\.\d+)?)%$/.exec(part.trim());
+    const colour =
+      percent === null
+        ? part.trim()
+        : part
+            .trim()
+            .slice(0, -percent[0].length + 1)
+            .trim();
+    return {
+      colour: resolve(colour, tokens),
+      weight: percent === null ? null : Number(percent[1]),
+    };
+  };
+  if (parts.length !== 2)
+    throw new Error(
+      `Not a two-colour mix this test can measure: ${components}`,
+    );
+  const first = read(parts[0] ?? "");
+  const second = read(parts[1] ?? "");
+  // One percentage names its own share and leaves the rest to the other; two
+  // are normalized against their sum; none is an even mix.
+  const firstShare =
+    first.weight ?? (second.weight === null ? 50 : 100 - second.weight);
+  const secondShare =
+    second.weight ?? (first.weight === null ? 50 : 100 - first.weight);
+  const total = firstShare + secondShare;
+  const ratio = total === 0 ? 0.5 : firstShare / total;
+  const a = channels(first.colour);
+  const b = channels(second.colour);
+  const blend = [0, 1, 2].map((index) =>
+    Math.round((a[index] ?? 0) * ratio + (b[index] ?? 0) * (1 - ratio)),
+  );
+  return `rgb(${blend.map(String).join(", ")})`;
 }
 
 function channels(colour: string): [number, number, number] {
@@ -204,6 +264,23 @@ function channels(colour: string): [number, number, number] {
       Number(parts[2] ?? 0),
     ];
   }
+  // What `getComputedStyle` hands back for a `color-mix()` result in Chrome:
+  // not `rgb()`, but `color(srgb 0.836863 0.887059 0.984314)`, with the
+  // channels as 0–1 fractions. A reader that does not know this shape and
+  // falls back to something plausible reports a contrast against a colour
+  // that is not on screen — the trap K2 set for whoever fixed it, and the
+  // one the reviewer hit first time round. No `color-mix()` arithmetic is
+  // needed for it: the browser has already done the mixing.
+  const srgb = /^color\(\s*srgb\s+([^)]+)\)$/i.exec(colour.trim());
+  if (srgb !== null) {
+    const parts = (srgb[1] ?? "").split(/[/\s]+/).filter((part) => part !== "");
+    return [0, 1, 2].map((index) =>
+      Math.round(Number(parts[index] ?? 0) * 255),
+    ) as [number, number, number];
+  }
+  // Loud rather than plausible. A colour this reader cannot measure has to
+  // stop the test, because the alternative is a green tick over an unmeasured
+  // value, which is exactly how six failing chips read as four passes.
   throw new Error(`Not a colour this test can measure: ${colour}`);
 }
 
@@ -420,6 +497,120 @@ describe("the File tab's line numbers", () => {
 });
 
 // --- WSP-06: the diff's own palette and its two gutters -------------------
+
+// --- K2: the Changes tab's change-kind chips -----------------------------
+
+describe("the colour reader itself", () => {
+  // Two shapes it did not know, and the second is why K2 was nearly closed
+  // with four of its six failures still on screen.
+
+  it("carries out a `color-mix()` instead of stopping at it", () => {
+    const tokens = { "--done": "#2f9e44", "--card": "#ffffff" };
+    expect(
+      resolve("color-mix(in srgb, var(--done) 20%, var(--card))", tokens),
+    ).toBe("rgb(213, 236, 218)");
+    // A share on the second component, and an even mix with none at all.
+    expect(resolve("color-mix(in srgb, #000000, #ffffff)", {})).toBe(
+      "rgb(128, 128, 128)",
+    );
+    expect(resolve("color-mix(in srgb, #000000, #ffffff 25%)", {})).toBe(
+      "rgb(64, 64, 64)",
+    );
+  });
+
+  it("reads Chrome's own serialisation of a mixed colour", () => {
+    // `getComputedStyle` does not answer with `rgb()` for a `color-mix()`
+    // result; it answers with this, and the channels are fractions.
+    expect(channels("color(srgb 0.836863 0.887059 0.984314)")).toEqual([
+      213, 226, 251,
+    ]);
+  });
+
+  it("refuses a colour it cannot measure rather than guessing one", () => {
+    // The failure mode this whole file exists to avoid: an unmeasured value
+    // silently becoming a plausible one, and a table of failures reading as
+    // a table of passes.
+    expect(() => channels("oklch(0.7 0.1 200)")).toThrow(
+      /not a colour this test can measure/i,
+    );
+    expect(() =>
+      resolve("color-mix(in srgb, var(--accent) 55%, transparent)", {
+        "--accent": "#2f6feb",
+      }),
+    ).toThrow(/not a colour this test can measure/i);
+  });
+});
+
+describe("the Changes tab's change-kind chips", () => {
+  // K2. Measured in a real browser against each chip's own resolved
+  // background, at the 10.24px/400 the chip actually paints — normal text,
+  // so the AA bar is 4.5:1:
+  //
+  //   untracked `?`  2.76 light / 5.04 dark      deleted `D`  3.44 / 3.79
+  //   conflicted `U` 3.44 / 3.79                 modified `M` 3.51 / 4.59
+  //   renamed `R`    3.51 / 4.59                 copied `C`   3.51 / 4.59
+  //
+  // Every chip failed in light and two failed in dark. The letter is
+  // `aria-hidden` and each row carries its kind as a word in an `.sr-only`
+  // span, so nothing was lost to assistive technology: this is legibility
+  // for sighted readers, and WSP-06 asks for the letter precisely so the
+  // kind is not in the colour alone — a letter nobody can read does not
+  // carry it either.
+  //
+  // The chips were left out of this file at milestone 6 with the reason
+  // recorded ("either the test learns `color-mix`, or the chips become
+  // resolved tokens like the diff's"). Both happened: the reader learned it
+  // above, and the chips now take the diff's own measured pairs, so a
+  // modified file's chip and its diff are one palette.
+  const chips = [
+    ".change-kind",
+    ".change-kind.deleted",
+    ".change-kind.conflicted",
+    ".change-kind.added",
+    ".change-kind.untracked",
+  ];
+
+  for (const theme of ["light", "dark"] as const) {
+    it(`paints every chip above ${String(AA_NORMAL)}:1 in the ${theme} theme`, () => {
+      const tokens = themeTokens(theme);
+      const measured = chips.map((selector) => ({
+        selector,
+        ratio: contrast(
+          colourOf(selector, theme),
+          resolve(colourOf(selector, theme, "background"), tokens),
+        ),
+      }));
+      const failing = measured.filter((entry) => entry.ratio < AA_NORMAL);
+      expect(
+        failing.map((entry) => `${entry.selector} ${String(entry.ratio)}:1`),
+      ).toEqual([]);
+    });
+
+    it(`keeps each chip's own background off the row it sits on in the ${theme} theme`, () => {
+      // A chip is a shape as well as a letter, and a wash indistinguishable
+      // from the list row behind it would pass the case above while making
+      // the chip invisible.
+      const tokens = themeTokens(theme);
+      const [rowRed, rowGreen, rowBlue] = channels(
+        resolve(declarationsFor(".panel").background ?? "", tokens),
+      );
+      const tooClose = chips
+        .map((selector) => ({
+          selector,
+          wash: resolve(colourOf(selector, theme, "background"), tokens),
+        }))
+        .filter(({ wash }) => {
+          const [r, g, b] = channels(wash);
+          return (
+            Math.sqrt(
+              (r - rowRed) ** 2 + (g - rowGreen) ** 2 + (b - rowBlue) ** 2,
+            ) < 15
+          );
+        });
+      expect(tooClose.map((entry) => entry.selector)).toEqual([]);
+    });
+  }
+});
 
 describe("the Diff tab's colours", () => {
   // The diff paints its text on a tinted wash of its own, so the surface its

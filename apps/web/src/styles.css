@@ -2203,6 +2203,22 @@ a:focus-visible {
   padding: 0;
   font-size: 0.72rem;
 }
+/* The change-kind chip (WSP-06, K2).
+   It carries the kind as a LETTER so the kind is not in the colour alone —
+   and a letter nobody can read carries it no better than the colour does.
+   These were the status palette mixed 20% into the card, which put every
+   chip below the WCAG AA bar in the light theme and two of them in dark:
+   `?` 2.76:1, `D`/`U` 3.44:1, `M`/`R`/`C` 3.51:1 light; `D`/`U` 3.79:1
+   dark. The letter is `aria-hidden` and each row also carries its kind as a
+   word, so nothing was lost to a screen reader — this is legibility for
+   sighted readers.
+   They now take the DIFF's own pairs, which are chosen against the wash
+   they are painted on and measured in `styles.test.ts`: 5.01–5.90:1 light
+   and 5.51–6.84:1 dark. A modified file's chip and the diff it opens are
+   one palette, and there is one set of numbers to keep honest rather than
+   two. Resolved tokens rather than `color-mix()` for the same reason the
+   diff's are: a mixed colour is one the stylesheet's own test could not
+   read, which is how these went unmeasured through a whole milestone. */
 .change-kind {
   display: inline-grid;
   width: 1.15rem;
@@ -2210,19 +2226,19 @@ a:focus-visible {
   flex: none;
   place-items: center;
   border-radius: 0.2rem;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 20%, var(--card));
+  color: var(--diff-hunk-fg);
+  background: var(--diff-hunk-bg);
   font-size: 0.64rem;
 }
 .change-kind.deleted,
 .change-kind.conflicted {
-  color: var(--fail);
-  background: color-mix(in srgb, var(--fail) 20%, var(--card));
+  color: var(--diff-delete-fg);
+  background: var(--diff-delete-bg);
 }
 .change-kind.added,
 .change-kind.untracked {
-  color: var(--done);
-  background: color-mix(in srgb, var(--done) 20%, var(--card));
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
 }
 /* F2. The scrolling box has to END on screen.
    Both bodies used to be ordinary flow content inside the tab body's own
