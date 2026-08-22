@@ -533,6 +533,108 @@ describe("WorkspacePanel does only the visible tab's work", () => {
     ).toBeInTheDocument();
   });
 
+  // F5. The D2 fix works — a chord acts on the group the keyboard is in —
+  // but every structural chord then dropped focus to `<body>`, with no
+  // `focusin` following, so a keyboard user had to re-issue the focus-panel
+  // chord after every close, split, and move. WSP-10 exists to prevent
+  // exactly that.
+  describe("keeps the keyboard after a structural chord", () => {
+    async function openBoth(user: ReturnType<typeof userEvent.setup>) {
+      await openPanel(user);
+      await user.click(screen.getByRole("button", { name: "New panel tab" }));
+      await user.click(screen.getByRole("menuitem", { name: "Files" }));
+    }
+
+    function stubApis() {
+      api.getStatus.mockResolvedValue({
+        available: true,
+        message: null,
+        files: [],
+      });
+      api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    }
+
+    // The focus chord itself, which used to be handled inside a tab strip.
+    // It still lands where it always did; what changed is that the panel
+    // decides, because a strip mounted by a split cannot.
+    it("lands on the focused group's active tab from the focus chord", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.body).toHaveFocus();
+
+      panelChord("Enter");
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+      });
+    });
+
+    it("moves focus to the surviving tab after a close", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+      screen.getByRole("tab", { name: "Files" }).focus();
+
+      panelChord("Backspace");
+
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("tab", { name: "Files" }),
+        ).not.toBeInTheDocument();
+      });
+      expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus();
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("moves focus into the new group after a split", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+      screen.getByRole("tab", { name: "Files" }).focus();
+
+      panelChord("ArrowRight");
+      await screen.findByRole("separator", { name: "Resize panel groups" });
+
+      // The split moves the active tab into the new group, and focus
+      // belongs where the model says focus now is.
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+      });
+      expect(
+        screen.getByRole("tablist", { name: "Panel tabs, group 2 of 2" }),
+      ).toContainElement(screen.getByRole("tab", { name: "Files" }));
+    });
+
+    it("follows a tab moved to another group", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+      screen.getByRole("tab", { name: "Files" }).focus();
+      panelChord("ArrowRight");
+      await screen.findByRole("separator", { name: "Resize panel groups" });
+
+      // Back to the first group, which is where focus must go with it.
+      panelChord("Home");
+
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("separator", { name: "Resize panel groups" }),
+        ).not.toBeInTheDocument();
+      });
+      expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+    });
+  });
+
   it("has no axe violations with two tabs open", async () => {
     const user = userEvent.setup();
     stubStorage();

@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useRef,
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -38,8 +37,6 @@ export interface TabStripProps {
   actions: PanelActions;
   /** Whether this group is the panel's focused one. */
   focused: boolean;
-  /** Bumped when the keyboard asks the panel to take focus. */
-  focusRequest: number;
   /** The focused chat pane's scope: what `+` opens tabs for, and what the
    * worktree chip is compared against. */
   focusedContext: TabContext | null;
@@ -57,7 +54,6 @@ export function TabStrip(props: TabStripProps): JSX.Element {
     tabs,
     actions,
     focused,
-    focusRequest,
     focusedContext,
     index,
     groupCount,
@@ -65,16 +61,6 @@ export function TabStrip(props: TabStripProps): JSX.Element {
   } = props;
   const activeTabId = group.activeTabId;
   const activeTab = activeTabId === null ? undefined : tabs[activeTabId];
-  const handledFocusRequest = useRef(focusRequest);
-
-  // Keyboard "focus the panel" lands on the focused group's active tab,
-  // which is both the strip's one tab stop and the way into its body.
-  useEffect(() => {
-    if (handledFocusRequest.current === focusRequest) return;
-    handledFocusRequest.current = focusRequest;
-    if (!focused || activeTabId === null) return;
-    document.getElementById(tabElementId(activeTabId))?.focus();
-  }, [focusRequest, focused, activeTabId]);
 
   // Overflow must never hide the tab the user is looking at: the strip
   // scrolls, and the active tab is scrolled back into it.

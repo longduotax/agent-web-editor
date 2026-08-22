@@ -67,12 +67,29 @@ export interface PanelController {
   /** Stable across renders: tab bodies are memoised on it. */
   actions: PanelActions;
   /**
-   * Bumped when the keyboard asks for the panel to take focus. A counter
-   * rather than a flag, so two consecutive requests are two events; the view
-   * decides what "focused" means (the active tab of the focused group).
+   * Bumped when the keyboard asks for the panel to take focus, and after any
+   * chord that changed the panel's structure. A counter rather than a flag,
+   * so two consecutive requests are two events; the view decides what
+   * "focused" means (the active tab of the focused group).
    */
   focusRequest: number;
 }
+
+/**
+ * The commands that must be followed by a deliberate focus move (F5, WSP-10).
+ *
+ * Closing, splitting, and moving all destroy or reparent the element the
+ * keyboard was on, and the browser's answer to that is `<body>` — verified
+ * with a capture-phase `focusin` logger, so it was a real drop and not an
+ * artifact. A keyboard user then had to re-issue the focus-panel chord after
+ * every structural operation. Switching tabs is deliberately not here: it
+ * destroys nothing, and the roving tabindex already carries focus.
+ */
+const FOCUS_MOVING_COMMANDS: ReadonlySet<string> = new Set([
+  "panel-close-tab",
+  "panel-split",
+  "panel-move-tab",
+]);
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -93,6 +110,13 @@ const ANNOUNCEMENT_MS = 5_000;
  */
 interface PanelSession {
   panel: PanelState;
+  /**
+   * Bumped by whichever chord owes the keyboard a new home. It lives in the
+   * same state as the panel because it is decided by the same updater: the
+   * chord listener cannot close over the panel, so whether a command changed
+   * anything is only knowable inside the functional update (F5).
+   */
+  focusRequest: number;
   announcement: {
     text: string;
     // Two identical refusals in a row are two events, and a live region only
@@ -105,9 +129,9 @@ interface PanelSession {
 export function usePanelState(): PanelController {
   const [session, setSession] = useState<PanelSession>(() => ({
     panel: readPanelState(),
+    focusRequest: 0,
     announcement: null,
   }));
-  const [focusRequest, setFocusRequest] = useState(0);
   const state = session.panel;
 
   useEffect(() => {
@@ -190,16 +214,24 @@ export function usePanelState(): PanelController {
       const command = asPanelCommand(resolved);
       if (command === null) return;
       event.preventDefault();
-      if (command.type === "panel-focus")
-        setFocusRequest((current) => current + 1);
       setSession((current) => {
         const result = applyPanelCommand(current.panel, command, makeId);
+        const changed = result.state !== current.panel;
+        // A structural command that actually did something owes the keyboard
+        // a new home; one that was refused or was a no-op does not, because
+        // whatever the user was on is still there (F5).
+        const focusRequest =
+          command.type === "panel-focus" ||
+          (changed && FOCUS_MOVING_COMMANDS.has(command.type))
+            ? current.focusRequest + 1
+            : current.focusRequest;
         if (result.announcement === null)
-          return result.state === current.panel
+          return !changed && focusRequest === current.focusRequest
             ? current
-            : { ...current, panel: result.state };
+            : { ...current, panel: result.state, focusRequest };
         return {
           panel: result.state,
+          focusRequest,
           announcement: {
             text: result.announcement,
             id: (current.announcement?.id ?? 0) + 1,
@@ -231,7 +263,7 @@ export function usePanelState(): PanelController {
   return {
     state,
     actions,
-    focusRequest,
+    focusRequest: session.focusRequest,
     announcement: announcement?.text ?? null,
   };
 }

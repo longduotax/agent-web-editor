@@ -19,7 +19,6 @@ export interface TabGroupViewProps {
   tabs: Record<TabId, PanelTab>;
   actions: PanelActions;
   focused: boolean;
-  focusRequest: number;
   focusedContext: TabContext | null;
   /** 1-based position in reading order, for the group's accessible name. */
   index: number;
@@ -47,7 +46,6 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
     tabs,
     actions,
     focused,
-    focusRequest,
     focusedContext,
     index,
     groupCount,
@@ -70,7 +68,6 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
         tabs={tabs}
         actions={actions}
         focused={focused}
-        focusRequest={focusRequest}
         focusedContext={focusedContext}
         index={index}
         groupCount={groupCount}

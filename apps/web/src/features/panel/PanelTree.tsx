@@ -25,7 +25,6 @@ export interface PanelTreeProps {
   node: TreeNode<"group", GroupId>;
   state: PanelState;
   actions: PanelActions;
-  focusRequest: number;
   focusedContext: TabContext | null;
   /** Every group in reading order, so each can name itself (WSP-10). */
   groupOrder: readonly GroupId[];
@@ -45,7 +44,6 @@ export function PanelTree(props: PanelTreeProps): JSX.Element | null {
         tabs={state.tabs}
         actions={props.actions}
         focused={state.focusedGroupId === node.id}
-        focusRequest={props.focusRequest}
         focusedContext={props.focusedContext}
         index={props.groupOrder.indexOf(node.id) + 1}
         groupCount={props.groupOrder.length}

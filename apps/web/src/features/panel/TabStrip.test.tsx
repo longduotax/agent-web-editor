@@ -87,7 +87,6 @@ function renderStrip(
       tabs={tabs}
       actions={actions}
       focused
-      focusRequest={0}
       focusedContext={
         overrides.focusedContext === undefined ? here : overrides.focusedContext
       }
@@ -158,7 +157,6 @@ describe("TabStrip", () => {
           tabs={tabs}
           actions={actions}
           focused
-          focusRequest={0}
           focusedContext={here}
           index={1}
           groupCount={1}
@@ -383,7 +381,6 @@ describe("TabStrip", () => {
           tabs={tabs}
           actions={actionsSpy()}
           focused
-          focusRequest={0}
           focusedContext={here}
           index={1}
           groupCount={1}

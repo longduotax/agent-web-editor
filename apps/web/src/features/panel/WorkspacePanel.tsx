@@ -13,6 +13,7 @@ import { PanelRightIcon } from "./PanelRightIcon.js";
 import { PanelTree } from "./PanelTree.js";
 import { PANEL_MIN_WIDTH } from "./panelModel.js";
 import { PANEL_RESIZE_STEP, panelMaxWidth } from "./panelGeometry.js";
+import { tabElementId } from "./TabStrip.js";
 import type { TabContext } from "./panelTabs.js";
 import type { PanelController } from "./usePanelState.js";
 
@@ -82,6 +83,26 @@ export function WorkspacePanel({
     actions.setWidth(Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, nextWidth)));
   };
 
+  // WSP-10's focus management, owned here rather than by a tab strip (F5).
+  //
+  // A strip cannot do this: after a split, the group that should take focus
+  // is one that has just been MOUNTED, and a freshly mounted component has
+  // no way to tell "the request that created me" from "a request that
+  // predates me". This element outlives every structural change, so the
+  // question has one answer in one place: whichever tab the model now calls
+  // active in the group it now calls focused.
+  const handledFocusRequest = useRef(focusRequest);
+  useEffect(() => {
+    if (handledFocusRequest.current === focusRequest) return;
+    handledFocusRequest.current = focusRequest;
+    if (!state.open) return;
+    const groupId = state.focusedGroupId;
+    if (groupId === null) return;
+    const activeTabId = state.groups[groupId]?.activeTabId ?? null;
+    if (activeTabId === null) return;
+    document.getElementById(tabElementId(activeTabId))?.focus();
+  });
+
   const open = state.open;
   const closePanel = () => {
     actions.setOpen(false);
@@ -139,7 +160,6 @@ export function WorkspacePanel({
             node={state.root}
             state={state}
             actions={actions}
-            focusRequest={focusRequest}
             focusedContext={focusedContext}
             groupOrder={groupOrder}
             closeControlGroupId={closeControlGroupId}
