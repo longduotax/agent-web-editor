@@ -1,14 +1,14 @@
 # Codex agent runtime implementation plan
 
-**Status:** Draft
+**Status:** Ready
 
 **Plan version:** 1
 
-**Technical approval:** Pending for plan version 1
+**Technical approval:** Approved for plan version 1 on 2026-08-22 by the user (longduotax), together with Agent backends specification version 1. The two open product questions were resolved at approval time; AGB-02's Settings control is folded into Tasks 8 and 11 below.
 
 **Subsystem:** Agent execution — a second `AgentRuntime` implementation over the Codex app-server protocol, a per-thread runtime discriminator in persistence and contracts, a server-side runtime registry, and the composer's backend choice
 
-**Affected paths or contracts:** new `packages/codex-adapter/**`; `packages/contracts/src/index.ts` (public transport contract); `apps/server/src/config.ts`, `apps/server/src/app.ts`, `apps/server/src/domain/workspace.ts`, `apps/server/src/db/schema.ts`, `apps/server/src/db/store.ts`, new `apps/server/migrations/0008_thread_runtime.sql`; `apps/web/src/features/workspace/NewChatPane.tsx` and `PaneHeader.tsx`; `scripts/check_docs.py`; `.env.example`; focused Vitest and Playwright tests; architecture and component documentation
+**Affected paths or contracts:** new `packages/codex-adapter/**`; `packages/contracts/src/index.ts` (public transport contract); `apps/server/src/config.ts`, `apps/server/src/app.ts`, `apps/server/src/domain/workspace.ts`, `apps/server/src/db/schema.ts`, `apps/server/src/db/store.ts`, new `apps/server/migrations/0008_thread_runtime.sql`; `apps/web/src/features/workspace/NewChatPane.tsx` and `PaneHeader.tsx`; `apps/web/src/features/settings/**` (new backend preference store and Settings control); `scripts/check_docs.py`; `.env.example`; focused Vitest and Playwright tests; architecture and component documentation
 
 **Governing specification:** [Agent backends](../../product-specs/agent-backends.md) — this plan implements AGB-01 through AGB-09
 
@@ -24,10 +24,11 @@
 
 Product behavior change: **Yes.** The governing proposal is
 [Agent backends](../../product-specs/agent-backends.md) specification version 1,
-currently Draft with product approval pending. This plan must not begin
-production-code edits until the user approves specification version 1 _and_ plan
-version 1, per the
+**Approved** on 2026-08-22. Plan version 1 received technical approval from the
+same user message on the same date, satisfying both gates in the
 [agent implementation workflow](../../development/agent-implementation-workflow.md).
+Implementation may begin; this plan moves to Active when the first production
+edit lands.
 
 Preserved invariants that this plan must not disturb:
 
@@ -47,17 +48,17 @@ restated here.
 
 ## Requirement traceability
 
-| Spec requirement                                                                                                           | Technical consequence                                                                                                                                                                                                                                                        | Verification                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [AGB-01](../../product-specs/agent-backends.md#agb-01--every-chat-has-one-durable-immutable-backend)                       | `threads.runtime` and `thread_creation_operations.runtime` columns; migration `0008` backfills existing rows to `'pi'`; the `(project_id, runtime_session_id)` unique index becomes `(project_id, runtime, runtime_session_id)`; `getThreadByRuntimeSession` takes a runtime | Task 2 store tests including a 0007→0008 upgrade-with-existing-rows test, plus a Task 10 test asserting the thread composer renders no backend control |
-| [AGB-02](../../product-specs/agent-backends.md#agb-02--codex-is-the-default-backend-for-new-chats)                         | `PI_WEB_DEFAULT_RUNTIME` config value defaulting to `codex`; the server resolves an omitted request `runtime` to it                                                                                                                                                          | Task 8 config tests; Task 9 route test asserting an omitted `runtime` yields `codex`                                                                   |
-| [AGB-03](../../product-specs/agent-backends.md#agb-03--the-user-chooses-the-backend-when-starting-a-chat)                  | Optional `runtime` on `StartThreadRequest`/`CreateThreadRequest`; a backend `<select>` in `NewChatPane`, preselected to the server-reported default, non-sticky, disabled options for unavailable backends                                                                   | Task 10 Vitest + Task 11 Playwright                                                                                                                    |
-| [AGB-04](../../product-specs/agent-backends.md#agb-04--a-chats-backend-is-visible-wherever-the-chat-is)                    | `runtime` on `ThreadSummary`; a textual badge in `PaneHeader` and the thread/Archived lists                                                                                                                                                                                  | Task 10 Vitest with an accessible-name assertion                                                                                                       |
-| [AGB-05](../../product-specs/agent-backends.md#agb-05--a-codex-chat-behaves-like-any-other-chat)                           | Codex events map onto the existing `RuntimeEvent`/`TranscriptItem` union; no new contract kinds                                                                                                                                                                              | Tasks 4, 6, 7 adapter tests; Task 11 end-to-end parity spec                                                                                            |
-| [AGB-06](../../product-specs/agent-backends.md#agb-06--a-codex-chats-file-and-network-boundary-is-explicit-and-honest)     | `PI_WEB_CODEX_SANDBOX` defaulting to `workspace-write`; `cwd` pinned to the thread's execution root; sandbox refusals map to a failed `tool` transcript item and a settled run                                                                                               | Task 5/7 adapter tests; Task 12 README and `.env.example`                                                                                              |
-| [AGB-07](../../product-specs/agent-backends.md#agb-07--a-codex-chat-never-waits-for-an-approval-the-workspace-cannot-give) | `approvalPolicy: "never"` pinned, non-configurable; any inbound approval `ServerRequest` is answered `denied` and surfaced as a diagnostic rather than left pending                                                                                                          | Task 7 test driving an approval request through the fake transport                                                                                     |
-| [AGB-08](../../product-specs/agent-backends.md#agb-08--a-missing-or-unusable-codex-installation-degrades-honestly)         | Spawn/handshake failure raises `RuntimeFailure("unavailable")`; creation is transactional so no thread row survives; `runtimeAvailable` on `ThreadSummary` already carries the open-time signal                                                                              | Task 3 supervisor tests; Task 9 route test asserting no orphan thread                                                                                  |
-| [AGB-09](../../product-specs/agent-backends.md#agb-09--existing-codex-sessions-in-a-folder-can-be-imported)                | `discover` per backend via `thread/list` filtered by `cwd`; `runtime` added to `ImportThreadRequest` and the session descriptor listing                                                                                                                                      | Task 5 adapter tests; Task 9 route test                                                                                                                |
+| Spec requirement                                                                                                           | Technical consequence                                                                                                                                                                                                                                                                                                                                                            | Verification                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [AGB-01](../../product-specs/agent-backends.md#agb-01--every-chat-has-one-durable-immutable-backend)                       | `threads.runtime` and `thread_creation_operations.runtime` columns; migration `0008` backfills existing rows to `'pi'`; the `(project_id, runtime_session_id)` unique index becomes `(project_id, runtime, runtime_session_id)`; `getThreadByRuntimeSession` takes a runtime                                                                                                     | Task 2 store tests including a 0007→0008 upgrade-with-existing-rows test, plus a Task 10 test asserting the thread composer renders no backend control |
+| [AGB-02](../../product-specs/agent-backends.md#agb-02--codex-is-the-default-backend-for-new-chats)                         | `PI_WEB_DEFAULT_RUNTIME` config value defaulting to `codex`, reported to the browser; a device-local `backendPreferences.ts` store (`follow-machine` \| `pi` \| `codex`, default `follow-machine`) mirroring `themePreferences.ts`; the composer resolves device preference → machine default → `codex`; the server resolves an omitted request `runtime` to the machine default | Task 8 config tests; Task 9 route test asserting an omitted `runtime` yields the machine default; Task 11 precedence tests                             |
+| [AGB-03](../../product-specs/agent-backends.md#agb-03--the-user-chooses-the-backend-when-starting-a-chat)                  | Optional `runtime` on `StartThreadRequest`/`CreateThreadRequest`; a backend `<select>` in `NewChatPane`, preselected to the resolved effective default, non-sticky, with unavailable backends rendered disabled and carrying their reason                                                                                                                                        | Task 10 Vitest, Task 11 preference tests, Task 12 Playwright                                                                                           |
+| [AGB-04](../../product-specs/agent-backends.md#agb-04--a-chats-backend-is-visible-wherever-the-chat-is)                    | `runtime` on `ThreadSummary`; a textual badge in `PaneHeader` and the thread/Archived lists                                                                                                                                                                                                                                                                                      | Task 10 Vitest with an accessible-name assertion                                                                                                       |
+| [AGB-05](../../product-specs/agent-backends.md#agb-05--a-codex-chat-behaves-like-any-other-chat)                           | Codex events map onto the existing `RuntimeEvent`/`TranscriptItem` union; no new contract kinds                                                                                                                                                                                                                                                                                  | Tasks 4, 6, 7 adapter tests; Task 12 end-to-end parity spec                                                                                            |
+| [AGB-06](../../product-specs/agent-backends.md#agb-06--a-codex-chats-file-and-network-boundary-is-explicit-and-honest)     | `PI_WEB_CODEX_SANDBOX` defaulting to `workspace-write`; `cwd` pinned to the thread's execution root; sandbox refusals map to a failed `tool` transcript item and a settled run                                                                                                                                                                                                   | Task 5/7 adapter tests; Task 13 README and `.env.example`                                                                                              |
+| [AGB-07](../../product-specs/agent-backends.md#agb-07--a-codex-chat-never-waits-for-an-approval-the-workspace-cannot-give) | `approvalPolicy: "never"` pinned, non-configurable; any inbound approval `ServerRequest` is answered `denied` and surfaced as a diagnostic rather than left pending                                                                                                                                                                                                              | Task 7 test driving an approval request through the fake transport                                                                                     |
+| [AGB-08](../../product-specs/agent-backends.md#agb-08--a-missing-or-unusable-codex-installation-degrades-honestly)         | Spawn/handshake failure raises `RuntimeFailure("unavailable")`; creation is transactional so no thread row survives; `runtimeAvailable` on `ThreadSummary` already carries the open-time signal                                                                                                                                                                                  | Task 3 supervisor tests; Task 9 route test asserting no orphan thread                                                                                  |
+| [AGB-09](../../product-specs/agent-backends.md#agb-09--existing-codex-sessions-in-a-folder-can-be-imported)                | `discover` per backend via `thread/list` filtered by `cwd`; `runtime` added to `ImportThreadRequest` and the session descriptor listing                                                                                                                                                                                                                                          | Task 5 adapter tests; Task 9 route test                                                                                                                |
 
 ## Current behavior and affected invariants
 
@@ -236,7 +237,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       `defaultRuntime` (`PI_WEB_DEFAULT_RUNTIME`, default `codex`), `codexSandbox`
       (`PI_WEB_CODEX_SANDBOX`, default `workspace-write`), and `codexBin`
       (`PI_WEB_CODEX_BIN`). `BuildServerOptions` gains a `runtimes` map while
-      keeping the existing single-`runtime` seam working. `WorkspaceService` takes a
+      keeping the existing single-`runtime` seam working. The machine default must be **readable by the browser** — extend the existing workspace/settings response with `defaultRuntime` and the per-backend availability the composer needs for AGB-03. `WorkspaceService` takes a
       resolver and picks the adapter from `thread.runtime` at all eight call sites.
 
 - [ ] **Task 9 — Routes and creation flow carry the backend.** Requests resolve
@@ -257,11 +258,22 @@ the failing test, watch it fail, implement, watch it pass, commit.
       regression here is silent, so it needs a standing test rather than review
       attention.
 
-- [ ] **Task 11 — End-to-end coverage.** A Playwright spec creating a Codex chat
+- [ ] **Task 11 — Device backend preference and its Settings control.** Add
+      `apps/web/src/features/settings/backendPreferences.ts` following
+      `themePreferences.ts` **exactly** — same storage guard, JSON guard, `safeParse`,
+      and remove-on-malformed behaviour — with
+      `z.object({ version: z.literal(1), choice: z.enum(["follow-machine","pi","codex"]) })`,
+      key `pi-workspace:default-backend`, and default `follow-machine`. Add a
+      "Default agent" section to `SettingsPage` beside Theme. `NewChatPane` resolves
+      device preference → machine default → `codex` (AGB-02). Tests cover each
+      precedence rung, a malformed stored value, and storage being unavailable.
+      Verify: `pnpm --filter @pi-web/web exec vitest run src/features/settings`.
+
+- [ ] **Task 12 — End-to-end coverage.** A Playwright spec creating a Codex chat
       and a Pi chat in one project against the fake-runtime harness, asserting the
       badge, the default, and transcript parity.
 
-- [ ] **Task 12 — Documentation.** `packages/codex-adapter/README.md`; add it to
+- [ ] **Task 13 — Documentation.** `packages/codex-adapter/README.md`; add it to
       `REQUIRED_COMPONENT_DOCS` in `scripts/check_docs.py` and link it from
       `docs/README.md`; record the implemented structure in
       `docs/architecture/overview.md`; document the three new variables and the
@@ -278,6 +290,7 @@ pnpm --filter @pi-web/codex-adapter exec vitest run
 pnpm --filter @pi-web/server exec vitest run src/db/store.test.ts
 pnpm --filter @pi-web/server exec vitest run src/app.test.ts src/config.test.ts
 pnpm --filter @pi-web/web exec vitest run src/features/workspace
+pnpm --filter @pi-web/web exec vitest run src/features/settings
 ```
 
 Final, before completion:
@@ -319,8 +332,8 @@ output in Progress:
 
 ## Progress
 
-Not started. Awaiting product approval of specification version 1 and technical
-approval of plan version 1.
+Not started. Both approvals were granted on 2026-08-22; implementation begins at
+Task 1 and this plan moves to Active with the first production edit.
 
 ## Discoveries and blockers
 
@@ -350,6 +363,13 @@ No blockers.
   this makes the continue and fork surfaces explicit and adds standing tests, so
   the constraint is enforced rather than assumed. No change to scope or
   approach; the plan remains version 1.
+- 2026-08-22: The user approved Agent backends specification version 1 and this
+  plan version 1 in one message, resolving both open product questions. The
+  default backend gains a Settings control layered over the machine default,
+  which adds Task 11 and extends Task 8 with a browser-readable default. This
+  was folded into the documents **before** the approval was stamped, so the
+  approved text is the revised text. Unavailable backends are shown disabled
+  with a reason, as AGB-03 already specified — no change.
 
 ## Final outcomes
 

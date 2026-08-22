@@ -13,7 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Agent backends](agent-backends.md)                               | None            | 1                | Draft    | Not started    | [Codex agent runtime](../exec-plans/active/2026-08-22-codex-agent-runtime.md)                     |
+| [Agent backends](agent-backends.md)                               | None            | 1                | Approved | Not started    | [Codex agent runtime](../exec-plans/active/2026-08-22-codex-agent-runtime.md)                     |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -67,9 +67,11 @@ adds Codex beside Pi, makes Codex the default for new chats, and shows the
 backend wherever a chat appears. Existing chats are Pi and are unchanged. Codex
 chats run with interactive approvals disabled and, by default, confined to their
 execution root with no network — a deliberately stricter boundary than Pi's,
-stated rather than hidden. Product approval is pending and implementation has
-not started; the proposal becomes Current only after the user approves it and
-the behavior is verified.
+stated rather than hidden. The user approved product specification version 1 on
+2026-08-22, together with the linked plan version 1; both open product questions
+were resolved first, giving the default backend a Settings control layered over
+the machine default. Implementation has not started, and the proposal becomes
+Current only after the behavior is implemented and verified.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only
