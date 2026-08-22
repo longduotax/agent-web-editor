@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type JSX } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type JSX,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import type { GroupId } from "./panelModel.js";
 import { tabNeedsThread } from "./panelTabs.js";
@@ -87,6 +93,35 @@ export function NewTabMenu({
 
   const unavailable = context === null;
 
+  // APG expects roving focus in a menu, and the menu had none (D10): Tab was
+  // the only way between items, which walks out of the menu rather than
+  // around it. Disabled items are skipped — an unavailable choice is not a
+  // stop on the way to an available one.
+  const moveMenuFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = [
+      ...(menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not(:disabled)',
+      ) ?? []),
+    ];
+    if (items.length === 0) return;
+    const current = items.findIndex((item) => item === document.activeElement);
+    let next: HTMLButtonElement | undefined;
+    if (event.key === "ArrowDown")
+      next = items[current === -1 ? 0 : (current + 1) % items.length];
+    else if (event.key === "ArrowUp")
+      next =
+        items[
+          current === -1
+            ? items.length - 1
+            : (current - 1 + items.length) % items.length
+        ];
+    else if (event.key === "Home") next = items[0];
+    else if (event.key === "End") next = items[items.length - 1];
+    if (next === undefined) return;
+    event.preventDefault();
+    next.focus();
+  };
+
   return (
     <div className="panel-new-tab" ref={menuRef}>
       <button
@@ -105,7 +140,7 @@ export function NewTabMenu({
       </button>
       {open && (
         <div className="panel-menu">
-          <div role="menu" aria-label="New panel tab">
+          <div role="menu" aria-label="New panel tab" onKeyDown={moveMenuFocus}>
             {NEW_TAB_CHOICES.map((choice) => {
               const tab = choice.build(context);
               return (

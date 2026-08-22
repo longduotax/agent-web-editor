@@ -8,6 +8,7 @@ import * as axe from "axe-core";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { useState, type JSX } from "react";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import { TabStrip } from "./TabStrip.js";
@@ -132,22 +133,64 @@ describe("TabStrip", () => {
     expect(strip[2]).toHaveAttribute("tabindex", "-1");
   });
 
-  it("moves through the strip with the arrow keys, wrapping at both ends", async () => {
+  // Against a spy alone the group never updates, so every step computes from
+  // a frozen `activeTabId` and the expectations become artefacts of the stub
+  // rather than of the strip. This drives a strip whose group follows the
+  // selection, and asserts what `moveFocus`'s own comment says it must: the
+  // roving tabindex moves, so focus has to move with it or the next Tab
+  // press leaves from an element that is now -1.
+  it("moves through the strip with the arrow keys, wrapping, and takes focus with it", async () => {
     const user = userEvent.setup();
-    const actions = renderStrip();
-    const strip = screen.getAllByRole("tab");
-    strip[0]?.focus();
+    const activated = vi.fn();
+
+    function LiveStrip(): JSX.Element {
+      const [activeTabId, setActiveTabId] = useState<TabId>("tab-1");
+      const actions: PanelActions = {
+        ...actionsSpy(),
+        activateTab: (tabId) => {
+          activated(tabId);
+          setActiveTabId(tabId);
+        },
+      };
+      return (
+        <TabStrip
+          group={{ ...group, activeTabId }}
+          tabs={tabs}
+          actions={actions}
+          focused
+          focusRequest={0}
+          focusedContext={here}
+          index={1}
+          groupCount={1}
+        />
+      );
+    }
+
+    render(<LiveStrip />);
+    screen.getByRole("tab", { name: "Changes" }).focus();
 
     await user.keyboard("{ArrowRight}");
-    expect(actions.activateTab).toHaveBeenCalledWith("tab-2");
+    expect(activated).toHaveBeenLastCalledWith("tab-2");
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
 
     await user.keyboard("{ArrowLeft}");
-    expect(actions.activateTab).toHaveBeenLastCalledWith("tab-3");
+    expect(activated).toHaveBeenLastCalledWith("tab-1");
+    expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus();
 
-    await user.keyboard("{End}");
-    expect(actions.activateTab).toHaveBeenLastCalledWith("tab-3");
+    // Wrapping at the start of the strip, which is where the frozen-stub
+    // version of this test claimed to be.
+    await user.keyboard("{ArrowLeft}");
+    expect(activated).toHaveBeenLastCalledWith("tab-3");
+    expect(screen.getByRole("tab", { name: /main\.ts/ })).toHaveFocus();
+
     await user.keyboard("{Home}");
-    expect(actions.activateTab).toHaveBeenLastCalledWith("tab-1");
+    expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: /main\.ts/ })).toHaveFocus();
   });
 
   it("activates a tab on click", async () => {
@@ -229,6 +272,54 @@ describe("TabStrip", () => {
     expect(
       screen.getByText(/Focus a chat pane with a thread/),
     ).toBeInTheDocument();
+  });
+
+  // D10. APG expects roving focus in a menu; this one had none, so the only
+  // way between its items was Tab, which walks out of the menu.
+  it("walks the new-tab menu with the arrow keys, wrapping, plus Home and End", async () => {
+    const user = userEvent.setup();
+    renderStrip();
+
+    await user.click(screen.getByRole("button", { name: "New panel tab" }));
+    // Opening focuses the first item.
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Files" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    // Three items, so two more steps wrap back to the first.
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toHaveFocus();
+
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: "Terminal" })).toHaveFocus();
+
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("menuitem", { name: "Terminal" })).toHaveFocus();
+  });
+
+  it("skips a menu item that cannot be chosen", async () => {
+    const user = userEvent.setup();
+    // No focused thread: every thread-bound choice is disabled, so there is
+    // nothing to walk to and the walk must not land on one anyway.
+    renderStrip({ focusedContext: null });
+
+    await user.click(screen.getByRole("button", { name: "New panel tab" }));
+    await user.keyboard("{ArrowDown}");
+
+    expect(screen.getByRole("menuitem", { name: "Changes" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Changes" })).not.toHaveFocus();
+  });
+
+  it("dismisses the menu with Escape, returning focus to the control that opened it", async () => {
+    const user = userEvent.setup();
+    renderStrip();
+
+    await user.click(screen.getByRole("button", { name: "New panel tab" }));
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: "New panel tab" })).toHaveFocus();
   });
 
   it("dismisses the menu with Escape", async () => {

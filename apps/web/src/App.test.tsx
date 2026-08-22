@@ -48,6 +48,14 @@ vi.mock("./api/client.js", async (importOriginal) => {
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { App, Composer } from "./App.js";
+import type { PanelTab } from "./features/panel/panelTabs.js";
+
+/** Just enough of the device-local panel record for these assertions. */
+interface PersistedPanel {
+  version: number;
+  open: boolean;
+  tabs: Record<string, PanelTab>;
+}
 
 afterEach(() => {
   cleanup();
@@ -550,10 +558,16 @@ describe("safe and accessible workspace rendering", () => {
       });
     });
     // Both tabs are in the device-local record, not just the visible one.
-    expect(values.get("pi-workspace:panel") ?? "").toContain('"type":"files"');
-    expect(values.get("pi-workspace:panel") ?? "").toContain(
-      '"type":"changes"',
-    );
+    // Parsed rather than string-matched: `toContain` on raw JSON passes on a
+    // record that says anything at all about a type, in any position.
+    const record = JSON.parse(
+      values.get("pi-workspace:panel") ?? "",
+    ) as PersistedPanel;
+    expect(
+      Object.values(record.tabs)
+        .map((tab) => tab.type)
+        .sort(),
+    ).toEqual(["changes", "files"]);
 
     const closePanel = screen.getByRole("button", {
       name: "Close workspace panel",
