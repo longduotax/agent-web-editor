@@ -24,7 +24,11 @@ import { Loading } from "../../components/Loading.js";
 import { Markdown } from "../../components/Markdown.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
 import { readDraft, removeDraft, writeDraft } from "./drafts.js";
-import { applyLiveTranscript, STREAMING_ITEM_ID } from "./liveTranscript.js";
+import {
+  mergeLiveTurn,
+  reduceLiveTurn,
+  STREAMING_ITEM_ID,
+} from "./liveTranscript.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { deriveRunStatus, elapsedLabel } from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
@@ -39,12 +43,12 @@ export interface ThreadPaneProps {
 }
 
 /**
- * How long streamed transcript frames are pooled before one cache write.
+ * How long streamed transcript frames are pooled before one state update.
  *
  * Measured against the running server: a 2,583 character answer arrived as
  * 494 `transcript` frames in 14.5s, median 7ms apart. Applying each one
  * separately would re-render the transcript ~140 times a second and make
- * typing in the composer stutter. 40ms is 25 writes a second — under a paint
+ * typing in the composer stutter. 40ms is 25 updates a second — under a paint
  * budget, and far above the rate at which text stops reading as "streaming".
  */
 const LIVE_FLUSH_MS = 40;
@@ -61,12 +65,32 @@ const LIVE_FLUSH_MS = 40;
  */
 const LIVE_REFETCH_MS = 200;
 
+/**
+ * Subscribes to the thread's live channel and returns the in-progress
+ * assistant turn.
+ *
+ * The turn is returned as component state rather than written into the
+ * `["snapshot", ...]` cache entry, and that is load-bearing: React Query
+ * replaces query data wholesale on every fetch success, the pane polls every
+ * 15s, and the server snapshot provably cannot contain the in-progress
+ * message. Cached, a partly-streamed answer was deleted from the screen by
+ * every poll tick and every throttled refetch — invisible while tokens flow
+ * at 7ms intervals, but a blank paragraph for the whole of a tool call.
+ */
 function useLive(
   projectId: ProjectId,
   threadId: ThreadId,
   ready: boolean,
-): void {
+  runActive: boolean,
+): TranscriptItem | null {
   const queryClient = useQueryClient();
+  const [liveTurn, setLiveTurn] = useState<TranscriptItem | null>(null);
+  // The turn belongs to the run that produced it. `runActive` only goes false
+  // once a fetch has told us so, and that same fetch carried the settled
+  // message, so there is no moment where the text belongs to neither.
+  useEffect(() => {
+    if (!runActive) setLiveTurn(null);
+  }, [runActive]);
   useEffect(() => {
     if (!ready) return;
     const queryKey = ["snapshot", projectId, threadId];
@@ -89,15 +113,7 @@ function useLive(
       }
       if (pending.length === 0) return;
       const batch = pending.splice(0, pending.length);
-      queryClient.setQueryData<ThreadSnapshot>(queryKey, (current) =>
-        current === undefined
-          ? current
-          : applyLiveTranscript(
-              current,
-              batch,
-              cursor?.sequence ?? current.highWaterSequence,
-            ),
-      );
+      setLiveTurn((current) => batch.reduce(reduceLiveTurn, current));
     };
     const scheduleFlush = () => {
       flushTimer ??= window.setTimeout(flush, LIVE_FLUSH_MS);
@@ -120,6 +136,9 @@ function useLive(
     };
 
     const onMessage = (event: MessageEvent) => {
+      // A frame can still be dispatched after cleanup closed the socket;
+      // acting on it would leave a timer running past unmount.
+      if (closed) return;
       let value: unknown;
       try {
         value = JSON.parse(String(event.data));
@@ -137,11 +156,15 @@ function useLive(
       const parsed = LiveEventSchema.safeParse(value);
       if (!parsed.success) return;
       const live = parsed.data;
+      if (live.threadId !== threadId) return;
       const contiguous =
         cursor !== null &&
         live.epoch === cursor.epoch &&
         live.sequence === cursor.sequence + 1;
-      cursor = { epoch: live.epoch, sequence: live.sequence };
+      // Only ever forwards within an epoch, so a server that replayed an old
+      // event could not rewind gap detection.
+      if (live.epoch !== cursor?.epoch || live.sequence > cursor.sequence)
+        cursor = { epoch: live.epoch, sequence: live.sequence };
       // A gap or a new epoch means events we never saw. The frame in hand is
       // still applied (payloads are whole items, not deltas), but the
       // snapshot is re-fetched to close whatever was missed.
@@ -157,9 +180,9 @@ function useLive(
           scheduleFlush();
           return;
         }
-        // The turn settled. Paint it immediately, then reconcile with the
-        // server for the tool steps and canonical ids the live channel does
-        // not carry.
+        // The turn settled. Show it at once, then reconcile with the server
+        // for the tool steps and canonical ids the live channel does not
+        // carry; `mergeLiveTurn` stops appending it once that lands.
         flush();
         scheduleRefetch();
         return;
@@ -196,12 +219,14 @@ function useLive(
     connect();
     return () => {
       closed = true;
+      setLiveTurn(null);
       if (retry !== undefined) clearTimeout(retry);
       if (flushTimer !== undefined) clearTimeout(flushTimer);
       if (refetchTimer !== undefined) clearTimeout(refetchTimer);
       socket?.close();
     };
   }, [projectId, queryClient, ready, threadId]);
+  return liveTurn;
 }
 
 type ToolItem = Extract<TranscriptItem, { kind: "tool" }>;
@@ -246,14 +271,27 @@ function transcriptContentKey(
   );
 }
 
-function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
-  const items = displayTranscript(snapshot.transcript);
+function Transcript({
+  snapshot,
+  liveTurn,
+}: {
+  snapshot: ThreadSnapshot;
+  liveTurn: TranscriptItem | null;
+}) {
+  const items = displayTranscript(mergeLiveTurn(snapshot.transcript, liveTurn));
   const scrollRef = useStickToBottom<HTMLDivElement>(
     snapshot.thread.id,
     transcriptContentKey(items, snapshot.diagnostics),
   );
   const running = snapshot.currentRun?.state === "running";
   const groups = groupTranscriptItems(items);
+  // The newest batch of steps stays open for the whole run. Keying "live" to
+  // the last group of any kind made a finished batch snap shut the moment the
+  // assistant started narrating after it, which is a layout jump mid-run.
+  const lastToolGroup = groups.reduce(
+    (last, group, index) => (group.kind === "tool-run" ? index : last),
+    -1,
+  );
   return (
     <div className="transcript" aria-label="Conversation" ref={scrollRef}>
       <div className="transcript-column">
@@ -267,11 +305,11 @@ function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
         )}
         {groups.map((group, index) => {
           if (group.kind === "tool-run") {
-            // A group is live while its run is: either it is the newest thing
-            // in the transcript, or one of its steps is still running.
+            // A group is live while its run is: either it is the newest
+            // batch of steps, or one of its steps is still running.
             const live =
               running &&
-              (index === groups.length - 1 ||
+              (index === lastToolGroup ||
                 group.items.some((item) => item.status === "running"));
             return (
               <ActivityGroup
@@ -429,7 +467,12 @@ export function ThreadPane(props: ThreadPaneProps) {
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
   });
-  useLive(projectId, threadId, snapshot.data !== undefined);
+  const liveTurn = useLive(
+    projectId,
+    threadId,
+    snapshot.data !== undefined,
+    snapshot.data?.currentRun?.state === "running",
+  );
   useEffect(() => {
     const lastRun = snapshot.data?.lastRun;
     if (snapshot.data?.thread.unread === true && lastRun?.state === "completed")
@@ -528,7 +571,7 @@ export function ThreadPane(props: ThreadPaneProps) {
         </main>
       ) : (
         <main className="center">
-          <Transcript snapshot={snapshot.data} />
+          <Transcript liveTurn={liveTurn} snapshot={snapshot.data} />
           {failureText !== null && (
             <div className="run-failure">
               <p className="run-failure-body" role="status">

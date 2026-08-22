@@ -8,6 +8,7 @@ import {
   getWorkspacePreflight,
   startThread,
 } from "../../api/client.js";
+import { ActivityStep } from "../../components/Activity.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Markdown } from "../../components/Markdown.js";
 import {
@@ -67,9 +68,16 @@ export function NewChatPane(props: NewChatPaneProps) {
     if (preflight.data?.currentBranch !== null && baseBranch === "")
       setBaseBranch(preflight.data?.currentBranch ?? "");
   }, [baseBranch, preflight.data?.currentBranch]);
+  // Submitting clears the visible composer, but the draft must not go with
+  // it: until the thread exists, storage is the only copy of what was typed,
+  // and creating the worktree takes 1.6-2.6s (longer if the request hangs).
+  // `onSuccess` removes it once there is a thread to hold the message.
   useEffect(() => {
-    writeDraft(draftKey, text);
-  }, [draftKey, text]);
+    writeDraft(
+      draftKey,
+      text === "" && sentPrompt !== null ? sentPrompt : text,
+    );
+  }, [draftKey, sentPrompt, text]);
   const create = useMutation({
     mutationFn: async (promptText: string) =>
       await startThread(
@@ -90,6 +98,7 @@ export function NewChatPane(props: NewChatPaneProps) {
         creationKey,
       ),
     onSuccess: async (result) => {
+      setSentPrompt(null);
       removeDraft(draftKey);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       props.onThreadStarted(result.thread.id);
@@ -99,6 +108,13 @@ export function NewChatPane(props: NewChatPaneProps) {
     (candidate) => candidate.id === projectId,
   );
   const send = (value: string) => {
+    // `requestSubmit()` with no argument ignores the disabled submit button,
+    // so Enter still reaches this while a thread is being created. That used
+    // to be harmless because the composer still held the original text and
+    // the unchanged `creationKey` deduplicated it server-side -- but the
+    // composer is cleared now, so typing again regenerates the key and a
+    // second Enter would create a second thread and a second git worktree.
+    if (create.isPending) return;
     if (
       value.trim() === "" ||
       (mode === "worktree" &&
@@ -164,37 +180,34 @@ export function NewChatPane(props: NewChatPaneProps) {
                 </div>
               </div>
             </div>
-            <details className="activity activity-running">
-              <summary>
-                <span className="activity-state" aria-label="Running">
-                  <span aria-hidden="true">◌</span>
-                </span>
-                <span className="activity-action">Preparing</span>
-                <span className="activity-target">
-                  {mode === "worktree"
+            <ActivityStep
+              label={{
+                action: "Preparing",
+                target:
+                  mode === "worktree"
                     ? "new git worktree"
+                    : (project?.displayPath ?? "local checkout"),
+                meta: "naming the thread",
+              }}
+              status="running"
+            >
+              {/* Facts about the workspace being prepared. Deliberately not
+                  labelled "Input" and not a synthetic command line: every
+                  other <pre> on this surface shows a command that actually
+                  ran, and this step is not a command. */}
+              <section>
+                <h3>Workspace</h3>
+                <pre>
+                  {mode === "worktree"
+                    ? `${baseBranch || "HEAD"} · ${
+                        sourceChanges === "none"
+                          ? "clean start"
+                          : "including local changes"
+                      }`
                     : (project?.displayPath ?? "local checkout")}
-                </span>
-                <span className="activity-meta">naming the thread</span>
-                <span className="activity-chevron" aria-hidden="true">
-                  ›
-                </span>
-              </summary>
-              <div className="activity-details">
-                <section>
-                  <h3>Input</h3>
-                  <pre>
-                    {mode === "worktree"
-                      ? `git worktree add  (base ${baseBranch || "HEAD"}, ${
-                          sourceChanges === "none"
-                            ? "clean start"
-                            : "including local changes"
-                        })`
-                      : "Running in the existing local checkout."}
-                  </pre>
-                </section>
-              </div>
-            </details>
+                </pre>
+              </section>
+            </ActivityStep>
           </div>
         )}
         <form className="new-chat-card" onSubmit={submit}>

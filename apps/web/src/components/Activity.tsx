@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { TranscriptItem } from "@pi-web/contracts";
 
 type ToolActivity = Extract<TranscriptItem, { kind: "tool" }>;
 type ToolArguments = Record<string, unknown>;
 
-interface ActivityLabel {
+export interface ActivityLabel {
   action: string;
   prefix?: string | undefined;
   target?: string | undefined;
@@ -178,38 +178,48 @@ export function displayTranscript(
   );
 }
 
-export function Activity({
-  item,
-  projectPath,
+export type ActivityStatus = ToolActivity["status"];
+
+const STATUS_LABEL: Record<ActivityStatus, string> = {
+  running: "Running",
+  failed: "Failed",
+  completed: "Completed",
+};
+const STATUS_GLYPH: Record<ActivityStatus, string> = {
+  running: "◌",
+  failed: "!",
+  completed: "✓",
+};
+
+/**
+ * One step row in the transcript: a status glyph, a label, and a body that
+ * only mounts once the row is opened.
+ *
+ * Exported so that surfaces which have a step to show but no tool call behind
+ * it -- the new-chat pane, while it prepares a worktree -- render the real
+ * component instead of a copy of its markup that drifts the first time this
+ * file changes.
+ */
+export function ActivityStep({
+  status,
+  label,
+  children,
 }: {
-  item: ToolActivity;
-  projectPath: string;
+  status: ActivityStatus;
+  label: ActivityLabel;
+  children?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const label = formatToolLabel(item, projectPath);
-  const stateLabel =
-    item.status === "running"
-      ? "Running"
-      : item.status === "failed"
-        ? "Failed"
-        : "Completed";
-
   return (
     <details
-      className={`activity activity-${item.status}`}
+      className={`activity activity-${status}`}
       onToggle={(event) => {
         setExpanded(event.currentTarget.open);
       }}
     >
       <summary>
-        <span className="activity-state" aria-label={stateLabel}>
-          <span aria-hidden="true">
-            {item.status === "running"
-              ? "◌"
-              : item.status === "failed"
-                ? "!"
-                : "✓"}
-          </span>
+        <span className="activity-state" aria-label={STATUS_LABEL[status]}>
+          <span aria-hidden="true">{STATUS_GLYPH[status]}</span>
         </span>
         <span className="activity-action">{label.action}</span>
         {label.prefix !== undefined && (
@@ -225,29 +235,40 @@ export function Activity({
           ›
         </span>
       </summary>
-      {expanded && (
-        <div className="activity-details">
-          <section>
-            <h3>Input</h3>
-            <pre>{formattedInput(item.input)}</pre>
-          </section>
-          {item.output !== "" && (
-            <section>
-              <h3>Output</h3>
-              <pre>{item.output}</pre>
-            </section>
-          )}
-          {(item.cwd !== null || item.exitCode !== null) && (
-            <footer>
-              {item.cwd !== null && <span>cwd {item.cwd}</span>}
-              {item.exitCode !== null && (
-                <span>exit {String(item.exitCode)}</span>
-              )}
-            </footer>
-          )}
-        </div>
-      )}
+      {expanded && <div className="activity-details">{children}</div>}
     </details>
+  );
+}
+
+export function Activity({
+  item,
+  projectPath,
+}: {
+  item: ToolActivity;
+  projectPath: string;
+}) {
+  return (
+    <ActivityStep
+      label={formatToolLabel(item, projectPath)}
+      status={item.status}
+    >
+      <section>
+        <h3>Input</h3>
+        <pre>{formattedInput(item.input)}</pre>
+      </section>
+      {item.output !== "" && (
+        <section>
+          <h3>Output</h3>
+          <pre>{item.output}</pre>
+        </section>
+      )}
+      {(item.cwd !== null || item.exitCode !== null) && (
+        <footer>
+          {item.cwd !== null && <span>cwd {item.cwd}</span>}
+          {item.exitCode !== null && <span>exit {String(item.exitCode)}</span>}
+        </footer>
+      )}
+    </ActivityStep>
   );
 }
 

@@ -148,6 +148,30 @@ describe("worked-for run grouping", () => {
     expect(screen.queryByText("Working…")).toBeNull();
   });
 
+  it("lets the user fold a live group away, and keeps it folded while it runs", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <ActivityGroup items={[runningRead]} live projectPath="/workspace" />,
+    );
+    const summary = screen.getByText("Working…");
+    expect(summary.closest("details")).toHaveAttribute("open");
+
+    await user.click(summary);
+    expect(summary.closest("details")).not.toHaveAttribute("open");
+
+    // More steps land while it is folded: it stays folded.
+    view.rerender(
+      <ActivityGroup
+        items={[runningRead, { ...completedRead, id: "later" }]}
+        live
+        projectPath="/workspace"
+      />,
+    );
+    expect(screen.getByText("Working…").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+  });
+
   it("keeps the duration slot filled when tool timestamps do not establish a duration", () => {
     render(
       <ActivityGroup

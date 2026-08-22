@@ -466,6 +466,21 @@ describe("live streaming", () => {
   });
 
   const epoch = "40000000-0000-4000-8000-000000000001";
+  /** A thread with a run in flight, which is when live frames arrive. */
+  const running: ThreadSnapshot = {
+    ...snapshot,
+    thread: { ...snapshot.thread, runState: "running" },
+    currentRun: {
+      id: "50000000-0000-4000-8000-000000000009" as RunId,
+      threadId,
+      projectId,
+      state: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      endedAt: null,
+      failureCode: null,
+      failureMessage: null,
+    },
+  };
   function frame(sequence: number, payload: unknown) {
     return {
       version: 1,
@@ -551,13 +566,15 @@ describe("live streaming", () => {
       text: "Work in 25 minute blocks.",
       timestamp: "2026-01-01T00:00:02.000Z",
     } as const;
-    api.getSnapshot.mockResolvedValue(snapshot);
+    // The refetch the settled frame triggers must NOT be what makes this pass:
+    // the server is left holding the pre-turn transcript, so a placeholder
+    // that survived alongside the settled turn would show up as a duplicate.
+    api.getSnapshot.mockResolvedValue(running);
     renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
     const socket = await connect();
 
     await deliver(socket, frame(1, streamed("Work in 25 minute")));
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [settled] });
     await deliver(socket, frame(2, settled));
 
     expect(screen.getAllByText("Work in 25 minute blocks.")).toHaveLength(1);
@@ -567,6 +584,55 @@ describe("live streaming", () => {
     await waitFor(() => {
       expect(api.getSnapshot).toHaveBeenCalled();
     });
+    // ...and the reconciled snapshot does not double the answer either.
+    expect(screen.getAllByText("Work in 25 minute blocks.")).toHaveLength(1);
+  });
+
+  // B1. The streamed turn used to live in the ["snapshot", ...] query cache,
+  // and React Query replaces query data wholesale on every fetch success.
+  // The pane polls every 15s and the server snapshot provably cannot hold
+  // the in-progress message, so every completed fetch wiped the partial
+  // answer off the screen. While tokens flow at a 7ms median it was restored
+  // within the 40ms flush window and was invisible -- but while the model is
+  // paused on a tool call, nothing restores it, and the paragraph stays gone
+  // for the whole pause. Text -> tool -> text is the most common real turn.
+  it("keeps a partly-streamed answer on screen across a refetch while the model is paused", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(socket, frame(1, streamed("Let me check the repository")));
+    expect(screen.getByText("Let me check the repository")).toBeInTheDocument();
+
+    // The 15s background poll fires while Pi is inside a slow tool call, so
+    // no further frame arrives to repaint the text.
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["snapshot"] });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+
+    expect(screen.getByText("Let me check the repository")).toBeInTheDocument();
+  });
+
+  it("drops the streamed turn once the run is no longer active", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+    const socket = await connect();
+
+    await deliver(socket, frame(1, streamed("half an answer")));
+    expect(screen.getByText("half an answer")).toBeInTheDocument();
+
+    // The fetch that reports the run settled is the one that carries the
+    // persisted message, so nothing is lost by letting go here.
+    api.getSnapshot.mockResolvedValue(snapshot);
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["snapshot"] });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+
+    expect(screen.queryByText("half an answer")).toBeNull();
   });
 
   it("falls back to a full refetch when the server cannot replay from our cursor", async () => {
