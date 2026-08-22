@@ -10,9 +10,17 @@
   --hairline-2: #e2e2e4;
   --text: #1d1d1f;
   --text-2: #3a3a3e;
-  --muted: #8a8a8f;
+  /* Secondary text. Chosen against the DARKEST background it ever lands on --
+     the --active row fill (#ececee) -- not against the page: 4.76:1 there,
+     5.62:1 on white, so every muted string clears WCAG AA 4.5:1 wherever it
+     sits. The old #8a8a8f was 2.91:1 on a hovered/selected row. */
+  --muted: #67676d;
+  /* Small glyph affordances (the + and the ...), which are single 11-16px
+     characters rather than words and so need more contrast than body-sized
+     muted text to stay findable: 5.80:1 on --active, 6.84:1 on white. */
+  --glyph: #5a5a61;
   --faint: #b3b3b8;
-  --green: #2f9e44;
+  --green: #1e7b34;
   --red: #d1453b;
   --amber: #c07d16;
   --accent: #2f6feb;
@@ -20,9 +28,11 @@
   --send-fg: #ffffff;
   --run: #c07d16;
   --wait: #2f6feb;
-  --done: #2f9e44;
+  --done: #1e7b34;
   --fail: #d1453b;
-  --focus-ring: rgba(47, 111, 235, 0.5);
+  /* Opaque, not 50% alpha: a half-transparent ring composites down to about
+     2.3:1 on white, under the 3:1 that a focus indicator needs to be seen. */
+  --focus-ring: var(--accent);
   --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
   --pop-shadow:
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
@@ -38,7 +48,13 @@
    composer and the new-chat card all size on this and nothing else; no
    component may hardcode its own measure. */
 :root {
-  --surface-measure: 48rem;
+  /* Sized from the measured line length of real transcript prose, not from a
+     round number: at 48rem the median FULL line of an assistant paragraph ran
+     112 characters, far past the 60-75 that keeps the eye from losing its
+     place on line return. 35rem at the 1rem body copy below lands the median
+     at 74. One token still drives the transcript, the composer and the
+     new-chat card together (CWS-07), so they stay on one axis. */
+  --surface-measure: 35rem;
   /* One height for the top-of-column header rows (the panel's tab strip and
      its collapsed rail). */
   --header-h: 3.8rem;
@@ -76,6 +92,7 @@
     --text: #ececee;
     --text-2: #c3c5cb;
     --muted: #8b8d95;
+    --glyph: #9a9ca4;
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
@@ -87,7 +104,7 @@
     --wait: #6aa0ff;
     --done: #4ec06f;
     --fail: #e0645c;
-    --focus-ring: rgba(106, 160, 255, 0.55);
+    --focus-ring: var(--accent);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
     /* Dark needs its own value, not the light one: a shadow tuned for a
@@ -111,6 +128,7 @@
   --text: #ececee;
   --text-2: #c3c5cb;
   --muted: #8b8d95;
+  --glyph: #9a9ca4;
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
@@ -122,7 +140,7 @@
   --wait: #6aa0ff;
   --done: #4ec06f;
   --fail: #e0645c;
-  --focus-ring: rgba(106, 160, 255, 0.55);
+  --focus-ring: var(--accent);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
@@ -166,12 +184,23 @@ a:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
+/* `clip`, never `hidden`. The collapsed panel parks itself off-canvas with
+   `transform: translateX(100%)` on a 400px box, which leaves 400px of
+   scrollable overflow past the grid's right edge -- `visibility: hidden`
+   hides the panel but does not remove it from the scrollable region.
+   `overflow: hidden` clips that but still makes the shell a SCROLL
+   CONTAINER, so the browser's scroll-into-view on the first click inside a
+   pane drove scrollLeft to 400 and dragged the project sidebar off-screen
+   with no scrollbar to bring it back. `clip` paints identically and creates
+   no scroll container at all, so scrollLeft is permanently 0 and the panel's
+   slide-in transition still animates from off-canvas. `overflow-clip-margin`
+   is left at its initial 0px -- nothing outside the box may paint. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr);
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
+  overflow: clip;
   background: var(--surface-0);
 }
 .workspace.panel-available {
@@ -280,7 +309,7 @@ a:focus-visible {
   flex: none;
   border: 0;
   border-radius: 0.3rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   cursor: pointer;
 }
@@ -357,7 +386,7 @@ a:focus-visible {
   padding: 0.2rem 0.35rem;
   border: 0;
   border-radius: 0.35rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   font-size: 0.72rem;
   font-weight: 600;
@@ -453,7 +482,7 @@ a:focus-visible {
   line-height: 1;
   border: 0;
   border-radius: 0.3rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   cursor: pointer;
 }
@@ -483,7 +512,10 @@ a:focus-visible {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--card);
-  box-shadow: 0 0.65rem 1.8rem #0008;
+  /* Was `#0008` -- 53% black, which on a near-white sidebar reads as a muddy
+     bruise rather than elevation. Share the app's popover token instead: 12%
+     at the spread, 6% at the contact edge, and dark-mode-correct for free. */
+  box-shadow: var(--pop-shadow);
 }
 .thread-context-menu button {
   border: 0;
@@ -494,12 +526,23 @@ a:focus-visible {
   text-align: left;
   cursor: pointer;
 }
-.thread-context-menu button:hover:not(:disabled),
+.thread-context-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+/* Focus needs a ring, not just the hover fill: --hover on --card is a 1.03:1
+   difference, invisible as the sole indicator of where the keyboard is. The
+   ring is inset so it cannot be clipped by the menu's own `overflow: hidden`. */
 .thread-context-menu button:focus-visible {
   background: var(--hover);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
-.thread-context-menu button:last-child:not(:disabled) {
+/* Red is the app's only "you might not get this back" signal, so it is spent
+   only on actions that are actually irreversible -- NOT on Archive, which
+   stages an undo toast and leaves the thread one click away in the sidebar's
+   Archived section. Nothing in this menu claims it today; the class stays so
+   a genuinely destructive item can opt in by name rather than by position. */
+.thread-context-menu button.destructive:not(:disabled) {
   color: var(--fail);
 }
 .thread-context-menu button:disabled {
@@ -1045,19 +1088,23 @@ a:focus-visible {
   margin: 0 0 1.4rem;
   justify-content: flex-end;
 }
+/* Transcript body copy is 1rem, not 0.9rem. Pi's answers are the product and
+   14.4px is small for sustained prose; 16px also matches what the composer
+   already renders (it inherits the root size), so the turn the user types and
+   the turn they read are finally set in the same type. */
 .u-bubble {
   max-width: 80%;
   padding: 0.62rem 0.9rem;
   border-radius: 1.05rem;
   background: var(--user-pill);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.5;
 }
 .a-block {
   margin: 0 0 1.4rem;
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.6;
 }
 .worked-group {
@@ -1100,6 +1147,15 @@ a:focus-visible {
   color: var(--text);
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+/* The UA default paragraph margin is 1em, which against a 1.6 line-height
+   leaves less air between two paragraphs than between two lines of the same
+   paragraph -- so paragraph boundaries barely register. 1.4em reads as a
+   break without loosening the block. Bottom-only, because
+   `.markdown > :first-child`/`:last-child` already zero the outer edges and a
+   single-direction margin cannot collapse ambiguously. */
+.markdown > :is(p, ul, ol, blockquote) {
+  margin-block: 0 1.4em;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -1335,9 +1391,14 @@ a:focus-visible {
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
+/* The composer keeps a soft glow rather than a hard outline -- it is a box the
+   user is inside, not a control they landed on -- but at the same 2px weight
+   as every other focus indicator, and with a border that goes fully accent
+   rather than 45% of the way there. At 1px/25% it was easy to miss which pane
+   the keyboard was in when two panes are open. */
 .composer-input:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-2));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .composer-input textarea {
   display: block;
@@ -2559,10 +2620,16 @@ a:focus-visible {
   font-size: 0.82rem;
   cursor: pointer;
 }
-.new-chat-toolbar select:hover:not(:disabled),
+.new-chat-toolbar select:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+/* These three selects are the most consequential control in the app (worktree,
+   start mode, base branch) and they had `outline: none` with a hover fill as
+   their only focus state -- indistinguishable from a passing mouse. */
 .new-chat-toolbar select:focus-visible {
   background: var(--surface-hover);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .new-chat-toolbar select:disabled {
   color: var(--muted);

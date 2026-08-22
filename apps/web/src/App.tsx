@@ -70,6 +70,31 @@ interface PendingArchive {
   title: string;
 }
 
+// The thread context menu's own footprint, mirrored from `.thread-context-menu`
+// in styles.css (min-width 9rem, 0.3rem padding, 1px border; two 0.45rem/0.55rem
+// items). Only ever used to keep the menu inside the viewport, so an estimate
+// that errs LARGE is the safe direction — it can only pull the menu further in.
+const THREAD_MENU_WIDTH = 160;
+const THREAD_MENU_HEIGHT = 96;
+const VIEWPORT_INSET = 8;
+
+// Anchors the menu beside the row that opened it rather than below it. Opening
+// downward from the button's bottom edge covered the very next thread — the
+// user lost sight of the list they were acting on — so the menu is placed off
+// the row's right edge, level with its top, and clamped into the viewport.
+function clampThreadMenu(left: number, top: number) {
+  return {
+    left: Math.max(
+      VIEWPORT_INSET,
+      Math.min(left, window.innerWidth - THREAD_MENU_WIDTH - VIEWPORT_INSET),
+    ),
+    top: Math.max(
+      VIEWPORT_INSET,
+      Math.min(top, window.innerHeight - THREAD_MENU_HEIGHT - VIEWPORT_INSET),
+    ),
+  };
+}
+
 function Sidebar({
   selectedProjectId,
   selectedThreadId,
@@ -474,8 +499,7 @@ function Sidebar({
                           threadId: thread.id,
                           title: thread.title,
                           running,
-                          left,
-                          top,
+                          ...clampThreadMenu(left, top),
                         });
                       };
                       return (
@@ -501,7 +525,7 @@ function Sidebar({
                             event.preventDefault();
                             const bounds =
                               event.currentTarget.getBoundingClientRect();
-                            openMenu(bounds.right, bounds.bottom);
+                            openMenu(bounds.right + 6, bounds.top);
                           }}
                         >
                           {editing ? (
@@ -609,7 +633,7 @@ function Sidebar({
                                   event.stopPropagation();
                                   const bounds =
                                     event.currentTarget.getBoundingClientRect();
-                                  openMenu(bounds.left, bounds.bottom);
+                                  openMenu(bounds.right + 6, bounds.top);
                                 }}
                               >
                                 <span aria-hidden="true">…</span>

@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   act,
   cleanup,
@@ -1886,5 +1889,237 @@ describe("panel Changes tab states", () => {
     expect(
       screen.queryByText("No changes in this worktree."),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Shell chrome that has no component of its own: it lives entirely in
+// styles.css, so it is asserted against the stylesheet source. jsdom does not
+// cascade, and a palette that only LOOKS right in a snapshot is what let 53
+// elements fail contrast, so the colour assertions compute real ratios.
+describe("shell layout and light-mode palette", () => {
+  const readStyles = async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return await readFile(resolve(here, "styles.css"), "utf8");
+  };
+
+  /** The body of the first top-level rule for `selector`. */
+  const ruleBody = (css: string, selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`\\n${escaped}\\s*\\{([^}]*)\\}`).exec(css);
+    if (match === null)
+      throw new Error(`no top-level rule found for selector "${selector}"`);
+    return match[1] ?? "";
+  };
+
+  /** A custom property's value from the first (light) :root block. */
+  const token = (css: string, name: string): string => {
+    const match = new RegExp(`--${name}:\\s*([^;]+);`).exec(css);
+    if (match === null) throw new Error(`no --${name} token in styles.css`);
+    return (match[1] ?? "").trim();
+  };
+
+  const relativeLuminance = (color: string): number => {
+    const hex = color.replace("#", "");
+    const linear = [0, 2, 4].map((i) => {
+      const s = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    return (
+      0.2126 * (linear[0] ?? 0) +
+      0.7152 * (linear[1] ?? 0) +
+      0.0722 * (linear[2] ?? 0)
+    );
+  };
+
+  const contrast = (foreground: string, background: string): number => {
+    const a = relativeLuminance(foreground);
+    const b = relativeLuminance(background);
+    const [lighter, darker] = a > b ? [a, b] : [b, a];
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  // F1/F6. `hidden` clips but still makes the shell a scroll container, so
+  // the collapsed panel's 400px of off-canvas overflow gave the browser
+  // somewhere to scroll to, and the first click inside a pane dragged the
+  // project sidebar off screen with no scrollbar to bring it back.
+  it("clips the shell instead of making it scrollable, so the off-canvas panel cannot push the sidebar away", async () => {
+    const css = await readStyles();
+    const workspace = ruleBody(css, ".workspace");
+
+    expect(workspace).toMatch(/overflow:\s*clip;/);
+    expect(workspace).not.toMatch(/overflow:\s*hidden;/);
+    expect(workspace).not.toMatch(/overflow-x:/);
+  });
+
+  // F4. Every muted string is checked against the DARKEST surface it can
+  // land on, not against the page: a hovered or selected row paints --active
+  // behind text that had only ever been contrast-checked on white.
+  it("keeps secondary text and status colours above WCAG AA on every background they land on", async () => {
+    const css = await readStyles();
+    const backgrounds = {
+      page: token(css, "page"),
+      hover: token(css, "hover"),
+      active: token(css, "active"),
+      "user-pill": token(css, "user-pill"),
+    };
+
+    for (const name of ["muted", "glyph", "green", "done", "text", "text-2"]) {
+      const foreground = token(css, name);
+      for (const [surface, background] of Object.entries(backgrounds)) {
+        const ratio = contrast(foreground, background);
+        expect(
+          ratio,
+          `--${name} (${foreground}) on --${surface} (${background}) is ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+
+    // Small glyph affordances (the + and the ...) are single characters, not
+    // words, so they carry more contrast than body-sized muted text does.
+    expect(contrast(token(css, "glyph"), backgrounds.active)).toBeGreaterThan(
+      contrast(token(css, "muted"), backgrounds.active),
+    );
+
+    // And the affordances the tester measured at 2.91:1 draw on it.
+    for (const selector of [".thread-actions-button", ".archived-toggle"])
+      expect(ruleBody(css, selector)).toMatch(/color:\s*var\(--glyph\)/);
+  });
+
+  // F5. A measure means nothing without the type set in it, so both halves
+  // are asserted together: 35rem at 1rem lands the median full line at 74
+  // characters, measured in Chrome against real transcript prose.
+  it("sets a reading measure and body copy that produce a 60-75 character line", async () => {
+    const css = await readStyles();
+
+    expect(css).toMatch(/--surface-measure:\s*35rem;/);
+    expect(ruleBody(css, ".a-block")).toMatch(/font-size:\s*1rem;/);
+    expect(ruleBody(css, ".u-bubble")).toMatch(/font-size:\s*1rem;/);
+
+    // Paragraph breaks have to read as breaks: the gap between two
+    // paragraphs must beat the leading inside one, which the UA default of
+    // 1em against a 1.6 line-height did not.
+    const paragraphs = ruleBody(css, ".markdown > :is(p, ul, ol, blockquote)");
+    const gap = /margin-block:\s*0\s+([\d.]+)em;/.exec(paragraphs);
+    expect(gap, "paragraphs need an explicit bottom margin").not.toBeNull();
+    const leading = /line-height:\s*([\d.]+);/.exec(ruleBody(css, ".markdown"));
+    expect(Number(gap?.[1])).toBeGreaterThan(0.75 * Number(leading?.[1]));
+  });
+
+  // F11/F12. Red is the app's only irreversible-action signal, and archiving
+  // is undoable twice over -- an undo toast, then the Archived section.
+  it("keeps the thread menu neutral and quiet", async () => {
+    const css = await readStyles();
+
+    // Nothing is destructive by POSITION any more; an item has to say so.
+    expect(css).not.toMatch(/\.thread-context-menu button:last-child/);
+    expect(css).toMatch(/\.thread-context-menu button\.destructive/);
+
+    // 53% black under a popover reads as a bruise on a near-white sidebar.
+    const menu = ruleBody(css, ".thread-context-menu");
+    expect(menu).toMatch(/box-shadow:\s*var\(--pop-shadow\)/);
+    const popShadow = /--pop-shadow:([\s\S]*?);/.exec(css)?.[1] ?? "";
+    const alphas = [...popShadow.matchAll(/rgba\([^)]*?,\s*([\d.]+)\)/g)].map(
+      (match) => Number(match[1]),
+    );
+    expect(alphas.length).toBeGreaterThan(0);
+    for (const alpha of alphas) expect(alpha).toBeLessThanOrEqual(0.15);
+  });
+
+  // F13. Neither of these had a ring at all: `outline: none` plus a hover
+  // fill, which is indistinguishable from a pointer passing over.
+  it("gives every focusable control a 2px ring rather than a background swap", async () => {
+    const css = await readStyles();
+
+    for (const selector of [
+      ".thread-context-menu button:focus-visible",
+      ".new-chat-toolbar select:focus-visible",
+    ]) {
+      const body = ruleBody(css, selector);
+      expect(body, `${selector} has no ring`).toMatch(
+        /outline:\s*2px solid var\(--focus-ring\)/,
+      );
+      expect(body).toMatch(/outline-offset:\s*-?[12]px/);
+    }
+
+    // A half-transparent ring composites to about 2.3:1 on white, under the
+    // 3:1 a focus indicator needs. It is opaque in both themes now.
+    expect(css).not.toMatch(/--focus-ring:\s*rgba\(/);
+  });
+
+  // F12, the other half: the menu opened from the trigger's BOTTOM edge,
+  // directly over the next thread, so the user lost sight of the list they
+  // were acting on. It now opens off the row's right edge, level with it.
+  it("anchors the thread actions menu beside its row, not over the row below", async () => {
+    const menuProjectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: menuProjectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: [
+        {
+          id: "20000000-0000-4000-8000-000000000001" as ThreadId,
+          projectId: menuProjectId,
+          title: "First thread",
+          runState: null,
+          unread: false,
+        },
+        {
+          id: "20000000-0000-4000-8000-000000000002" as ThreadId,
+          projectId: menuProjectId,
+          title: "Second thread",
+          runState: null,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/projects/${menuProjectId}`]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const trigger = await screen.findByRole("button", {
+      name: "Actions for First thread",
+    });
+    // jsdom lays nothing out, so the trigger is handed the geometry a real
+    // 272px sidebar reports for the first row's "..." button.
+    const bounds = {
+      x: 231,
+      y: 210,
+      width: 28,
+      height: 28,
+      top: 210,
+      right: 259,
+      bottom: 238,
+      left: 231,
+    };
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      ...bounds,
+      toJSON: () => bounds,
+    });
+    fireEvent.click(trigger);
+
+    const menu = screen.getByRole("menu", { name: "Actions for First thread" });
+    // Right of the trigger, so it clears the sidebar's rows entirely...
+    expect(Number.parseFloat(menu.style.left)).toBeGreaterThan(bounds.right);
+    // ...and level with the row that opened it, never below it.
+    expect(Number.parseFloat(menu.style.top)).toBe(bounds.top);
   });
 });
