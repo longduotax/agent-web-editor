@@ -191,7 +191,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       upgrading cleanly to `'pi'`, and a same-session-id-across-backends case.
       Verify: `pnpm --filter @pi-web/server exec vitest run src/db/store.test.ts`.
 
-- [ ] **Task 3 — `codex-adapter` package and supervised app-server process.**
+- [x] **Task 3 — `codex-adapter` package and supervised app-server process.**
       Scaffold `packages/codex-adapter` mirroring `pi-adapter`'s `package.json` and
       `tsconfig.json`. Implement `CodexProcess`: spawn `PI_WEB_CODEX_BIN`
       (default `codex`) with `app-server`, newline-framed JSON-RPC over stdio,
@@ -342,6 +342,11 @@ checkboxes above for the current position.
 - 2026-08-22: `pnpm install` in the worktree, then `pnpm check` green as a
   pre-change baseline.
 - 2026-08-22: Tasks 1 and 2 complete. `pnpm check` green (364 unit tests).
+- 2026-08-22: Task 3 complete. `CodexClient` (framing, id correlation,
+  handshake, server-request answering, supervised reconnect) and
+  `spawnCodexTransport` land with 14 tests: the client against a scripted
+  in-memory transport, the spawn path against a real `node` child so line
+  fragmentation and exit reporting are exercised without needing Codex.
 
 ## Discoveries and blockers
 

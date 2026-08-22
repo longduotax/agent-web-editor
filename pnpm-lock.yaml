@@ -155,6 +155,18 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/codex-adapter:
+    dependencies:
+      '@pi-web/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
+      '@pi-web/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/contracts:
     dependencies:
       zod:

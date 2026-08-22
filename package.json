@@ -14,7 +14,7 @@
     "dev:review:close": "node scripts/review-env-close.mjs",
     "start": "pnpm build && node scripts/start.mjs",
     "build": "pnpm -r --if-present build",
-    "build:packages": "pnpm --filter @pi-web/contracts build && pnpm --filter @pi-web/agent-runtime build && pnpm --filter @pi-web/pi-adapter build",
+    "build:packages": "pnpm --filter @pi-web/contracts build && pnpm --filter @pi-web/agent-runtime build && pnpm --filter @pi-web/pi-adapter build && pnpm --filter @pi-web/codex-adapter build",
     "typecheck": "tsc --noEmit && pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "test:packages": "pnpm build:packages",
