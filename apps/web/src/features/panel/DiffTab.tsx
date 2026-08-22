@@ -48,18 +48,25 @@ export const DiffTab = memo(function DiffTab({
         </p>
       )}
       {empty && <div className="empty">No differences in this file.</div>}
-      {data !== undefined && data.staged !== "" && (
-        <>
-          <h4>Staged</h4>
-          <DiffText text={data.staged} />
-        </>
-      )}
-      {data !== undefined && data.unstaged !== "" && (
-        <>
-          <h4>Unstaged</h4>
-          <DiffText text={data.unstaged} />
-        </>
-      )}
+      {/* One scrolling box for both sections (F2). A diff line is far wider
+          than the panel, and each `pre` scrolling on its own put its
+          horizontal scrollbar wherever that section happened to end — below
+          the fold for anything but a tiny diff — and let the staged and
+          unstaged panes slide out of alignment with each other. */}
+      <div className="diff-body">
+        {data !== undefined && data.staged !== "" && (
+          <>
+            <h4>Staged</h4>
+            <DiffText text={data.staged} />
+          </>
+        )}
+        {data !== undefined && data.unstaged !== "" && (
+          <>
+            <h4>Unstaged</h4>
+            <DiffText text={data.unstaged} />
+          </>
+        )}
+      </div>
       {diff.error !== null && (
         <ErrorNotice
           error={diff.error}

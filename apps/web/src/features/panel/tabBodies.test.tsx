@@ -454,6 +454,30 @@ describe("DiffTab", () => {
     expect(container.querySelector(".diff-remove")).toHaveTextContent("-old");
   });
 
+  // F2, the Diff tab's half. A `pre` that scrolls on its own puts its
+  // horizontal scrollbar wherever that section happens to end, which for
+  // anything but a tiny diff is below the fold. Both sections live in ONE
+  // box, which the stylesheet bounds to the tab's height.
+  it("scrolls both sections in one box the stylesheet can bound", async () => {
+    api.getDiff.mockResolvedValue({
+      path: "src/main.ts",
+      staged: "@@ -1 +1 @@\n-old\n+new\n",
+      unstaged: "@@ -2 +2 @@\n-two\n+three\n",
+      truncated: false,
+    });
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Staged");
+
+    const body = container.querySelector(".diff-view > .diff-body");
+    expect(body).not.toBeNull();
+    // Every `pre` in the view is inside it, and none of them is a scroll
+    // container of its own.
+    expect(container.querySelectorAll(".diff-view pre")).toHaveLength(2);
+    expect(body?.querySelectorAll("pre")).toHaveLength(2);
+  });
+
   it("says when a diff is empty rather than showing an empty box", async () => {
     api.getDiff.mockResolvedValue({
       path: "src/main.ts",

@@ -105,6 +105,15 @@ test.beforeAll(async () => {
   await mkdir(state, { mode: 0o700 });
   await mkdir(projectPath);
   await writeFile(join(projectPath, "notes.txt"), "hello\n", "utf8");
+  // One 937-character line, the shape that reproduced F2: the preview's
+  // `pre` scrolled horizontally, but its scrollbar sat ~1600px below the
+  // visible area of the tab body, so nothing could reach it with a pointer.
+  const wideLine = `  {"note":"${"reachable-only-by-horizontal-scrolling-".repeat(24)}"},`;
+  await writeFile(
+    join(projectPath, "wide.json"),
+    `[\n${wideLine}\n${'  {"note":"short"},\n'.repeat(200)}]\n`,
+    "utf8",
+  );
   const port = await availablePort();
   const config = parseConfig({
     argv: ["--port", String(port)],
@@ -132,8 +141,10 @@ test.afterAll(async () => {
 interface ProbeElement {
   clientWidth: number;
   clientHeight: number;
+  offsetHeight: number;
   scrollWidth: number;
   scrollHeight: number;
+  scrollLeft: number;
   className: string;
   getBoundingClientRect(): { x: number; y: number; height: number };
 }
@@ -231,6 +242,37 @@ function terminalGeometry() {
     surfaceClips: surface !== null,
     screenWidth: screen === null ? -1 : screen.clientWidth,
     screenHeight: screen === null ? -1 : screen.clientHeight,
+  };
+}
+
+/**
+ * F2. The File tab's `pre` and the tab body that holds it.
+ *
+ * The reported symptom was "content is clipped with no horizontal scroll",
+ * and both earlier hypotheses (a missing `min-width: 0`, an overflowing
+ * ancestor) were wrong: nothing overflowed the panel and the `pre` did
+ * scroll. What it did not do was END anywhere near the screen — measured at
+ * `pre` bottom y=2634 against a visible bottom of y=1017 — so its own
+ * horizontal scrollbar was 1617px below the fold and could be reached only
+ * by a shift-wheel or trackpad gesture, with no visible affordance at all.
+ * The honest assertion is therefore about where the scrollable box ENDS.
+ */
+function previewGeometry() {
+  const body = document.querySelector('[role="tabpanel"]:not([hidden])');
+  const pre = document.querySelector(".file-preview pre");
+  if (body === null || pre === null) return null;
+  const bodyRect = body.getBoundingClientRect();
+  const preRect = pre.getBoundingClientRect();
+  return {
+    // There is genuinely something off to the right to reach.
+    overflowX: pre.scrollWidth - pre.clientWidth,
+    // A real classic horizontal scrollbar inside the pre's border box.
+    scrollbarHeight: pre.offsetHeight - pre.clientHeight,
+    // Where that scrollbar sits, against the bottom of the visible area.
+    preBottom: preRect.y + preRect.height,
+    viewBottom: bodyRect.y + bodyRect.height,
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    bodyOverflowY: body.scrollHeight - body.clientHeight,
   };
 }
 
@@ -436,4 +478,45 @@ test.describe("on a device with no hover", () => {
     await expect(page.getByRole("tab")).toHaveCount(2);
     await expect(changes).toHaveAttribute("aria-selected", "true");
   });
+});
+
+// F2. Reported as "file content is clipped at the panel's right edge with no
+// visible horizontal scroll", twice mis-diagnosed as a `min-width: 0` gap.
+test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("button", { name: "wide.json" }).click();
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  // Overlay scrollbars cost nothing visible; the reporter's machine does not
+  // have them, and neither does this measurement.
+  await page.evaluate(forceClassicScrollbars);
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    const geometry = await page.evaluate(previewGeometry);
+    expect(geometry).not.toBeNull();
+    if (geometry === null) return;
+
+    // The case under test: content really does extend past the right edge.
+    expect(geometry.overflowX).toBeGreaterThan(0);
+    // ...and the bottom edge of the box that scrolls — where its scrollbar
+    // is drawn, overlay or classic — is inside the visible area rather than
+    // a thousand pixels below it. One pixel of slack for sub-pixel layout.
+    expect(geometry.preBottom).toBeLessThanOrEqual(geometry.viewBottom + 1);
+    // And the overflow is still contained: the panel itself never scrolls
+    // sideways to show it (D13 stays fixed).
+    expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
+    expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
+  }
 });

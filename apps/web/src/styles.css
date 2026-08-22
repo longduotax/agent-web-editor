@@ -1841,9 +1841,41 @@ a:focus-visible {
   color: var(--done);
   background: color-mix(in srgb, var(--done) 20%, var(--card));
 }
+/* F2. The scrolling box has to END on screen.
+   Both bodies used to be ordinary flow content inside the tab body's own
+   scroller, so the `pre` grew to its full content height — measured at
+   2534px, with its bottom edge at y=2634 against a visible bottom of
+   y=1017 — and the horizontal scrollbar it genuinely had was ~1600px below
+   anything the user could see. The content was reachable only by a
+   shift-wheel or trackpad gesture, with no affordance at all, which is what
+   was reported as "clipped, with no horizontal scroll" (WSP-05's "remains
+   readable"). Bounding the body to the tab's own height puts the scrollbar
+   back where a pointer can find it, and keeps the header pinned above it. */
 .diff-view,
 .file-preview {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   border-top: 1px solid var(--border);
+}
+/* Only the scrolling region grows; every notice keeps its own height. */
+.diff-view > *,
+.file-preview > * {
+  flex: none;
+}
+.file-preview > pre,
+.diff-view > .diff-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+/* The diff's sections scroll together, in one box, so the two panes of a
+   staged/unstaged diff cannot slide out of alignment with each other. */
+.diff-body > pre {
+  width: max-content;
+  min-width: 100%;
+  overflow: visible;
 }
 /* Diff colouring from the shared theme tokens, so it resolves correctly in
    light and dark. The `+`/`-` prefixes stay in the text: colour is never the
