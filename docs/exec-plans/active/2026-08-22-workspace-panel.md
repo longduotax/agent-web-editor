@@ -898,6 +898,35 @@ with the cap message.
 
 ### Milestone 8 — Browser tab, probe endpoint, CSP, and sandboxing
 
+**Blocking prerequisite: a Browser tab cannot use milestone 3's body-moving
+strategy.** `PanelBodies.tsx` gives every tab a host element that is created
+once and _moved_ into whichever group owns the tab, because moving a DOM node
+re-runs no effect and so keeps a terminal's socket alive. That guarantee does
+not extend to an `iframe`: removing an `iframe` from the document discards its
+nested browsing context, so reparenting one reloads the page, losing its
+navigation history, scroll position, and any form state. The behaviour is
+specified, not a browser quirk, and no amount of care in the move makes it
+survivable. The same applies to media elements' playback state.
+
+The consequence is that WSP-03's "a moved tab keeps its process, scroll
+position, and state" and WSP-08's restorable address cannot both hold for a
+Browser tab under the current strategy. Resolve it in this milestone, before
+building the tab, by one of:
+
+- **Position hosts instead of reparenting them.** Keep every host in one
+  absolutely-positioned layer owned by the panel and place each over its
+  group's slot rectangle, so no host is ever removed from the document. This
+  fixes the general case, retires the scroll save/restore workaround
+  `PanelBodies` currently needs, and costs rectangle tracking on resize and
+  on layout change.
+- **Accept the reload for Browser tabs only**, and say so in the product:
+  a moved Browser tab reloads. This is cheap and honest but it makes one tab
+  type behave unlike every other, which is the kind of inconsistency WSP-02
+  exists to avoid.
+
+Choose deliberately and record the choice in the decision log. Do not discover
+this while implementing the tab.
+
 **`apps/server/src/browser/probe.ts`.** `POST /api/browser/probe` takes
 `{ url: string }`. The URL is parsed with `new URL()` and its protocol must be
 exactly `http:` or `https:`; anything else — `file:`, `data:`, `javascript:`, a
