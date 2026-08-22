@@ -137,7 +137,23 @@ interface ProbeElement {
 }
 declare const document: {
   querySelector(selector: string): ProbeElement | null;
+  elementFromPoint(x: number, y: number): { className: string } | null;
 };
+declare function getComputedStyle(element: ProbeElement): {
+  boxShadow: string;
+  opacity: string;
+};
+
+/** The docked edge's rendered elevation, in whichever theme is active. */
+function panelEdge() {
+  const panel = document.querySelector(".panel");
+  const rail = document.querySelector(".panel-rail");
+  return {
+    shadow: panel === null ? "" : getComputedStyle(panel).boxShadow,
+    opacity: panel === null ? "" : getComputedStyle(panel).opacity,
+    railShadow: rail === null ? "none" : getComputedStyle(rail).boxShadow,
+  };
+}
 
 /** How the panel's chords are spelled on whichever OS runs this suite. */
 async function primaryModifier(page: Page): Promise<"Meta" | "Alt"> {
@@ -323,6 +339,50 @@ test("panel keyboard: a chord splits, moves a tab, and says when it cannot split
     page.getByRole("separator", { name: "Resize panel groups" }),
   ).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(2);
+});
+
+test("the docked edge is elevated in both themes, and still resizes", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+
+  // Light (Playwright's default colour scheme, and the case the user called
+  // out: a hairline alone barely separates two white surfaces).
+  const light = await page.evaluate(panelEdge);
+  expect(light.shadow).not.toBe("none");
+  expect(light.shadow).not.toBe("");
+
+  // The separator still owns this edge: a box-shadow is decorative and is
+  // never hit-tested, but the resize affordance sits on the very pixels the
+  // shadow is drawn over, so ask the browser what is actually there.
+  const separator = page.getByRole("separator", {
+    name: "Resize workspace panel",
+  });
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  const hit = await page.evaluate(
+    ([x, y]) => {
+      const element = document.elementFromPoint(x ?? 0, y ?? 0);
+      return element === null ? "" : element.className;
+    },
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+  expect(hit).toContain("panel-resizer");
+
+  // Dark gets its own value rather than inheriting a shadow tuned for white.
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await page.evaluate(panelEdge);
+  expect(dark.shadow).not.toBe("none");
+  expect(dark.shadow).not.toBe(light.shadow);
+
+  // Railed: the panel is faded out entirely, so the rail carries no
+  // orphaned shadow of its own.
+  await page.getByRole("button", { name: "Close workspace panel" }).click();
+  await expect
+    .poll(async () => (await page.evaluate(panelEdge)).opacity)
+    .toBe("0");
+  expect((await page.evaluate(panelEdge)).railShadow).toBe("none");
 });
 
 test.describe("on a device with no hover", () => {

@@ -1257,6 +1257,23 @@ wrong to that inspector, and says nothing until it is reproduced.
 
 ## Decision and revision log
 
+- 2026-08-22: **The workspace panel's docked outer edge carries a soft shadow
+  as well as its hairline.** Requested by the user on 2026-08-22 against a
+  reference screenshot of a desktop tool panel, and called out for **light
+  mode** in particular, where a hairline between two white surfaces gives
+  almost no separation. Recorded here because it is a deliberate departure:
+  [CWS-01](../../product-specs/codex-workspace-surface.md) says the surface is
+  "near-borderless: elevation and grouping come from background and hairline
+  dividers, not from an outline on every element", and a shadow is a third
+  mechanism that clause does not anticipate. It is not a contradiction — the
+  panel genuinely is a different plane from the chat surface it is docked
+  against, which is what elevation is for — but it is **scoped to the panel's
+  outer docked edge and nothing else**. CWS-01's hairline rule continues to
+  govern everything inside the panel, including the dividers between tab
+  groups, and the whole chat surface. The value is a token (`--dock-shadow`)
+  defined per theme in all three theme blocks, because a shadow tuned for a
+  white page is invisible on a dark one; dark uses a black shadow that deepens
+  the gutter between the page and the panel's lighter surface.
 - 2026-08-22: **Created plan version 2** after the hands-on pass recorded in
   Discoveries. It adds milestone 4 (file tree, ignore rules, flat search),
   renumbers the milestones after it, folds findings 3–5 into milestone 3 and

@@ -26,6 +26,12 @@
   --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
   --pop-shadow:
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
+  /* The workspace panel's docked outer edge, and nothing else: the panel is
+     a different plane from the chat surface behind it, and on a white page a
+     hairline alone barely says so. Short and soft — strongest at the edge,
+     gone within a few pixels — so it separates the two surfaces without
+     turning into a drop shadow the rest of this design does not use. */
+  --dock-shadow: -2px 0 8px -2px rgba(20, 25, 40, 0.16);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 /* One reading column for the whole surface (D-3). The transcript, the
@@ -84,6 +90,12 @@
     --focus-ring: rgba(106, 160, 255, 0.55);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+    /* Dark needs its own value, not the light one: a shadow tuned for a
+       white page is invisible here. The panel's surface is already LIGHTER
+       than the page, so a black shadow deepens the gutter between them and
+       reads as the panel sitting above — the same direction of separation,
+       carried by the opposite colour. */
+    --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
   }
 }
 :root[data-theme="dark"] {
@@ -113,6 +125,7 @@
   --focus-ring: rgba(106, 160, 255, 0.55);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
 }
 body {
   min-width: 320px;
@@ -1386,6 +1399,15 @@ a:focus-visible {
   background: var(--hover);
   cursor: not-allowed;
 }
+/* The panel is elevated above the chat surface it is docked against: its
+   leading edge carries a soft shadow as well as the hairline. Scoped to this
+   one edge on purpose — the tab-group dividers inside the panel keep the
+   hairline-only treatment CWS-01 asks for, and so does the chat surface. A
+   box-shadow is never hit-tested, so the resize separator that lives on this
+   same edge keeps every pixel of its target, and its own hover/focus colour
+   paints over the shadow because it is a child of this element. When the
+   panel is railed it is `opacity: 0`, so the rail carries no orphaned
+   shadow. */
 .panel {
   position: relative;
   display: flex;
@@ -1394,6 +1416,7 @@ a:focus-visible {
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface-1);
+  box-shadow: var(--dock-shadow);
   z-index: 20;
 }
 .panel[aria-hidden="true"] {
