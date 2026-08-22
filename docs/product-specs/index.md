@@ -13,6 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
+| [Agent backends](agent-backends.md)                               | None            | 1                | Draft    | Not started    | [Codex agent runtime](../exec-plans/active/2026-08-22-codex-agent-runtime.md)                     |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -58,6 +59,17 @@ collapse-to-dock pane tier entirely, migrating any persisted docked panes back
 into the tiling tree. Product approval is pending; implementation is in
 progress under the linked plan and the proposal becomes Current only after the
 user approves it and the behavior is verified.
+
+Agent backends is a Draft proposal for version 1 and the first slice of the
+"three agent backends" intent in the multi-agent tiling workspace design. It
+makes a chat's coding agent an explicit, durable, immutable per-chat property,
+adds Codex beside Pi, makes Codex the default for new chats, and shows the
+backend wherever a chat appears. Existing chats are Pi and are unchanged. Codex
+chats run with interactive approvals disabled and, by default, confined to their
+execution root with no network — a deliberately stricter boundary than Pi's,
+stated rather than hidden. Product approval is pending and implementation has
+not started; the proposal becomes Current only after the user approves it and
+the behavior is verified.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only

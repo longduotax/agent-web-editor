@@ -39,3 +39,14 @@ superseded, or abandoned.
   projection, append-stable opaque cursors, a bounded browser page window,
   polite live following, latest-edge entry, anchor-preserving older-history
   navigation, and a restrained transcript scrollbar.
+- [Codex agent runtime](2026-08-22-codex-agent-runtime.md) — Draft plan version 1
+  with technical approval pending, governed by the Draft
+  [Agent backends](../../product-specs/agent-backends.md) specification version 1.
+  Phase 2 of the multi-agent tiling workspace design: adds a `packages/codex-adapter`
+  implementation of `AgentRuntime` over the Codex app-server protocol, a durable
+  per-thread `runtime` discriminator in persistence and the transport contract
+  (existing chats backfilled to `pi`), a server-side runtime registry replacing the
+  single injected adapter, and a backend choice in the new-chat composer with Codex
+  as the default. Codex chats run with approvals disabled and confined to their
+  execution root by default. Implementation has not started; both product and
+  technical approval are required first.
