@@ -1480,14 +1480,54 @@ end-to-end spec at the sizes that reproduce them.
    nothing, and the symptom is an eslint parsing error rather than anything
    that mentions the collision.
 
+**2026-08-22 — milestone 3's standing hands-on UI pass, and the seven defects
+it found in the drag.** The pass is no longer owed: a reviewer drove the drag
+in a real browser and reported six defects plus one accepted discoverability
+item, each with a measurement. Every one was reproduced from that measurement
+before anything was changed, and each is pinned by a test that fails without
+its fix. G1 and G2 are pinned **end to end and only end to end** — one is a
+scroll offset the browser resets when a box leaves layout or a node is
+detached, the other is a containing block; jsdom has neither, and a jsdom
+case asserting either would pass in both directions.
+
+1. **A tab lost its scroll position on a move, and would lose it on a switch
+   in any browser that does not carry it (G1, a regression from F2).** The
+   cause is the one the reporter suspected: F2 made `.file-preview` and
+   `.diff-view` flex columns with one bounded scrolling region, which moved
+   the element that scrolls INWARD, from the tab body to its `pre`.
+   `PanelBodies` went on recording the body's own two offsets, which are now
+   permanently 0, and its `onScroll` never fired anyway — a scroll event does
+   not bubble and React has not simulated bubbling for it since React 17, so
+   a descendant's scroll reached nothing.
+
+   Measured on the browser the suite runs, HeadlessChrome/151, on a bare page
+   as well as on ours: `display: none` reports 0 while the box is gone but
+   **restores** the offset when it comes back, while detaching and
+   re-attaching the node loses it for good (`{top: 500, left: 300}` ->
+   `{0, 0}` -> `{500, 300}` across a hide/show, and -> `{0, 0}` across a
+   detach/re-attach). So the reporter's switch case does not reproduce on
+   this Chromium — it is carried by the browser — and their drag case
+   reproduces exactly: 1000/900 -> 0/0. Both are fixed here rather than one,
+   because "the browser happens to do it" is not the same claim as "the panel
+   does it", and the e2e case keeps the guard for a browser that does not.
+
+   The fix records, per body, the offsets of **whatever descendant actually
+   scrolled** — a capture-phase native listener, since capture is the only
+   phase a non-bubbling event reaches an ancestor in — and puts them back
+   both when the host is moved and when the body is shown again. Which
+   element scrolls is a decision each tab type makes in CSS, so nothing here
+   names a node.
+
+   Pinned by two **e2e** cases (a switch, and a drop on another group's
+   centre, both asserting `.file-preview pre`'s offsets and that the node is
+   the same one) plus one jsdom case that pins the record-and-restore
+   mechanism with the browser's reset stood in for by hand. The two existing
+   `PanelBodies.test.tsx` scroll cases are left as they are and are **not**
+   evidence about this: they passed throughout.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.
-- Milestone 3's **standing hands-on UI pass is still owed.** Its automated
-  half is complete — the geometry as pure arithmetic, the drag's wiring
-  against a stubbed layout, and nine end-to-end cases that measure the real
-  one — but a pass reports what a scripted spec never thought to assert, and
-  that has not been done for this milestone.
 
 ## Decision and revision log
 

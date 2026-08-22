@@ -290,6 +290,56 @@ describe("a tab body outlives every change of tree shape", () => {
     expect(document.getElementById(`panel-tabpanel-${filesTabId}`)).toBe(files);
     expect(files.scrollTop).toBe(128);
   });
+
+  // G1. Neither case above is evidence about a real browser: jsdom lays
+  // nothing out, so it never takes a hidden body out of layout and never
+  // resets a scroller. What this one pins is the half of the mechanism that
+  // IS testable here — that the offset recorded is the one belonging to
+  // whatever DESCENDANT actually scrolled, and that returning to the tab
+  // puts it back — with the browser's reset stood in for by hand, because
+  // that reset is the thing jsdom will not do. The real measurement is in
+  // e2e/workspace-panel.spec.ts, which is where a layout exists.
+  it("records and restores the offset of a descendant scroller, not the body's own", async () => {
+    const user = userEvent.setup();
+    stubEnvironment();
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [],
+    });
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    renderPanel();
+    await openPanel(user);
+    await openTab(user, "Files");
+
+    const filesTabId = activeTabId();
+    const body = document.getElementById(`panel-tabpanel-${filesTabId}`);
+    expect(body).not.toBeNull();
+    if (body === null) return;
+    // The element that scrolls since the F2 fix is inside the body, not the
+    // body — `.file-preview pre` in a File tab, and whatever each other tab
+    // type bounds. Any descendant stands for it here.
+    const inner = body.firstElementChild;
+    expect(inner).not.toBeNull();
+    if (inner === null) return;
+    inner.scrollTop = 640;
+    inner.scrollLeft = 96;
+    // A descendant's scroll event does not bubble, and React does not
+    // simulate bubbling for it, so this is delivered to the capture-phase
+    // listener or to nothing at all.
+    fireEvent.scroll(inner);
+
+    await user.click(screen.getByRole("tab", { name: "Changes" }));
+    // What a browser does to a scroller that leaves layout, by hand.
+    inner.scrollTop = 0;
+    inner.scrollLeft = 0;
+    await user.click(screen.getByRole("tab", { name: "Files" }));
+
+    expect(document.getElementById(`panel-tabpanel-${filesTabId}`)).toBe(body);
+    expect(body.firstElementChild).toBe(inner);
+    expect(inner.scrollTop).toBe(640);
+    expect(inner.scrollLeft).toBe(96);
+  });
 });
 
 // The active tab of the focused group, read off the DOM rather than the

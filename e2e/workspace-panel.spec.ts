@@ -146,6 +146,7 @@ interface ProbeElement {
   scrollWidth: number;
   scrollHeight: number;
   scrollLeft: number;
+  scrollTop: number;
   className: string;
   textContent: string | null;
   parentElement: ProbeElement | null;
@@ -166,6 +167,7 @@ declare const document: {
   elementFromPoint(x: number, y: number): ProbeElement | null;
 };
 declare function getComputedStyle(element: ProbeElement): {
+  display: string;
   boxShadow: string;
   opacity: string;
   position: string;
@@ -588,6 +590,116 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
     expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
   }
+});
+
+// G1. WSP-09's "returning to it restores its scroll position" and WSP-03's
+// "a moved tab keeps its scroll position", both measured on the element that
+// ACTUALLY scrolls.
+//
+// This has to be end to end, because neither mechanism exists in jsdom. An
+// inactive tab body carries `hidden` and leaves layout; `PanelBodies`
+// re-parents the host element, and a detached node loses its descendants'
+// scroll offsets. jsdom lays nothing out and never resets a scroll offset,
+// so `PanelBodies.test.tsx`'s two "keeps a body's scroll position" cases
+// pass while the behaviour is broken — they are not evidence about this.
+//
+// The offsets asserted are an INNER scroller's, which is the regression's
+// cause: the F2 fix made `.file-preview` a flex column with one bounded
+// scrolling region, moving the element that scrolls inward from the tab
+// body to the `<pre>`. The panel went on saving and restoring the tab
+// body's own offsets, which are now always 0.
+//
+// **Measured on the browser this suite runs (HeadlessChrome/151), on a bare
+// page as well as on ours:** `display: none` reports 0 while hidden and
+// restores the offset when the box comes back, but detaching and
+// re-attaching the node loses it for good. So a plain switch away and back
+// is carried by the browser here and is kept below as the guard for one
+// that does not do that; what fails without the fix is every case where the
+// host is MOVED — the drag, and an inactive tab whose group is re-rendered
+// by a split underneath it.
+
+/** Scrolls the visible File tab's real scroller, and stamps the node. */
+function scrollPreview(offsets: { top: number; left: number }) {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview pre',
+  );
+  if (pre === null) return null;
+  pre.id = "scroll-probe";
+  pre.scrollTop = offsets.top;
+  pre.scrollLeft = offsets.left;
+  return { top: pre.scrollTop, left: pre.scrollLeft };
+}
+
+/** That scroller's offsets now, and whether it is the same DOM node. */
+function previewScroll() {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview pre',
+  );
+  if (pre === null) return null;
+  return {
+    top: pre.scrollTop,
+    left: pre.scrollLeft,
+    sameNode: pre.id === "scroll-probe",
+  };
+}
+
+test("panel file tab: returning to a tab restores the scroll offset of the element that scrolls", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("button", { name: "wide.json" }).click();
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const scrolled = await page.evaluate(scrollPreview, { top: 800, left: 1200 });
+  expect(scrolled).not.toBeNull();
+  if (scrolled === null) return;
+  // The case only means anything if the content really does scroll both ways.
+  expect(scrolled.top).toBeGreaterThan(0);
+  expect(scrolled.left).toBeGreaterThan(0);
+
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await expect(page.getByRole("tab", { name: "Changes" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.getByRole("tab", { name: "wide.json" }).click();
+  await expect(page.getByRole("tab", { name: "wide.json" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  expect(await page.evaluate(previewScroll)).toEqual({
+    top: scrolled.top,
+    left: scrolled.left,
+    // Nothing remounted: the offsets were restored on the same node, not
+    // coincidentally reproduced by a rebuilt one.
+    sameNode: true,
+  });
+
+  // Now the same tab, hidden AND moved: switching away and then splitting
+  // the group re-renders it, which replaces the `.panel-bodies` node every
+  // host in it is parented to. The browser's own preservation does not
+  // survive that, so this half fails without the panel restoring the offset
+  // itself — and it is an ordinary thing to do, not a contrived one.
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await panelChord(page, "ArrowRight");
+  await expect(
+    page.getByRole("separator", { name: "Resize panel groups" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "wide.json" }).click();
+  await expect(page.getByRole("tab", { name: "wide.json" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  expect(await page.evaluate(previewScroll)).toEqual({
+    top: scrolled.top,
+    left: scrolled.left,
+    sameNode: true,
+  });
 });
 
 // F3. A regression from the D8 fix: the announcement it added is an
@@ -1172,6 +1284,48 @@ test("panel drag: releasing outside every drop target changes nothing", async ({
   });
 
   expect(await page.evaluate(panelLayout)).toEqual(before);
+});
+
+// G1, the drag half: WSP-03's "a moved tab keeps its ... scroll position".
+// End to end for the same reason as its tab-switch twin above — the offset
+// is lost because the host element is detached and re-attached, which jsdom
+// does not model at all.
+test("panel drag: a dragged tab keeps the scroll offset of the element that scrolls", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("button", { name: "wide.json" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+
+  // Two groups, the File tab alone in the second one, so dropping it back
+  // into the first is a real move between groups.
+  await panelChord(page, "ArrowRight");
+  await expect(
+    page.getByRole("separator", { name: "Resize panel groups" }),
+  ).toBeVisible();
+
+  const scrolled = await page.evaluate(scrollPreview, { top: 1000, left: 900 });
+  expect(scrolled).not.toBeNull();
+  if (scrolled === null) return;
+  expect(scrolled.top).toBeGreaterThan(0);
+  expect(scrolled.left).toBeGreaterThan(0);
+
+  const first = await pointsOfGroup(page, 0);
+  await dropTabOn(page, "wide.json", first.centre);
+
+  const layout = await page.evaluate(panelLayout);
+  expect(layout.groups).toHaveLength(1);
+  await expect(page.getByRole("tab", { name: "wide.json" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(await page.evaluate(previewScroll)).toEqual({
+    top: scrolled.top,
+    left: scrolled.left,
+    sameNode: true,
+  });
 });
 
 // WSP-03's explicit "a moved tab keeps its process" clause, for the drag

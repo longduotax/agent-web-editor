@@ -122,7 +122,60 @@ function TabBodyHost({
     return element;
   });
   const panelRef = useRef<HTMLDivElement>(null);
-  const scroll = useRef({ top: 0, left: 0 });
+  // Every scroller inside this body, not just the body element itself (G1).
+  //
+  // The body used to BE the scroller, and recording its own two offsets was
+  // enough. The F2 fix moved the scrolling region inward — `.file-preview`
+  // and `.diff-view` are now flex columns whose `pre` scrolls inside a
+  // height-bounded box — so the offsets that matter belong to a descendant,
+  // and the body's own are permanently 0. Which element scrolls is a
+  // decision each tab type makes in CSS, so this records whatever actually
+  // scrolled rather than naming a node.
+  const scroll = useRef(new Map<Element, { top: number; left: number }>());
+  // Whether this body was showing on the previous commit, so the restore
+  // can tell "shown again" from "still showing".
+  const wasActive = useRef(active);
+
+  // A capture-phase listener, and native rather than React's `onScroll`: a
+  // scroll event does not bubble, and React stopped simulating bubbling for
+  // it in React 17, so a `pre` scrolling inside the body never reached the
+  // body's own handler. Capture sees every one of them.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const record = (event: Event) => {
+      const element = event.target;
+      if (!(element instanceof Element)) return;
+      // A hidden body's scrollers may be reset to 0 by the browser, and
+      // that reset arrives as a scroll event like any other. It is not the
+      // user scrolling, and recording it would throw away the offset this
+      // exists to put back.
+      if (!wasActive.current) return;
+      scroll.current.set(element, {
+        top: element.scrollTop,
+        left: element.scrollLeft,
+      });
+    };
+    panel.addEventListener("scroll", record, true);
+    return () => {
+      panel.removeEventListener("scroll", record, true);
+    };
+  }, []);
+
+  const restoreScroll = () => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    for (const [element, offsets] of scroll.current) {
+      // A scroller React has since replaced is not this body's any more.
+      if (!panel.contains(element)) {
+        scroll.current.delete(element);
+        continue;
+      }
+      if (element.scrollTop !== offsets.top) element.scrollTop = offsets.top;
+      if (element.scrollLeft !== offsets.left)
+        element.scrollLeft = offsets.left;
+    }
+  };
 
   // Deliberately without a dependency list. The group's DOM node is replaced
   // whenever the tree changes shape at its position — which happens on a
@@ -131,14 +184,21 @@ function TabBodyHost({
   // parent?" is the only question with a reliable answer, and it is cheap.
   useLayoutEffect(() => {
     const parent = document.getElementById(groupBodiesElementId(groupId));
-    if (parent === null || host.parentNode === parent) return;
-    parent.appendChild(host);
-    // Removing a node from the document resets its scroll offsets, so the
-    // move would otherwise send the user back to the top of a long diff.
-    const panel = panelRef.current;
-    if (panel === null) return;
-    panel.scrollTop = scroll.current.top;
-    panel.scrollLeft = scroll.current.left;
+    const moved = parent !== null && host.parentNode !== parent;
+    if (moved && parent !== null) parent.appendChild(host);
+    // Both ways a scroll offset is lost, and both are the browser's layout
+    // rather than anything React does (measured in HeadlessChrome/151, on a
+    // bare page as well as on this one):
+    //  - detaching a node resets every scroller inside it, permanently, so
+    //    a move sends the user back to the top of a long diff;
+    //  - a body that leaves layout under `hidden` reports 0 while it is
+    //    hidden. This browser restores it on the way back; one that does
+    //    not is why the offset is put back here rather than trusted.
+    // A body that is hidden has no layout box, so an assignment now does
+    // nothing — which is why "shown again" restores as well as "moved".
+    const shown = active && !wasActive.current;
+    wasActive.current = active;
+    if (moved || shown) restoreScroll();
   });
 
   useEffect(() => {
@@ -156,12 +216,6 @@ function TabBodyHost({
       aria-labelledby={tabElementId(tab.id)}
       hidden={!active}
       inert={!active}
-      onScroll={(event) => {
-        scroll.current = {
-          top: event.currentTarget.scrollTop,
-          left: event.currentTarget.scrollLeft,
-        };
-      }}
       // A body is not a child of its group in the React tree any more, so
       // the group's own focus handler never sees this. Without it, focusing
       // something inside a body would leave the panel's chords acting on
