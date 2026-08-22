@@ -1022,6 +1022,93 @@ test("panel files: expanding a directory that has been deleted shows its error r
   await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
 });
 
+/**
+ * J1. The File tab's header, at a given panel width.
+ *
+ * The reported defect is a layout one and therefore invisible to jsdom: the
+ * header's path span had `text-overflow: ellipsis` and no
+ * `white-space: nowrap`, so the ellipsis never applied. Measured at the
+ * panel's 280px floor, the path rendered ONE CHARACTER PER LINE in a 10px
+ * column and the header grew from ~24px to 107px — 83px of the file's own
+ * reading area.
+ */
+function headerGeometry() {
+  const body = document.querySelector('[role="tabpanel"]:not([hidden])');
+  const header = document.querySelector(".file-preview > header");
+  const path = document.querySelector(".file-preview > header .file-path");
+  const name = document.querySelector(".file-preview > header .file-path-name");
+  if (body === null || header === null || path === null || name === null)
+    return null;
+  return {
+    headerHeight: header.getBoundingClientRect().height,
+    pathHeight: path.getBoundingClientRect().height,
+    pathWidth: path.getBoundingClientRect().width,
+    // What the name would need against what it was given: the tail of the
+    // path is the half that has to survive the squeeze.
+    nameWidth: name.getBoundingClientRect().width,
+    nameNeeds: name.scrollWidth,
+    nameText: name.textContent ?? "",
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    lineHeight: Number.parseFloat(getComputedStyle(path).fontSize),
+  };
+}
+
+/** Drags the panel's own separator to an exact outer width. */
+async function setPanelWidth(page: Page, width: number) {
+  const separator = page.getByRole("separator", {
+    name: "Resize workspace panel",
+  });
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  const viewport = await page.evaluate(() => window.innerWidth);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(viewport - width, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+}
+
+test("panel file tab: a long path ellipsises to its file name at every panel width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  for (const name of DEEP_CHAIN) await clickTreeRow(page, name);
+  const deepFile = "session-storage.spec.ts";
+  await clickTreeRow(page, deepFile);
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const fullPath = [...DEEP_CHAIN, deepFile].join("/");
+  // Whatever the header has room to paint, it can still say the whole of it.
+  await expect(
+    page.locator(".file-preview > header .file-path"),
+  ).toHaveAttribute("title", fullPath);
+
+  // 550 is the width the reporter's own panel was saved at; 400 and 280 are
+  // the two the defect was measured at, 280 being PANEL_MIN_WIDTH.
+  for (const width of [550, 400, 280]) {
+    await setPanelWidth(page, width);
+    const geometry = await page.evaluate(headerGeometry);
+    expect(geometry).not.toBeNull();
+    if (geometry === null) return;
+
+    // One line. The defect was 88px of path at 280px and 59px at 400px.
+    expect(geometry.pathHeight).toBeLessThan(geometry.lineHeight * 2);
+    // The header itself never eats the reading area again: 107px measured,
+    // and the ceiling here is well below it at every width.
+    expect(geometry.headerHeight).toBeLessThan(100);
+    // The informative half of the path is whole, not clipped: the ellipsis
+    // is spent on the directories in front of it.
+    expect(geometry.nameText).toBe(deepFile);
+    expect(geometry.nameWidth).toBeGreaterThanOrEqual(geometry.nameNeeds - 1);
+    // And none of it is bought with overflow the panel then has to scroll.
+    expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
+  }
+});
+
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
   page,
 }) => {
@@ -1172,7 +1259,9 @@ test("panel file tab: a link into the repository opens that file in its own tab"
   // The VISIBLE body: every mounted tab keeps its own, and the one the user
   // is looking at is the one that must name the file that was linked.
   await expect(
-    page.locator('[role="tabpanel"]:not([hidden]) .file-preview > header span'),
+    page.locator(
+      '[role="tabpanel"]:not([hidden]) .file-preview > header .file-path',
+    ),
   ).toHaveText("src/main.ts");
 });
 

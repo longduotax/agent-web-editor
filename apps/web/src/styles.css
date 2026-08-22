@@ -2236,17 +2236,63 @@ a:focus-visible {
   background: var(--surface-2);
   font-size: 0.75rem;
 }
-.file-preview > header span {
-  flex: 1;
+/* The header is allowed to become two or three short rows rather than one
+   tall one. At the panel's 280px floor its three action buttons are wider
+   than the header itself, so something has to give; wrapping gives, and
+   every control stays visible and inside the tab body's own width. */
+.diff-view > header,
+.file-preview > header {
+  flex-wrap: wrap;
+}
+/* The path (J1).
+   `text-overflow: ellipsis` was here without `white-space: nowrap`, which
+   makes it inert: the computed white-space stayed `normal`, the span wrapped
+   instead of ellipsising, and at 280px it rendered one character per line in
+   a 10px column while the header grew to 107px. The flex basis is small
+   enough that the path shares a line with the buttons at ordinary widths and
+   claims a line of its own when it cannot. */
+.file-preview > header .file-path {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 6rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Which end of the path survives. The directories carry a shrink factor
+   large enough that they absorb effectively all of the squeeze, so
+   `docs/product-specs/workspace-panel.md` becomes `…/workspace-panel.md`
+   rather than `docs/product-spec…` — the tail is the half that names the
+   file. */
+.file-preview > header .file-path-dir {
+  min-width: 0;
+  flex: 0 999 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.file-preview > header .file-path-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The actions travel together: they wrap as a block below the path rather
+   than one button at a time around it. */
+.file-preview > header .file-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
 }
 /* The header's own controls only. A previewed document's in-repository links
    are buttons too, and they are prose, not chrome. */
 .file-preview > header button {
+  flex: none;
   border: 1px solid var(--border);
   border-radius: 0.25rem;
   background: var(--surface-3);
+  white-space: nowrap;
 }
 /* A link inside a previewed markdown file (WSP-05). Three kinds, and they
    are told apart on purpose: one opens another File tab, one leaves for a

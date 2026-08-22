@@ -2253,6 +2253,51 @@ turned into a control that opens that file in its own File tab.
   is exactly what the standing pass exists not to be. A separate agent performs
   it.
 
+### 2026-08-23 — milestone 5's standing hands-on UI pass
+
+A reviewer drove the File tab in a real browser against a real repository and
+reported eleven items, every one measured: ten defects and one scope addition.
+What each of them turned out to be, and what now pins it, is recorded here.
+Two things the same pass looked at and found working are recorded at the end,
+so neither is re-reported as a bug.
+
+**J1 — the header wrapped the path instead of ellipsising it.**
+`.file-preview > header span` carried `overflow: hidden` and
+`text-overflow: ellipsis` with **no `white-space: nowrap`**, and
+`text-overflow` is inert while the computed `white-space` is `normal`. So the
+span wrapped. Measured against a markdown file, whose header carries three
+buttons:
+
+| panel width     | path span  | header height |
+| --------------- | ---------- | ------------- |
+| 280 (the floor) | 0 × 88px   | 107px         |
+| 352             | 58 × 73px  | 92px          |
+| 400             | 106 × 59px | 78px          |
+| 544             | 250 × 29px | 48px          |
+
+At 280–328px the path rendered **one character per line** in a 10px column and
+the header took 107px — 83px of the file's own reading area — to say nothing.
+Fixed by nowrapping the path, and then by deciding where the ellipsis should
+fall: the tail of a path names the file and the head names a hundred files, so
+the header now paints `docs/product-specs/` and `workspace-panel.md` as two
+spans, the directories carrying a shrink factor 999 times the name's, and the
+whole path on the element's `title`. The header's controls moved into a
+wrapping group of their own, so at the floor the header becomes two short rows
+rather than one tall one. Re-measured, same file tab, at three widths:
+
+| panel width | path span  | header height |
+| ----------- | ---------- | ------------- |
+| 550         | 347 × 15px | 37.6px        |
+| 400         | 197 × 15px | 37.6px        |
+| 280         | 256 × 15px | 58.2px        |
+
+The file name is whole at every one of them (135.75px painted against 136px
+needed) and the tab body's horizontal overflow is 0. Pinned twice, because the
+defect has two halves that fail in different places: `styles.test.ts` reads the
+stylesheet and asserts the declaration that was missing, since **jsdom applies
+no author CSS at all and cannot tell a missing rule from a present one**; and
+an end-to-end case measures the rendered header at 550, 400 and 280.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

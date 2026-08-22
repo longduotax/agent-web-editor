@@ -124,40 +124,42 @@ export const FileTab = memo(function FileTab({
       <header>
         {/* The workspace-relative path the server returned. An absolute
             server path is never shown, and never copied. */}
-        <span title={path}>{path}</span>
-        {markdown && (
+        <HeaderPath path={path} />
+        <div className="file-actions">
+          {markdown && (
+            <button
+              type="button"
+              onClick={() => {
+                actions.updateTab(tab.id, {
+                  view: rendered ? "source" : "preview",
+                });
+              }}
+            >
+              {rendered ? "View source" : "View preview"}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
-              actions.updateTab(tab.id, {
-                view: rendered ? "source" : "preview",
-              });
+              void navigator.clipboard.writeText(path);
             }}
           >
-            {rendered ? "View source" : "View preview"}
+            Copy path
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => {
-            void navigator.clipboard.writeText(path);
-          }}
-        >
-          Copy path
-        </button>
-        <button
-          type="button"
-          disabled={file === undefined || file.binary}
-          onClick={() => {
-            if (file === undefined) return;
-            // The whole file, not the bounded portion painted below: the
-            // budget is about what this panel renders, and copying is how a
-            // reader takes the file somewhere that has no budget.
-            void navigator.clipboard.writeText(file.content);
-          }}
-        >
-          Copy contents
-        </button>
+          <button
+            type="button"
+            disabled={file === undefined || file.binary}
+            onClick={() => {
+              if (file === undefined) return;
+              // The whole file, not the bounded portion painted below: the
+              // budget is about what this panel renders, and copying is how a
+              // reader takes the file somewhere that has no budget.
+              void navigator.clipboard.writeText(file.content);
+            }}
+          >
+            Copy contents
+          </button>
+        </div>
       </header>
       {preview.isPending && (
         <p className="panel-state" aria-live="polite">
@@ -217,6 +219,36 @@ export const FileTab = memo(function FileTab({
     </div>
   );
 });
+
+/**
+ * The path in the tab's header, in two pieces.
+ *
+ * One piece, and the header wrapped it: `text-overflow: ellipsis` is inert
+ * while `white-space` computes to `normal`, so at the panel's 280px floor the
+ * path rendered one character per line in a 10px column and the header grew
+ * from 24px to 107px — 83px of the file's own reading area, spent on saying
+ * nothing (J1). The stylesheet now nowraps it; this splits it so the ellipsis
+ * falls where it costs least.
+ *
+ * Which end is kept is a judgement about paths: `docs/product-specs/…` names
+ * a hundred files and `…/workspace-panel.md` names one, so the directories
+ * are what shrinks and the file name is what survives. The whole path is on
+ * the element's tooltip either way, and the two spans read as one string, so
+ * neither the accessible name nor a text selection notices the split.
+ */
+function HeaderPath({ path }: { path: string }): JSX.Element {
+  const cut = path.lastIndexOf("/");
+  const directories = cut === -1 ? "" : path.slice(0, cut + 1);
+  const name = cut === -1 ? path : path.slice(cut + 1);
+  return (
+    <span className="file-path" title={path}>
+      {directories !== "" && (
+        <span className="file-path-dir">{directories}</span>
+      )}
+      <span className="file-path-name">{name}</span>
+    </span>
+  );
+}
 
 /** The rendered portion of a file, and what it left out. */
 interface BoundedText {

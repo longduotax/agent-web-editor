@@ -401,6 +401,48 @@ describe("FileTab: every state it can be in", () => {
   });
 });
 
+describe("FileTab: the header's path", () => {
+  it("carries the whole path on its tooltip and splits the name from its directories", async () => {
+    api.getFile.mockResolvedValue(
+      preview({ path: "docs/product-specs/workspace-panel.md" }),
+    );
+    const { container } = renderTab({
+      path: "docs/product-specs/workspace-panel.md",
+      view: "source",
+    });
+    await screen.findByText("const answer = 42;");
+
+    const path = container.querySelector(".file-preview > header .file-path");
+    // The whole path, whatever the header has room to paint (J1): the
+    // element that ellipsises has to be able to say what it left out.
+    expect(path).toHaveAttribute(
+      "title",
+      "docs/product-specs/workspace-panel.md",
+    );
+    // Read together they are still the path, in order, so the accessible
+    // name and a text selection are both unchanged by the split.
+    expect(path).toHaveTextContent("docs/product-specs/workspace-panel.md");
+    // The tail is the informative half, so it is the half in the element
+    // that does not shrink.
+    expect(path?.querySelector(".file-path-name")).toHaveTextContent(
+      "workspace-panel.md",
+    );
+    expect(path?.querySelector(".file-path-dir")).toHaveTextContent(
+      "docs/product-specs/",
+    );
+  });
+
+  it("shows a file at the root as its name alone", async () => {
+    api.getFile.mockResolvedValue(preview({ path: "README.md" }));
+    const { container } = renderTab({ path: "README.md", view: "source" });
+    await screen.findByText("const answer = 42;");
+
+    const path = container.querySelector(".file-preview > header .file-path");
+    expect(path).toHaveTextContent("README.md");
+    expect(path?.querySelector(".file-path-dir")).toBeNull();
+  });
+});
+
 describe("FileTab: copying", () => {
   it("copies the normalized workspace-relative path the server returned", async () => {
     const user = userEvent.setup();
