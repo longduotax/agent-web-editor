@@ -31,7 +31,7 @@ import { DiffTab } from "./DiffTab.js";
 import { FilesTab } from "./FilesTab.js";
 import { FileTab } from "./FileTab.js";
 import type { PanelActions } from "./usePanelState.js";
-import type { TabContext } from "./panelTabs.js";
+import type { PanelTab, TabContext } from "./panelTabs.js";
 
 afterEach(() => {
   cleanup();
@@ -204,7 +204,14 @@ describe("ChangesTab", () => {
 });
 
 describe("FilesTab", () => {
-  const tab = { id: "t", type: "files", context, search: "" } as const;
+  const tab: Extract<PanelTab, { type: "files" }> = {
+    id: "t",
+    type: "files",
+    context,
+    search: "",
+    expanded: [],
+    showIgnored: false,
+  };
 
   it("debounces the search and keeps the previous list visible", async () => {
     const user = userEvent.setup();
@@ -230,7 +237,9 @@ describe("FilesTab", () => {
     await waitFor(() => {
       expect(api.getFiles).toHaveBeenCalledTimes(2);
     });
-    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, "mai");
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
+      search: "mai",
+    });
   });
 
   // D7. The tab needs a selection to do anything, so WSP-10 requires a
@@ -564,7 +573,14 @@ describe("tab bodies are accessible", () => {
           actions={actionsSpy()}
         />
         <FilesTab
-          tab={{ id: "b", type: "files", context, search: "" }}
+          tab={{
+            id: "b",
+            type: "files",
+            context,
+            search: "",
+            expanded: [],
+            showIgnored: false,
+          }}
           visible
           actions={actionsSpy()}
         />

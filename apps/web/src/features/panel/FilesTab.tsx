@@ -34,11 +34,9 @@ export const FilesTab = memo(function FilesTab({
     queryFn: async () => {
       if (context === null)
         throw new Error("This tab has no worktree to read.");
-      return await getFiles(
-        context.projectId,
-        context.threadId,
-        debouncedSearch,
-      );
+      return await getFiles(context.projectId, context.threadId, {
+        search: debouncedSearch,
+      });
     },
     enabled: visible && context !== null,
     staleTime: PANEL_QUERY_STALE_TIME,

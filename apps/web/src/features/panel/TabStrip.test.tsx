@@ -79,7 +79,14 @@ function idleDrag(): TabDragController {
 
 const tabs: Record<TabId, PanelTab> = {
   "tab-1": { id: "tab-1", type: "changes", context: here },
-  "tab-2": { id: "tab-2", type: "files", context: here, search: "" },
+  "tab-2": {
+    id: "tab-2",
+    type: "files",
+    context: here,
+    search: "",
+    expanded: [],
+    showIgnored: false,
+  },
   "tab-3": {
     id: "tab-3",
     type: "file",

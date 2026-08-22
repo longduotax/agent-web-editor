@@ -36,7 +36,15 @@ const NEW_TAB_CHOICES: readonly NewTabChoice[] = [
     type: "files",
     label: "Files",
     build: (context) =>
-      context === null ? null : { type: "files", context, search: "" },
+      context === null
+        ? null
+        : {
+            type: "files",
+            context,
+            search: "",
+            expanded: [],
+            showIgnored: false,
+          },
   },
   {
     type: "terminal",

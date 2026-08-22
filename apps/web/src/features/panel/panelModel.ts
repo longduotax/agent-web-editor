@@ -55,6 +55,10 @@ export type PanelEdge = "top" | "bottom" | "left" | "right";
 // the one that resolves the collision that creates.
 export interface TabPatch {
   search?: string;
+  /** The `files` tab's expanded directories (WSP-05 v2). */
+  expanded?: string[];
+  /** The `files` tab's ignored-files opt-in (WSP-05 v2). */
+  showIgnored?: boolean;
   view?: "preview" | "source";
   collapsedHunks?: string[];
   cwd?: string;
@@ -446,7 +450,13 @@ function patchTab(tab: PanelTab, patch: TabPatch): PanelTab {
       return tab; // a Changes tab has no state of its own to patch
     case "files": {
       const search = patch.search ?? tab.search;
-      return search === tab.search ? tab : { ...tab, search };
+      const expanded = patch.expanded ?? tab.expanded;
+      const showIgnored = patch.showIgnored ?? tab.showIgnored;
+      return search === tab.search &&
+        sameList(expanded, tab.expanded) &&
+        showIgnored === tab.showIgnored
+        ? tab
+        : { ...tab, search, expanded, showIgnored };
     }
     case "file": {
       const view = patch.view ?? tab.view;

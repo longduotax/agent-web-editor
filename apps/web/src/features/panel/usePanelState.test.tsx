@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import { leafIds } from "../layout/binaryTree.js";
-import { PANEL_STORAGE_KEY } from "./panelStorage.js";
+import { PANEL_STATE_VERSION, PANEL_STORAGE_KEY } from "./panelStorage.js";
 import type { TabContext } from "./panelTabs.js";
 import { usePanelState } from "./usePanelState.js";
 
@@ -58,7 +58,7 @@ describe("usePanelState", () => {
       result.current.actions.setOpen(true);
     });
     expect(JSON.parse(store.get(PANEL_STORAGE_KEY) ?? "")).toMatchObject({
-      version: 2,
+      version: PANEL_STATE_VERSION,
       open: true,
     });
   });
@@ -71,6 +71,8 @@ describe("usePanelState", () => {
         type: "files",
         context,
         search: "",
+        expanded: [],
+        showIgnored: false,
       });
     });
     first.unmount();
@@ -148,6 +150,8 @@ describe("usePanelState", () => {
         type: "files",
         context,
         search: "",
+        expanded: [],
+        showIgnored: false,
       });
     });
 

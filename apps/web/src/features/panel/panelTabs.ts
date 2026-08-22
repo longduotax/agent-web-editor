@@ -27,7 +27,22 @@ export interface TabContext {
 // sameTarget): an unknown scope cannot be proven to address the same thing.
 export type PanelTab =
   | { id: TabId; type: "changes"; context: TabContext | null }
-  | { id: TabId; type: "files"; context: TabContext | null; search: string }
+  | {
+      id: TabId;
+      type: "files";
+      context: TabContext | null;
+      search: string;
+      // The workspace-relative paths of the directories the user has
+      // expanded. On the tab rather than in component state because WSP-05
+      // requires clearing a search to restore the tree at exactly its
+      // previous expansion, and because WSP-04 requires that expansion to
+      // survive a reload and a drag between groups.
+      expanded: string[];
+      // The explicit opt-in to seeing paths the working tree's ignore rules
+      // match. Off by default: a dependency directory must not be able to
+      // bury the project's own files.
+      showIgnored: boolean;
+    }
   | {
       id: TabId;
       type: "file";

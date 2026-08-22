@@ -32,6 +32,8 @@ describe("tabTitle", () => {
       type: "files",
       context: context(),
       search: "",
+      expanded: [],
+      showIgnored: false,
     };
     expect(tabTitle(changes)).toBe("Changes");
     expect(tabTitle(files)).toBe("Files");
@@ -158,6 +160,8 @@ describe("sameTarget", () => {
       type: "files",
       context: context(),
       search: "",
+      expanded: [],
+      showIgnored: false,
     };
     expect(sameTarget(changes, files)).toBe(false);
   });
@@ -192,7 +196,14 @@ describe("sameTarget", () => {
     const tabs: PanelTab[] = [
       { id: "t1", type: "changes", context: context() },
       { id: "t2", type: "changes", context: null },
-      { id: "t3", type: "files", context: context(), search: "" },
+      {
+        id: "t3",
+        type: "files",
+        context: context(),
+        search: "",
+        expanded: [],
+        showIgnored: false,
+      },
       {
         id: "t4",
         type: "file",

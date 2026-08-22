@@ -274,7 +274,7 @@ describe("readPanelState", () => {
     // is refused: a record that also fails six other fields would pass this
     // test with the version check deleted.
     const { removed } = stubStorage({
-      [PANEL_STORAGE_KEY]: storedPanel({ version: 3 }),
+      [PANEL_STORAGE_KEY]: storedPanel({ version: 4 }),
     });
     expectDefaultPanel(readPanelState(ids()));
     expect(removed).toContain(PANEL_STORAGE_KEY);
@@ -356,7 +356,14 @@ describe("readPanelState", () => {
       },
       tabs: {
         t1: { id: "t1", type: "changes", context: null },
-        t2: { id: "t2", type: "files", context: null, search: "" },
+        t2: {
+          id: "t2",
+          type: "files",
+          context: null,
+          search: "",
+          expanded: [],
+          showIgnored: false,
+        },
       },
     });
   }
@@ -485,7 +492,14 @@ describe("readPanelState", () => {
       {
         tabs: {
           t1: { id: "t1", type: "changes", context: null },
-          t2: { id: "t2", type: "files", context: null, search: "" },
+          t2: {
+            id: "t2",
+            type: "files",
+            context: null,
+            search: "",
+            expanded: [],
+            showIgnored: false,
+          },
         },
       },
     ],
@@ -552,6 +566,115 @@ describe("readPanelState", () => {
   });
 });
 
+// Version 3 added the file tree's `expanded` and `showIgnored` to the `files`
+// tab (WSP-05 as revised by specification version 2). A version 2 record is
+// still a record of a panel the user arranged, so it is migrated, not reset.
+describe("migration from a version 2 record", () => {
+  function storedV2(): string {
+    return JSON.stringify({
+      version: 2,
+      root: { type: "group", id: "g1" },
+      groups: { g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" } },
+      tabs: {
+        t1: { id: "t1", type: "files", context: STORED_CONTEXT, search: "src" },
+      },
+      focusedGroupId: "g1",
+      width: 520,
+      open: true,
+    });
+  }
+
+  it("fills an empty expansion set and hides ignored files", () => {
+    stubStorage({ [PANEL_STORAGE_KEY]: storedV2() });
+
+    const state = readPanelState(ids());
+
+    expect(panelStateProblems(state)).toEqual([]);
+    const tab = onlyTab(state);
+    if (tab.type !== "files") throw new Error("expected a files tab");
+    expect(tab.expanded).toEqual([]);
+    expect(tab.showIgnored).toBe(false);
+    // Everything the version 2 record did say is carried, so a migration
+    // that quietly reset would fail here rather than pass.
+    expect(tab.search).toBe("src");
+    expect(state.width).toBe(520);
+    expect(state.open).toBe(true);
+  });
+
+  it("stamps the next write with version 3", () => {
+    const { store } = stubStorage({ [PANEL_STORAGE_KEY]: storedV2() });
+
+    writePanelState(readPanelState(ids()));
+
+    const written: unknown = JSON.parse(store.get(PANEL_STORAGE_KEY) ?? "");
+    expect(written).toMatchObject({ version: PANEL_STATE_VERSION });
+    expect(PANEL_STATE_VERSION).toBe(3);
+  });
+
+  it("round-trips an expansion set and the ignored opt-in", () => {
+    const { store } = stubStorage();
+    const make = ids();
+    let state = createEmptyPanel(make);
+    state = openTab(
+      state,
+      {
+        type: "files",
+        context: STORED_CONTEXT,
+        search: "",
+        expanded: ["src", "src/features"],
+        showIgnored: true,
+      },
+      make,
+    );
+    writePanelState(state);
+    expect(store.has(PANEL_STORAGE_KEY)).toBe(true);
+
+    const restored = onlyTab(readPanelState(ids()));
+    if (restored.type !== "files") throw new Error("expected a files tab");
+    expect(restored.expanded).toEqual(["src", "src/features"]);
+    expect(restored.showIgnored).toBe(true);
+  });
+
+  // An expansion entry becomes a listing request, so it is held to the
+  // server's own path rules. A bad entry costs its own expansion, never the
+  // tab and never the panel.
+  it.each([
+    ["/etc/passwd"],
+    ["../outside"],
+    ["src/../../escape"],
+    ["C:\\Windows"],
+    ["src\\features"],
+    ["src/\u0000null"],
+    [42],
+    [null],
+  ])("drops the unusable expansion entry %p without losing the tab", (bad) => {
+    stubStorage({
+      [PANEL_STORAGE_KEY]: JSON.stringify({
+        version: PANEL_STATE_VERSION,
+        root: { type: "group", id: "g1" },
+        groups: { g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" } },
+        tabs: {
+          t1: {
+            id: "t1",
+            type: "files",
+            context: STORED_CONTEXT,
+            search: "",
+            expanded: ["src", bad],
+            showIgnored: false,
+          },
+        },
+        focusedGroupId: "g1",
+        width: 400,
+        open: true,
+      }),
+    });
+
+    const tab = onlyTab(readPanelState(ids()));
+    if (tab.type !== "files") throw new Error("expected a files tab");
+    expect(tab.expanded).toEqual(["src"]);
+  });
+});
+
 describe("migration from the v1 inspector preference", () => {
   it("migrates the recorded tab, width, and open state into one group", () => {
     stubStorage({
@@ -571,6 +694,11 @@ describe("migration from the v1 inspector preference", () => {
     expect(onlyGroup(state).tabIds).toHaveLength(1);
     const tab = onlyTab(state);
     expect(tab.type).toBe("files");
+    // The v1 -> v3 chain in one read: a device that has not opened the panel
+    // since the inspector shipped arrives with a tree-shaped files tab.
+    if (tab.type !== "files") throw new Error("expected a files tab");
+    expect(tab.expanded).toEqual([]);
+    expect(tab.showIgnored).toBe(false);
     // The shipped inspector followed the focused pane, so it never recorded
     // which thread its content belonged to. The tab is restored honestly
     // context-less and the UI binds it on first render.

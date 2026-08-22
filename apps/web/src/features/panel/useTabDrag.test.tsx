@@ -114,7 +114,14 @@ function seedTwoGroups(store: Map<string, string>) {
       },
       tabs: {
         "tab-changes": { id: "tab-changes", type: "changes", context },
-        "tab-files": { id: "tab-files", type: "files", context, search: "" },
+        "tab-files": {
+          id: "tab-files",
+          type: "files",
+          context,
+          search: "",
+          expanded: [],
+          showIgnored: false,
+        },
         "tab-file": {
           id: "tab-file",
           type: "file",

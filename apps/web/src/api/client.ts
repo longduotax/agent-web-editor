@@ -236,13 +236,34 @@ export async function markViewed(
     { method: "POST", body: body({ idempotencyKey: commandId() }) },
   );
 }
+export interface FileListingOptions {
+  /** Bounded server-side substring search over the workspace-relative path. */
+  search?: string;
+  /** The directory to list, relative to the execution root; `""` is the root. */
+  path?: string;
+  /**
+   * `"1"` fetches one level, which is what the tree asks for as the user
+   * expands; `"full"` is the whole recursive listing, which only the flat
+   * search mode wants (WSP-05 as revised by specification version 2).
+   */
+  depth?: "1" | "full";
+  /** The explicit opt-in to seeing ignored paths. `.git` is never revealed. */
+  showIgnored?: boolean;
+}
+
 export async function getFiles(
   projectId: ProjectId,
   threadId: ThreadId,
-  search = "",
+  options: FileListingOptions = {},
 ) {
+  const query = new URLSearchParams({
+    search: options.search ?? "",
+    path: options.path ?? "",
+    depth: options.depth ?? "full",
+    showIgnored: options.showIgnored === true ? "true" : "false",
+  });
   return await request(
-    `/api/projects/${projectId}/threads/${threadId}/files?search=${encodeURIComponent(search)}`,
+    `/api/projects/${projectId}/threads/${threadId}/files?${query.toString()}`,
     FileTreeResponseSchema,
   );
 }

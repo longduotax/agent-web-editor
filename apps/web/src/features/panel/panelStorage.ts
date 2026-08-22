@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
+import {
+  ProjectIdSchema,
+  RelativePathSchema,
+  ThreadIdSchema,
+} from "@pi-web/contracts";
 
 import { normalizeSizes } from "../layout/binaryTree.js";
 import type { TreeNode } from "../layout/binaryTree.js";
@@ -22,7 +26,19 @@ import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 // than an exception: a browser with storage disabled must still work.
 
 export const PANEL_STORAGE_KEY = "pi-workspace:panel";
-export const PANEL_STATE_VERSION = 2;
+export const PANEL_STATE_VERSION = 3;
+
+// Record versions this reader still accepts, and migrates on read.
+//
+// Version 3 added `expanded` and `showIgnored` to the `files` tab for the
+// file tree (WSP-05 as revised by specification version 2). That is the whole
+// of the difference, and both fields carry a default below, so a version 2
+// record migrates by being parsed: the next write stamps it 3. The chain from
+// the v1 inspector preference is unbroken — a device that has not opened the
+// panel since the inspector shipped still migrates v1 -> v3 in one read,
+// because the v1 migration builds tabs through the model rather than through
+// this schema.
+const MIGRATABLE_PANEL_VERSIONS = [2] as const;
 
 // The shipped inspector's own key. Held here rather than imported, because
 // this migration has to outlive the module that wrote it: that module is
@@ -37,6 +53,16 @@ const TabContextSchema = z.object({
   label: z.string(),
 });
 
+// A persisted expansion entry is an arbitrary string that becomes a listing
+// request, so it is held to the same shape the server's own path parser
+// enforces: no absolute, drive, UNC, `..`, NUL, or backslash spelling ever
+// reaches a query string from this record.
+function isRestorableDirectoryPath(value: unknown): value is string {
+  return (
+    typeof value === "string" && RelativePathSchema.safeParse(value).success
+  );
+}
+
 const PanelTabSchema = z.discriminatedUnion("type", [
   z.object({
     id: z.string(),
@@ -48,6 +74,17 @@ const PanelTabSchema = z.discriminatedUnion("type", [
     type: z.literal("files"),
     context: TabContextSchema.nullable(),
     search: z.string(),
+    // Each entry becomes a listing request, so it is parsed with the same
+    // relative-path rules the route re-applies to whatever it receives. A
+    // malformed entry drops that entry from the expansion set rather than
+    // resetting the tab: an expansion is a convenience, and losing the whole
+    // panel over one bad string would be the larger failure. The defaults
+    // are the version 2 -> 3 migration.
+    expanded: z
+      .array(z.unknown())
+      .default([])
+      .transform((values) => values.filter(isRestorableDirectoryPath)),
+    showIgnored: z.boolean().default(false),
   }),
   z.object({
     id: z.string(),
@@ -99,7 +136,10 @@ const GroupNodeSchema: z.ZodType<GroupNode> = z.lazy(() =>
 );
 
 const PanelStateSchema = z.object({
-  version: z.literal(PANEL_STATE_VERSION),
+  version: z.union([
+    z.literal(PANEL_STATE_VERSION),
+    ...MIGRATABLE_PANEL_VERSIONS.map((version) => z.literal(version)),
+  ]),
   root: GroupNodeSchema.nullable(),
   groups: z.record(
     z.string(),
@@ -256,7 +296,13 @@ function migratedTab(activeTab: "changes" | "files" | "terminal"): NewPanelTab {
     case "changes":
       return CHANGES_TAB;
     case "files":
-      return { type: "files", context: null, search: "" };
+      return {
+        type: "files",
+        context: null,
+        search: "",
+        expanded: [],
+        showIgnored: false,
+      };
     case "terminal":
       return { type: "terminal", context: null, cwd: "", terminalId: null };
   }

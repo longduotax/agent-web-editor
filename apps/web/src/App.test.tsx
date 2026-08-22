@@ -49,6 +49,7 @@ import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { App, Composer } from "./App.js";
 import type { PanelTab } from "./features/panel/panelTabs.js";
+import { PANEL_STATE_VERSION } from "./features/panel/panelStorage.js";
 
 /** Just enough of the device-local panel record for these assertions. */
 interface PersistedPanel {
@@ -553,7 +554,7 @@ describe("safe and accessible workspace rendering", () => {
     await user.click(screen.getByRole("menuitem", { name: "Files" }));
     await waitFor(() => {
       expect(JSON.parse(values.get("pi-workspace:panel") ?? "")).toMatchObject({
-        version: 2,
+        version: PANEL_STATE_VERSION,
         open: true,
       });
     });
@@ -1683,7 +1684,9 @@ describe("panel Files tab search", () => {
     await waitFor(() => {
       expect(api.getFiles).toHaveBeenCalledTimes(2);
     });
-    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, "mai");
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
+      search: "mai",
+    });
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
   });
 });

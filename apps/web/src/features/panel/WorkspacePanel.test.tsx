@@ -116,6 +116,8 @@ function seedPanelRecord(store: Map<string, string>) {
           type: "files",
           context,
           search: "",
+          expanded: [],
+          showIgnored: false,
         },
         "tab-file": {
           id: "tab-file",
