@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import {
@@ -23,7 +23,11 @@ export interface WorkspaceLayoutController {
   focus(paneId: PaneId): void;
   bind(paneId: PaneId): void;
   resize(splitId: SplitId, sizes: [number, number]): void;
-  close(paneId: PaneId): void;
+  // Returns the layout the close produced, so a caller that has to react to
+  // the outcome (e.g. moving the route off a pane that no longer exists) reads
+  // it from the same computation that was applied, rather than re-deriving it
+  // and hoping the two agree.
+  close(paneId: PaneId): WorkspaceLayout;
   // Thin setLayout wrapper: overwrites the layout wholesale, e.g. to restore
   // a snapshot captured before a since-cancelled close (see WorkspaceView's
   // undo-toast flow). Bypasses closePane/etc — callers are responsible for
@@ -73,6 +77,10 @@ export function useWorkspaceLayout(
     setRenderedProjectId(projectId);
     setLayout(readLayout(projectId, makePaneId));
   }
+  // Always the layout of the render in progress, so `close` computes against
+  // what the user is actually looking at.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
 
   useEffect(() => {
     writeLayout(projectId, layout);
@@ -120,9 +128,28 @@ export function useWorkspaceLayout(
     setLayout((current) => setSplitSizes(current, splitId, sizes));
   }, []);
 
-  const close = useCallback((paneId: PaneId) => {
-    setLayout((current) => closePane(current, paneId));
-  }, []);
+  // The one place a close is computed. It reads the current layout from a ref
+  // rather than from a functional updater because the result has to be
+  // returned to the caller, and an updater's return value is not reachable
+  // synchronously. `layoutRef` is assigned during render, so it is the layout
+  // that is on screen when the click handler runs.
+  const close = useCallback(
+    (paneId: PaneId): WorkspaceLayout => {
+      const next = closePane(layoutRef.current, paneId);
+      setLayout(next);
+      // Persisted HERE, synchronously, as well as by the effect above.
+      // Closing a pane is the one layout change that can be followed by a
+      // navigation in the same handler (the route has to stop naming a pane
+      // that no longer exists -- see WorkspaceView), and that navigation
+      // unmounts this hook before its effects flush. Measured: the emptied
+      // layout was never written, the remounted view re-read the pane that
+      // had just been closed, and closing the last pane put it straight back
+      // on screen.
+      writeLayout(projectId, next);
+      return next;
+    },
+    [projectId],
+  );
 
   const replaceLayout = useCallback((next: WorkspaceLayout) => {
     setLayout(next);

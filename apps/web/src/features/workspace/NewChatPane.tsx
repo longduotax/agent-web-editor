@@ -32,11 +32,23 @@ import { useAutoGrow } from "../../components/useAutoGrow.js";
  * The base branch is interpolated so the third one names this project's real
  * branch rather than a placeholder.
  */
-function starterPrompts(baseBranch: string): readonly string[] {
+function starterPrompts(
+  baseBranch: string,
+): readonly { id: string; text: string }[] {
   return [
-    "Walk the repository and tell me how it is laid out. Do not change anything yet.",
-    "Run the test suite, then fix whatever fails.",
-    `Summarise the last ten commits on ${baseBranch || "this branch"} and what they were for.`,
+    {
+      id: "layout",
+      text: "Walk the repository and tell me how it is laid out. Do not change anything yet.",
+    },
+    { id: "tests", text: "Run the test suite, then fix whatever fails." },
+    {
+      // Keyed by identity, not by text: the branch name arrives with the
+      // preflight query, so this one's text changes from "this branch" to the
+      // real branch a moment after mount. Keying on the text would remount the
+      // button at that moment and drop focus to <body> if it held it.
+      id: "history",
+      text: `Summarise the last ten commits on ${baseBranch || "this branch"} and what they were for.`,
+    },
   ];
 }
 
@@ -210,18 +222,25 @@ export function NewChatPane(props: NewChatPaneProps) {
               </h2>
               <ul className="new-chat-examples">
                 {starterPrompts(baseBranch).map((example) => (
-                  <li key={example}>
+                  <li key={example.id}>
                     <button
                       type="button"
                       className="new-chat-example"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setText(example);
+                      // Deliberately NOT stopping propagation. The pane shell's
+                      // onClick is this component's only call site for
+                      // onFocus(), so swallowing the click here left the
+                      // workspace believing a different pane was focused: the
+                      // pane rendered `dim` while you typed in it, the panel
+                      // kept following the other pane, and Escape-then-split
+                      // acted on that other pane -- F9 defeated by F8 on the
+                      // one surface where they meet.
+                      onClick={() => {
+                        setText(example.text);
                         setCreationKey(commandId());
                         textareaRef.current?.focus();
                       }}
                     >
-                      {example}
+                      {example.text}
                     </button>
                   </li>
                 ))}

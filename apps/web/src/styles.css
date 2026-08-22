@@ -686,8 +686,14 @@ a:focus-visible {
      window's. At 1280px the same viewport holds a 964px pane or three 360px
      ones, so a viewport media query cannot tell the two apart. Scoped to the
      header rather than the whole pane: the smallest box that answers the
-     question, and nothing inside it is absolutely positioned, so the layout
-     containment this turns on cannot move anything. */
+     question.
+
+     `container-type: inline-size` implies `contain: layout`, which makes this
+     the containing block for any absolutely positioned descendant. There IS
+     one -- the trust note's `.sr-only` span -- and it is unaffected: it sets
+     no offsets, so it stays in its static position, and it is clipped to 1px
+     either way. Anything added inside this header that positions itself
+     against an ancestor will now resolve against the header. */
   container-type: inline-size;
   container-name: pane-head;
   display: flex;

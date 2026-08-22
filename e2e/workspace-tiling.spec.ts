@@ -22,7 +22,7 @@ import { parseConfig } from "../apps/server/src/config.js";
 // which the server sets synchronously to "running" on accept — see
 // apps/server/src/domain/workspace.ts's prompt()/startThread()) but it can
 // never produce actual transcript content: no user pill, no assistant
-// flowing text, and no "Worked for" tool-activity header ever render here.
+// flowing text, and no "N steps ·" tool-activity header ever render here.
 // Those Codex-reading-model DOM shapes are covered at the unit level instead
 // (apps/web/src/features/workspace/ThreadPane.test.tsx and
 // apps/web/src/components/Activity.test.tsx), which control the transcript

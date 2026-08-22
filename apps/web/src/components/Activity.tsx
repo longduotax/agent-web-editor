@@ -150,6 +150,11 @@ function formattedInput(input: string): string {
  * most a second of overstatement and can never understate. Every unit down to
  * the second is printed, because dropping the seconds off "1h 1m 1s" would
  * understate too.
+ *
+ * Note the deliberate asymmetry with `elapsedLabel` in `runStatus.ts`, which
+ * floors: a live counter must not claim time that has not passed yet, and a
+ * settled total must not claim less time than did. Both are right for what
+ * they show, and they can differ by up to a second on the same run.
  */
 export function formatDuration(ms: number): string {
   if (ms < 1_000) return "<1s";
@@ -184,43 +189,51 @@ function stepDurationMs(item: ToolActivity): number | null {
 }
 
 /**
- * The wall-clock span a group of steps occupied: from the earliest moment any
- * of them was known to exist to the latest moment any of them was known to
- * have finished.
+ * The wall-clock span a group of steps occupied: from the earliest known start
+ * to the latest known finish.
  *
  * This used to be max-minus-min over the steps' single timestamps, which for
  * the common case of one long tool call is always zero -- a 45-second `sleep`
  * summarised itself as "<1s". A step's own elapsed time only became
  * representable once the contract started carrying its completion time.
+ *
+ * Starts and ends are pooled separately and a missing one is never substituted
+ * from the other end. Synthesising a start from an end is how the false zero
+ * gets back in: a step whose call entry was compacted away would otherwise
+ * bound a group at a single instant and report the run as instantaneous.
  */
 function runSpanMs(items: readonly ToolActivity[]): number | null {
   const starts: number[] = [];
   const ends: number[] = [];
   for (const item of items) {
+    // A still-running step contributes a start and no end, so it can never
+    // shorten the span; a start-less step contributes an end and no start.
     const start = instant(item.timestamp);
     const end = instant(item.completedAt);
-    // A still-running step at least establishes that the run reached it, and
-    // a step with no call behind it at least establishes that it finished.
-    const first = start ?? end;
-    const last = end ?? start;
-    if (first === null || last === null) continue;
-    starts.push(first);
-    ends.push(last);
+    if (start !== null) starts.push(start);
+    if (end !== null) ends.push(end);
   }
   if (starts.length === 0 || ends.length === 0) return null;
   return Math.max(0, Math.max(...ends) - Math.min(...starts));
 }
 
+/**
+ * What the group summary says about itself.
+ *
+ * Not "Worked for 41s": that reads as a claim about the whole run, and the run
+ * is the longer thing the pane header was just counting. Because the header's
+ * live timer and this settled summary are never on screen at the same moment
+ * -- the header shows its number only while working, the group shows one only
+ * once it stops -- a reader sees a counter reach 46s, vanish, and be replaced
+ * by a smaller number, which reads as the app quietly correcting itself. The
+ * measurement was never wrong; the word was. Naming the steps says what is
+ * actually being timed, and it degrades into the same sentence minus its last
+ * clause when the transcript cannot support a duration at all.
+ */
 function runLabel(items: readonly ToolActivity[]): string {
+  const steps = `${String(items.length)} ${items.length === 1 ? "step" : "steps"}`;
   const span = runSpanMs(items);
-  // Never a bare "Worked": beside a sibling group's "Worked for 27s" that
-  // reads as a different kind of row rather than as the same row with an
-  // unknown duration. But naming a duration the transcript does not support
-  // is worse than naming none, so the slot is filled with what is actually
-  // known -- how many steps ran.
-  if (span === null)
-    return `Worked (${String(items.length)} ${items.length === 1 ? "step" : "steps"})`;
-  return `Worked for ${formatDuration(span)}`;
+  return span === null ? steps : `${steps} · ${formatDuration(span)}`;
 }
 
 export function displayTranscript(
@@ -357,7 +370,7 @@ export function ActivityGroup({
    * be sealed behind a collapsed disclosure until the run ended — so a
    * 96-second run showed a blank transcript and then revealed fourteen steps
    * at the moment they stopped mattering. A live group opens itself and
-   * collapses back to its "Worked for Nm" summary when the run settles. The
+   * collapses back to its "N steps · Nm" summary when the run settles. The
    * user may still fold it away by hand while it runs; that choice survives
    * until the group's live state flips.
    */

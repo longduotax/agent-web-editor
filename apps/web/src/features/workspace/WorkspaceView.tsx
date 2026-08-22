@@ -14,7 +14,6 @@ import {
   type KeyEventLike,
 } from "./keybindings.js";
 import { newChatDraftKey, removeDraft } from "./drafts.js";
-import { closePane } from "./layoutTree.js";
 import type { PaneId } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
@@ -89,6 +88,18 @@ export function WorkspaceView(props: {
       current.assignThreadToPane(focusedPaneId, threadId);
       return;
     }
+    // An assignment for this thread is already in flight, so the pane that
+    // will receive it exists (or is about to). Calling newPane() again would
+    // make a SECOND one and only the second would get the thread, leaving an
+    // orphan "New chat" pane beside it.
+    //
+    // This is the same hazard `handledNewChatEntryRef` guards below, for the
+    // same reason: newPane() is a functional setState, so under StrictMode's
+    // mount -> cleanup -> mount the second invocation still reads the
+    // pre-update layout and takes the same branch. It only becomes reachable
+    // when this effect runs against an EMPTY surface, which is exactly what
+    // closing the last pane and letting the route re-resolve produces.
+    if (pendingThreadAssignmentRef.current === threadId) return;
     pendingThreadAssignmentRef.current = threadId;
     current.newPane();
   }, []);
@@ -135,9 +146,12 @@ export function WorkspaceView(props: {
   const handleClose = useCallback(
     (paneId: PaneId) => {
       removeDraft(newChatDraftKey(projectId, paneId));
-      const before = controllerRef.current.layout;
-      const closedThreadId = before.panes[paneId]?.threadId ?? null;
-      controllerRef.current.close(paneId);
+      const closedThreadId =
+        controllerRef.current.layout.panes[paneId]?.threadId ?? null;
+      // The close is computed once, by the controller, and the result is what
+      // decides the route. Recomputing closePane() here as well was correct
+      // only for as long as the controller's close stayed identical to it.
+      const after = controllerRef.current.close(paneId);
       // Closing a pane is an instruction, and the URL has to stop describing
       // what was closed -- otherwise a reload re-resolves that URL and brings
       // the pane straight back (N2). This is NOT specific to the new-chat
@@ -150,13 +164,27 @@ export function WorkspaceView(props: {
           ? isNewChatRoute
           : params.threadId === closedThreadId;
       if (!routeAddressedClosedPane) return;
-      const after = closePane(before, paneId);
       const nextPaneId = after.focusedPaneId;
-      // Nothing is left open. The URL is then the ONLY record of where the
-      // user was, so it is deliberately left alone: the empty surface offers
-      // its own "Open a pane", and a reload resolving the last thread is
-      // deep-link resolution, not a resurrected pane.
-      if (nextPaneId === null) return;
+      if (nextPaneId === null) {
+        // Nothing is left open, and the two last-pane cases are not the same
+        // route problem.
+        //
+        // `/…/threads/:threadId` NAMES something. It is the only record of
+        // where the user was, it is what a bookmark or a shared link carries,
+        // and NEW-R3-3 depends on it still naming that thread so the sidebar
+        // row for it re-opens the pane. It is kept.
+        //
+        // `/…/new` names nothing. It is an INSTRUCTION -- "open an empty
+        // composer here" -- so leaving it in place means a reload re-issues an
+        // instruction the user just countermanded by closing the pane, which
+        // is N2 verbatim. It goes to the project route, whose own resolution
+        // then decides what to show; whatever that is, it is not the blank
+        // pane that was just dismissed, and the URL and the surface agree
+        // again after a reload.
+        if (isNewChatRoute)
+          void navigate(`/projects/${projectId}`, { replace: true });
+        return;
+      }
       const nextThreadId = after.panes[nextPaneId]?.threadId ?? null;
       void navigate(
         nextThreadId === null

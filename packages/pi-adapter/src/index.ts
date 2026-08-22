@@ -494,6 +494,14 @@ function translateToolCall(
  * call's timestamp with it -- which is what replacing the item in place used
  * to do -- discarded the only record of when the step began and left the
  * duration of a single-step run unrepresentable.
+ *
+ * When no start was recorded the step reports `null` rather than borrowing the
+ * end. A result can outlive its call -- compaction can summarise the issuing
+ * entry away, a branch or resume can begin after it, and the duplicate-id path
+ * below drops it deliberately -- and falling back to `completedAt` would turn
+ * every one of those into a step that claims to have taken no time. That is
+ * the same false zero this whole change exists to remove, so "unknown" has to
+ * stay expressible all the way to the UI.
  */
 function translateToolResult(
   id: string,
@@ -514,7 +522,7 @@ function translateToolResult(
     output: textFromContent(parsed.data.content),
     cwd: metadata.cwd,
     exitCode: metadata.exitCode,
-    timestamp: starts.get(parsed.data.toolCallId) ?? completedAt,
+    timestamp: starts.get(parsed.data.toolCallId) ?? null,
     completedAt,
   });
   return item.success
@@ -543,11 +551,12 @@ function translateBashExecution(
     cwd: null,
     exitCode,
     // A bashExecution entry is a single history record: it reports the shell
-    // command after the fact and carries no separate start time, so the one
-    // instant it does carry stands for both ends of a zero-width span rather
-    // than being invented into a duration.
+    // command after the fact and carries no separate start time. Reporting the
+    // one instant it does carry as both ends would say "this took no time",
+    // which for a five-minute command is a confident lie -- so the span is
+    // left unknown and only the instant is stated.
     timestamp,
-    completedAt: timestamp,
+    completedAt: null,
   });
   return item.success ? item.data : null;
 }

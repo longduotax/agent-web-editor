@@ -89,6 +89,25 @@ describe("agent tool activity", () => {
     expect(screen.queryByText(/^took /)).toBeNull();
   });
 
+  // S1: this branch was dead until the adapter learned to say "unknown". A
+  // step with no recorded start must show no duration rather than "took <1s".
+  it("shows no elapsed time for a step whose start was never recorded", async () => {
+    const user = userEvent.setup();
+    render(
+      <Activity
+        item={{ ...longSleep, timestamp: null }}
+        projectPath="/workspace"
+      />,
+    );
+
+    await user.click(screen.getByText("sleep 45 && ls"));
+    expect(screen.queryByText(/^took /)).toBeNull();
+    // The rest of the footer still renders -- only the duration is withheld.
+    expect(document.querySelector("footer")?.textContent).toBe(
+      "cwd /workspaceexit 0",
+    );
+  });
+
   it("omits empty assistant shells without guessing tool-call identity", () => {
     const items: TranscriptItem[] = [
       {
@@ -135,7 +154,7 @@ describe("worked-for run grouping", () => {
     );
 
     expect(screen.queryByText("runtime.md")).toBeNull();
-    const summary = screen.getByText("Worked for 1s");
+    const summary = screen.getByText("2 steps · 1s");
     const disclosure = summary.closest("details");
     expect(disclosure).not.toHaveAttribute("open");
 
@@ -157,10 +176,10 @@ describe("worked-for run grouping", () => {
     const disclosure = screen.getByText("Working…").closest("details");
     expect(disclosure).toHaveAttribute("open");
     expect(screen.getByText("runtime.md")).toBeInTheDocument();
-    expect(screen.queryByText(/^Worked for/)).toBeNull();
+    expect(screen.queryByText(/·/)).toBeNull();
   });
 
-  it("collapses back to its Worked-for summary once the run settles", () => {
+  it("collapses back to its settled summary once the run settles", () => {
     const view = render(
       <ActivityGroup
         items={[runningRead, completedRead]}
@@ -180,7 +199,7 @@ describe("worked-for run grouping", () => {
       />,
     );
 
-    const summary = screen.getByText("Worked for 1s");
+    const summary = screen.getByText("2 steps · 1s");
     expect(summary.closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("Working…")).toBeNull();
   });
@@ -217,8 +236,8 @@ describe("worked-for run grouping", () => {
   it("reports the real duration of a run that is one long tool call", () => {
     render(<ActivityGroup items={[longSleep]} projectPath="/workspace" />);
 
-    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
-    expect(screen.queryByText("Worked for <1s")).toBeNull();
+    expect(screen.getByText("1 step · 46s")).toBeInTheDocument();
+    expect(screen.queryByText(/<1s/)).toBeNull();
   });
 
   it("spans from the first step's start to the last step's finish", () => {
@@ -235,7 +254,7 @@ describe("worked-for run grouping", () => {
     // 00:00:00.000 (first call issued) to 00:00:45.054 (last result) -- not
     // the 45.054s of the slow step alone, and not the 44s between the two
     // steps' start times.
-    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
+    expect(screen.getByText("2 steps · 46s")).toBeInTheDocument();
   });
 
   it("names how many steps ran when the transcript carries no timing at all", () => {
@@ -249,11 +268,10 @@ describe("worked-for run grouping", () => {
       />,
     );
 
-    // Never a bare "Worked": beside a sibling "Worked for 27s" that reads as
-    // a different kind of row instead of an unknown duration. And never an
-    // invented duration either -- an unknown number is not "<1s".
-    expect(screen.getByText("Worked (2 steps)")).toBeInTheDocument();
-    expect(screen.queryByText(/Worked for/)).toBeNull();
+    // The same sentence as a timed group, minus its last clause -- never an
+    // invented duration, because an unknown number is not "<1s".
+    expect(screen.getByText("2 steps")).toBeInTheDocument();
+    expect(screen.queryByText(/·/)).toBeNull();
   });
 
   it("does not let a still-running step shorten the span", () => {
@@ -264,7 +282,36 @@ describe("worked-for run grouping", () => {
       />,
     );
 
-    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
+    expect(screen.getByText("2 steps · 46s")).toBeInTheDocument();
+  });
+
+  // S1: a result whose call entry is gone -- compacted away, or left on
+  // another branch -- has no start. The group must say so instead of bounding
+  // itself at the single instant it does have and reporting the run as
+  // instantaneous, which is N1's defect wearing the fix's clothes.
+  it("declines to time a group whose only step has no recorded start", () => {
+    render(
+      <ActivityGroup
+        items={[{ ...longSleep, timestamp: null }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("1 step")).toBeInTheDocument();
+    expect(screen.queryByText(/<1s/)).toBeNull();
+  });
+
+  it("still spans a group where only some steps lost their start", () => {
+    render(
+      <ActivityGroup
+        items={[completedRead, { ...longSleep, timestamp: null }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    // The known start (00:00:00.000) and the known end (00:00:45.054) come
+    // from different steps, which is still a real lower bound on the group.
+    expect(screen.getByText("2 steps · 46s")).toBeInTheDocument();
   });
 });
 
@@ -300,9 +347,14 @@ describe("duration formatting", () => {
 
   it("never names a duration shorter than the time that passed", () => {
     const understated: number[] = [];
+    const overstated: number[] = [];
     for (let ms = 1_000; ms < 4_000_000; ms += 997) {
-      if (labelSeconds(formatDuration(ms)) * 1_000 < ms) understated.push(ms);
+      const named = labelSeconds(formatDuration(ms)) * 1_000;
+      if (named < ms) understated.push(ms);
+      // Bounded from above as well: without this, ceil-plus-a-minute passes.
+      if (named >= ms + 1_000) overstated.push(ms);
     }
     expect(understated).toEqual([]);
+    expect(overstated).toEqual([]);
   });
 });

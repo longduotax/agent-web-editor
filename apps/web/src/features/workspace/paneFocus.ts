@@ -34,13 +34,30 @@ export function releaseFocusToPane(from: HTMLElement): HTMLElement | null {
 }
 
 /**
- * True for the keydown that should release the composer: a bare Escape, and
- * not the Escape that cancels an IME candidate window (which the input method
- * owns and must keep).
+ * True for the keydown that should release the composer: a BARE Escape.
+ *
+ * Modified Escapes are left alone on purpose. They are not this app's to
+ * claim — the OS and the browser bind their own (macOS uses ⌘Esc, and a
+ * modified Escape is a plausible future chord) — and "Esc to leave the
+ * composer" is what the hint and the Settings row promise, not "any Escape".
+ *
+ * `isComposing` excludes the Escape that dismisses an IME candidate window,
+ * which belongs to the input method and must keep it.
  */
 export function isReleaseKey(event: {
   key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
   nativeEvent: { isComposing: boolean };
 }): boolean {
-  return event.key === "Escape" && !event.nativeEvent.isComposing;
+  return (
+    event.key === "Escape" &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.nativeEvent.isComposing
+  );
 }

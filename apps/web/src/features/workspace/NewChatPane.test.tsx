@@ -58,6 +58,7 @@ function renderNewChat() {
     changes: null,
   });
   const onThreadStarted = vi.fn();
+  const onFocus = vi.fn();
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -68,7 +69,7 @@ function renderNewChat() {
           projectId={projectId}
           paneId={paneId}
           focused
-          onFocus={vi.fn()}
+          onFocus={onFocus}
           onClose={vi.fn()}
           onSplit={vi.fn()}
           onThreadStarted={onThreadStarted}
@@ -76,7 +77,7 @@ function renderNewChat() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onThreadStarted };
+  return { onThreadStarted, onFocus };
 }
 
 // F7. Starting the first thread creates a git worktree, measured at 1.6-2.6s.
@@ -244,6 +245,23 @@ describe("NewChatPane's starter block", () => {
     expect(api.startThread).not.toHaveBeenCalled();
   });
 
+  // S3. The click used to call stopPropagation(), which cancelled the pane
+  // shell's onClick -- this component's ONLY onFocus() call site. The pane you
+  // were typing into was then not the pane the workspace considered focused:
+  // it rendered `dim`, the panel followed a different pane, and Escape then
+  // split acted on that other pane. F9 defeated by F8.
+  it("focuses its own pane when a starter prompt is clicked", async () => {
+    const user = userEvent.setup();
+    const { onFocus } = renderNewChat();
+    await screen.findByRole("textbox", { name: "First message" });
+
+    await user.click(
+      screen.getByRole("button", { name: /^Run the test suite/ }),
+    );
+
+    expect(onFocus).toHaveBeenCalled();
+  });
+
   // The third example names the project's real base branch, so it reads as a
   // thing to ask about THIS repository rather than a placeholder.
   it("names the real base branch in the history example", async () => {
@@ -333,5 +351,22 @@ describe("NewChatPane's composer on Escape", () => {
     expect(readDraft(newChatDraftKey(projectId, paneId))).toBe(
       "draft line one\ndraft line two",
     );
+  });
+
+  // Only a BARE Escape. A modified Escape is not this app's to claim, and the
+  // hint and the Settings row both promise "Esc", not "any Escape".
+  it("ignores a modified Escape", async () => {
+    const user = userEvent.setup();
+    renderNewChat();
+
+    const composer = await screen.findByRole("textbox", {
+      name: "First message",
+    });
+    await user.click(composer);
+
+    for (const chord of ["{Shift>}{Escape}{/Shift}", "{Alt>}{Escape}{/Alt}"])
+      await user.keyboard(chord);
+
+    expect(composer).toHaveFocus();
   });
 });

@@ -18,7 +18,7 @@ import { parseConfig } from "../apps/server/src/config.js";
 //
 // The other two e2e specs stub a runtime that always returns an EMPTY
 // transcript, which is why the reading column's containment was never
-// exercised end to end: expanding a "Worked for Ns" step group used to size
+// exercised end to end: expanding an "N steps · Ns" group used to size
 // `.worked-items`' implicit grid track to its widest step's max-content, and
 // one long shell command stretched `.transcript` to a 14,641px scrollWidth
 // against a 1,042px clientWidth. The centered column silently died the
@@ -213,7 +213,7 @@ declare const document: {
 };
 
 // Opens every currently-rendered <details> and reports how many it opened.
-// A step row only enters the DOM once its enclosing "Worked for Ns" group has
+// A step row only enters the DOM once its enclosing "N steps · Ns" group has
 // opened and React has re-rendered, so the caller runs this repeatedly until
 // it reports 0.
 function openRenderedDisclosures(): number {
@@ -315,7 +315,7 @@ test("expanding every transcript disclosure never widens the centered reading co
 
   // The stub's snapshot supplies the transcript, so the step group appears as
   // soon as the pane's snapshot query resolves.
-  const group = page.getByText(/^Worked for /);
+  const group = page.getByText(/^\d+ steps? · /);
   await expect(group.first()).toBeVisible();
 
   // Collapsed: the column already holds.
@@ -366,7 +366,7 @@ test.describe("a pane narrower than the reading measure", () => {
     page,
   }) => {
     await openWideThread(page);
-    await expect(page.getByText(/^Worked for /).first()).toBeVisible();
+    await expect(page.getByText(/^\d+ steps? · /).first()).toBeVisible();
 
     // As the machine renders it.
     const natural = await page.evaluate(axisProbe);

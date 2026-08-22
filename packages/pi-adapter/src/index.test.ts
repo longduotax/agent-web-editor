@@ -869,10 +869,10 @@ describe("PiAgentRuntime session open boundary", () => {
         input: "false",
         output: "failed",
         exitCode: 1,
-        // A bashExecution is one entry with one instant: it stands for both
-        // ends rather than being inflated into a duration.
+        // A bashExecution is one entry with one instant and no start, so its
+        // span stays unknown rather than being flattened to zero.
         timestamp: "2026-01-01T00:00:03.000Z",
-        completedAt: "2026-01-01T00:00:03.000Z",
+        completedAt: null,
       },
     ]);
     expect(snapshot.diagnostics).toEqual([
@@ -953,6 +953,148 @@ describe("PiAgentRuntime session open boundary", () => {
       {
         status: "running",
         timestamp: "2026-01-01T00:00:46.000Z",
+        completedAt: null,
+      },
+    ]);
+  });
+
+  // S1: three histories where a result outlives the call that made it. Each
+  // must yield `timestamp: null` -- "I don't know when this began" -- because
+  // borrowing the end time instead produces a step that claims to have taken
+  // no time, which is N1's defect re-created inside N1's fix.
+  it.each([
+    [
+      "a compaction summarised the issuing entry away",
+      [
+        {
+          id: "compacted",
+          type: "compaction",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          summary: "Earlier turns.",
+        },
+      ],
+    ],
+    ["a branch or resume began after the call", []],
+  ])("reports an unknown start when %s", async (_name, prefix) => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        ...prefix,
+        {
+          id: "orphan-result",
+          type: "message",
+          timestamp: "2026-01-01T00:04:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-gone",
+            toolName: "bash",
+            content: [{ type: "text", text: "done\n" }],
+            isError: false,
+            details: { exitCode: 0 },
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    expect(snapshot.transcript.filter((i) => i.kind === "tool")).toMatchObject([
+      {
+        status: "completed",
+        timestamp: null,
+        completedAt: "2026-01-01T00:04:00.000Z",
+      },
+    ]);
+  });
+
+  it("reports an unknown start when a duplicate toolCallId discards it", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "assistant",
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "dupe", name: "bash", arguments: {} },
+              { type: "toolCall", id: "dupe", name: "bash", arguments: {} },
+            ],
+          },
+        },
+        {
+          id: "dupe-result",
+          type: "message",
+          timestamp: "2026-01-01T00:04:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "dupe",
+            toolName: "bash",
+            content: [],
+            isError: false,
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    const result = snapshot.transcript.filter((i) => i.kind === "tool").at(-1);
+    expect(result).toMatchObject({
+      status: "completed",
+      timestamp: null,
+      completedAt: "2026-01-01T00:04:00.000Z",
+    });
+  });
+
+  // S2: a bashExecution entry is one record with one instant and no start, so
+  // its span is unknown rather than zero -- a five-minute command must not
+  // report itself as instantaneous.
+  it("leaves a bash execution's span unknown rather than zero-width", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "bash",
+          type: "message",
+          timestamp: "2026-01-01T00:05:00.000Z",
+          message: {
+            role: "bashExecution",
+            command: "sleep 300",
+            output: "",
+            exitCode: 0,
+            cancelled: false,
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    expect(snapshot.transcript).toMatchObject([
+      {
+        kind: "tool",
+        name: "bash",
+        timestamp: "2026-01-01T00:05:00.000Z",
         completedAt: null,
       },
     ]);

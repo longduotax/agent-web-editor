@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -506,10 +507,30 @@ describe("WorkspaceView", () => {
       ).toBeInTheDocument();
     });
 
-    // With nothing left open the URL is the only record of where the user
-    // was. It is deliberately kept: the empty surface offers its own way
-    // back in, and NEW-R3-3's sidebar-relink behaviour depends on the route
-    // still naming that thread.
+    // S4. `/new` names nothing -- it is an instruction to open an empty
+    // composer. Left in place after the last pane closes, a reload re-issues
+    // the instruction the user just countermanded, which is N2 verbatim on
+    // the very route N2 was filed against.
+    it("leaves /new for the project route when the last pane closed was the new-chat pane", async () => {
+      renderWorkspace(`/projects/${projectId}/new`);
+      await screen.findByRole("region", { name: "New chat" });
+
+      fireEvent.click(closeButtonFor("New chat"));
+
+      expect(screen.getByText("No panes are open.")).toBeInTheDocument();
+      // Exact, not toHaveTextContent: "/projects/<id>/new" CONTAINS
+      // "/projects/<id>", so a substring assertion here would pass against
+      // the unfixed code.
+      await waitFor(() => {
+        expect(screen.getByTestId("location").textContent).toBe(
+          `/projects/${projectId}`,
+        );
+      });
+    });
+
+    // A thread route DOES name something: it is what a bookmark carries, and
+    // NEW-R3-3's sidebar-relink behaviour depends on the route still naming
+    // that thread after the surface empties. It is deliberately kept.
     it("keeps the route when the last pane is closed", async () => {
       renderWorkspace(`/projects/${projectId}/threads/${threadId}`);
       await screen.findByRole("region", { name: "Example thread" });
@@ -521,6 +542,37 @@ describe("WorkspaceView", () => {
         `/projects/${projectId}/threads/${threadId}`,
       );
     });
+  });
+
+  // Reachable only once a surface can be EMPTY when a thread route mounts,
+  // which is what closing the last pane and letting the route re-resolve
+  // produces. Without a guard, StrictMode's mount -> cleanup -> mount runs
+  // openThread twice, the second invocation still reads the pre-update layout
+  // (newPane is a functional setState), and the surface ends up with the
+  // thread pane PLUS an orphan "New chat" pane beside it. Measured in the
+  // browser: two panes where one was expected.
+  it("opens exactly one pane for the routed thread on an empty surface, even under StrictMode", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}`, {
+      strict: true,
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 2,
+            root: null,
+            panes: {},
+            focusedPaneId: null,
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    expect(
+      await screen.findByRole("region", { name: "Example thread" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "New chat" })).toBeNull();
+    expect(document.querySelectorAll(".pane")).toHaveLength(1);
   });
 
   it("focuses/creates a pane for the thread named in the route on mount", async () => {
