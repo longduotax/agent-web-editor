@@ -181,6 +181,35 @@ function preferenceStorage(): PreferenceStorage | null {
     : null;
 }
 
+// How deeply a stored record may nest. The panel's tree costs two JSON
+// levels per split (the split object, then its `children` array), so this
+// allows about 48 nested splits — far more groups than a screen can show,
+// and far less than the stack can take.
+//
+// The bound exists because depth is the one malformation that is not a parse
+// *failure*: the v2 schema is recursive, so a deep enough tree overflows the
+// stack inside `safeParse` — and inside every recursive walk after it. That
+// RangeError is thrown, not returned, so it escaped to the outer handler,
+// which is the one path that did not quarantine the record. The panel then
+// reset on every reload, forever, with no way for the user to recover.
+const MAX_RECORD_DEPTH = 100;
+
+// Iterative on purpose: a recursive depth check would overflow on exactly
+// the records it exists to reject.
+function exceedsDepth(value: unknown, limit: number): boolean {
+  const pending: { node: unknown; depth: number }[] = [
+    { node: value, depth: 0 },
+  ];
+  for (let entry = pending.pop(); entry !== undefined; entry = pending.pop()) {
+    const { node, depth } = entry;
+    if (typeof node !== "object" || node === null) continue;
+    if (depth >= limit) return true;
+    for (const child of Object.values(node))
+      pending.push({ node: child, depth: depth + 1 });
+  }
+  return false;
+}
+
 function readJson(storage: PreferenceStorage | null, key: string): unknown {
   const stored = storage?.getItem(key);
   if (stored === null || stored === undefined) return undefined;
@@ -188,12 +217,18 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
     storage?.removeItem(key);
     return undefined;
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(stored);
+    parsed = JSON.parse(stored);
   } catch {
     storage?.removeItem(key);
     return undefined;
   }
+  if (exceedsDepth(parsed, MAX_RECORD_DEPTH)) {
+    storage?.removeItem(key);
+    return undefined;
+  }
+  return parsed;
 }
 
 // A terminal tab always comes back detached. The process belongs to the
@@ -288,9 +323,24 @@ export function readPanelState(
     const migrated = migrateFromInspector(storage, makeId);
     if (migrated !== null) return migrated;
   } catch {
-    // The panel is best-effort when browser storage is unavailable.
+    // The panel is best-effort when browser storage is unavailable — but a
+    // record that made the read throw is a record that will make the next
+    // read throw too, so it is quarantined like any other one we refused to
+    // trust rather than left to reset the panel on every reload.
+    discardPanelRecord();
   }
   return defaultPanelState(makeId);
+}
+
+// Removing the key is itself a storage call, so it can throw for exactly the
+// reason we are already here (storage denied); a failure to quarantine must
+// not become a failure to return a panel.
+function discardPanelRecord(): void {
+  try {
+    preferenceStorage()?.removeItem(PANEL_STORAGE_KEY);
+  } catch {
+    // Nothing left to try: the in-memory default panel is still usable.
+  }
 }
 
 export function writePanelState(state: PanelState): void {

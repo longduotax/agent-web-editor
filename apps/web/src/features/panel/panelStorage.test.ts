@@ -297,6 +297,52 @@ describe("readPanelState", () => {
     expect(a + b).toBeCloseTo(1, 10);
   });
 
+  // A tree deep enough to overflow the stack is not a parse failure: the
+  // RangeError escapes zod (whose schema is recursive) and every recursive
+  // walk after it, and it used to be caught by the outer handler -- the one
+  // path that skipped `removeItem`. The panel then reset on every reload,
+  // forever, with no way for the user to recover. `data-boundaries.md`
+  // requires a corrupt record to be quarantined, not re-parsed on each read.
+  // Assembled as text rather than as objects, because a depth that overflows
+  // the reader's stack would overflow JSON.stringify's on the way in.
+  function deepPanelJson(depth: number): string {
+    const group = (id: string): string =>
+      `"${id}":{"id":"${id}","tabIds":["t-${id}"],"activeTabId":"t-${id}"}`;
+    const tab = (id: string): string =>
+      `"t-${id}":{"id":"t-${id}","type":"changes","context":null}`;
+    let node = '{"type":"group","id":"g0"}';
+    const groups = [group("g0")];
+    const tabs = [tab("g0")];
+    for (let level = 0; level < depth; level += 1) {
+      const id = `g${String(level + 1)}`;
+      node = `{"type":"split","id":"s${String(level)}","axis":"row","sizes":[0.5,0.5],"children":[${node},{"type":"group","id":"${id}"}]}`;
+      groups.push(group(id));
+      tabs.push(tab(id));
+    }
+    return `{"version":${String(PANEL_STATE_VERSION)},"root":${node},"groups":{${groups.join(",")}},"tabs":{${tabs.join(",")}},"focusedGroupId":"g0","width":400,"open":true}`;
+  }
+
+  it.each([50, 500, 2000, 10_000])(
+    "quarantines a %p-deep tree instead of re-parsing it on every read",
+    (depth) => {
+      const { store, removed } = stubStorage({
+        [PANEL_STORAGE_KEY]: deepPanelJson(depth),
+      });
+
+      expectDefaultPanel(readPanelState(ids()));
+
+      expect(removed).toContain(PANEL_STORAGE_KEY);
+      expect(store.has(PANEL_STORAGE_KEY)).toBe(false);
+    },
+  );
+
+  it("still accepts a tree deep enough for any real panel", () => {
+    stubStorage({ [PANEL_STORAGE_KEY]: deepPanelJson(8) });
+    const state = readPanelState(ids());
+    expect(panelStateProblems(state)).toEqual([]);
+    expect(Object.keys(state.groups)).toHaveLength(9);
+  });
+
   it("discards a record whose group activates a tab it does not hold", () => {
     const { removed } = stubStorage({
       [PANEL_STORAGE_KEY]: JSON.stringify({
