@@ -189,6 +189,14 @@ describe("binaryTree", () => {
       expect(setSplitSizes(tree, "s0", [0.2, 0.8])).toBe(tree);
     });
 
+    it("returns the identical tree when the sizes are the ones it has", () => {
+      const tree = split("s0", "row", [pane("a"), pane("b")], [0.3, 0.7]);
+      // A divider dragged back to where it started must not invalidate the
+      // tree: every tile is memoised on its node.
+      expect(setSplitSizes(tree, "s0", [0.3, 0.7])).toBe(tree);
+      expect(setSplitSizes(tree, "s0", [3, 7])).toBe(tree);
+    });
+
     it("normalizes the sizes it stores", () => {
       const tree = split("s0", "row", [pane("a"), pane("b")]);
       const next = setSplitSizes(tree, "s0", [0.001, 0.2]);

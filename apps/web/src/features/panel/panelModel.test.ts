@@ -201,6 +201,15 @@ describe("openTab", () => {
     expect(state.open).toBe(true);
   });
 
+  it("is the identity when the revealed tab is already the active one", () => {
+    const make = ids();
+    let state = createEmptyPanel(make);
+    state = openTab(state, fileTab("a.ts"), make);
+    state = openTab(state, fileTab("b.ts"), make);
+
+    expect(openTab(state, fileTab("b.ts"), make)).toBe(state);
+  });
+
   it("opens a second terminal rather than revealing the first", () => {
     const make = ids();
     let state = createEmptyPanel(make);
@@ -344,7 +353,7 @@ describe("closeTab", () => {
 
   it("ignores an unknown tab id", () => {
     const { state } = twoGroups();
-    expect(closeTab(state, "nope")).toEqual(state);
+    expect(closeTab(state, "nope")).toBe(state);
   });
 });
 
@@ -362,7 +371,26 @@ describe("activateTab", () => {
 
   it("ignores an unknown tab id", () => {
     const { state } = twoGroups();
-    expect(activateTab(state, "nope")).toEqual(state);
+    expect(activateTab(state, "nope")).toBe(state);
+  });
+
+  it("is the identity when the tab is already active in the focused group", () => {
+    const { state, groupB, tabC } = twoGroups();
+    expect(state.focusedGroupId).toBe(groupB);
+    expect(activeOf(state, groupB)).toBe(tabC);
+
+    expect(activateTab(state, tabC)).toBe(state);
+  });
+
+  it("still moves focus when the tab is active in an unfocused group", () => {
+    const { state, groupA, groupB, tabB } = twoGroups();
+    expect(activeOf(state, groupA)).toBe(tabB);
+    expect(state.focusedGroupId).toBe(groupB);
+
+    const next = activateTab(state, tabB);
+
+    expect(next).not.toBe(state);
+    expect(next.focusedGroupId).toBe(groupA);
   });
 });
 
@@ -382,7 +410,7 @@ describe("moveTab", () => {
     const { state, groupA, tabA } = twoGroups();
     const next = moveTab(state, tabA, groupA, 0);
     assertPanelInvariants(next);
-    expect(next).toEqual(state);
+    expect(next).toBe(state);
   });
 
   it("clamps an out-of-range index instead of dropping the tab", () => {
@@ -434,8 +462,8 @@ describe("moveTab", () => {
 
   it("ignores an unknown tab or group", () => {
     const { state, groupA, tabA } = twoGroups();
-    expect(moveTab(state, "nope", groupA, 0)).toEqual(state);
-    expect(moveTab(state, tabA, "nope", 0)).toEqual(state);
+    expect(moveTab(state, "nope", groupA, 0)).toBe(state);
+    expect(moveTab(state, tabA, "nope", 0)).toBe(state);
   });
 });
 
@@ -505,7 +533,7 @@ describe("splitGroupWithTab", () => {
   it("is a no-op when a single-tab group is split by its own only tab", () => {
     const { state, make, groupB, tabC } = twoGroups();
     const next = splitGroupWithTab(state, tabC, groupB, "right", make);
-    expect(next).toEqual(state);
+    expect(next).toBe(state);
   });
 
   it("splits a group with its own tab when the group has others", () => {
@@ -517,12 +545,8 @@ describe("splitGroupWithTab", () => {
 
   it("ignores an unknown tab or group", () => {
     const { state, make, groupA, tabA } = twoGroups();
-    expect(splitGroupWithTab(state, "nope", groupA, "right", make)).toEqual(
-      state,
-    );
-    expect(splitGroupWithTab(state, tabA, "nope", "right", make)).toEqual(
-      state,
-    );
+    expect(splitGroupWithTab(state, "nope", groupA, "right", make)).toBe(state);
+    expect(splitGroupWithTab(state, tabA, "nope", "right", make)).toBe(state);
   });
 });
 
@@ -554,7 +578,7 @@ describe("closeGroup", () => {
 
   it("ignores an unknown group", () => {
     const { state } = twoGroups();
-    expect(closeGroup(state, "nope")).toEqual(state);
+    expect(closeGroup(state, "nope")).toBe(state);
   });
 });
 
@@ -564,7 +588,13 @@ describe("focusGroup", () => {
     const next = focusGroup(state, groupA);
     assertPanelInvariants(next);
     expect(next.focusedGroupId).toBe(groupA);
-    expect(focusGroup(state, "nope")).toEqual(state);
+    expect(focusGroup(state, "nope")).toBe(state);
+  });
+
+  it("is the identity when the group is already focused", () => {
+    const { state, groupB } = twoGroups();
+    expect(state.focusedGroupId).toBe(groupB);
+    expect(focusGroup(state, groupB)).toBe(state);
   });
 });
 
@@ -582,11 +612,22 @@ describe("setGroupSizes", () => {
     expect(next.root.sizes[1]).toBeCloseTo(0.8, 5);
   });
 
+  it("is the identity when the split already has those sizes", () => {
+    const { state } = twoGroups();
+    if (state.root?.type !== "split") throw new Error("expected a split root");
+    const { id, sizes } = state.root;
+
+    expect(setGroupSizes(state, id, [...sizes])).toBe(state);
+    // A drag that lands on the same fractions after normalization is a
+    // no-op too: nothing about the panel differs afterwards.
+    expect(setGroupSizes(state, id, [sizes[0] * 4, sizes[1] * 4])).toBe(state);
+  });
+
   it("ignores an unknown split and a panel with no tree", () => {
     const { state } = twoGroups();
-    expect(setGroupSizes(state, "nope", [0.3, 0.7])).toEqual(state);
+    expect(setGroupSizes(state, "nope", [0.3, 0.7])).toBe(state);
     const empty = createEmptyPanel(ids());
-    expect(setGroupSizes(empty, "nope", [0.3, 0.7])).toEqual(empty);
+    expect(setGroupSizes(empty, "nope", [0.3, 0.7])).toBe(empty);
   });
 });
 
@@ -601,7 +642,7 @@ describe("setPanelWidth and setPanelOpen", () => {
   it("rounds a fractional width and ignores a nonsense one", () => {
     const state = createEmptyPanel(ids());
     expect(setPanelWidth(state, 420.6).width).toBe(421);
-    expect(setPanelWidth(state, Number.NaN)).toEqual(state);
+    expect(setPanelWidth(state, Number.NaN)).toBe(state);
   });
 
   it("toggles open without disturbing anything else", () => {
@@ -687,10 +728,41 @@ describe("updateTab", () => {
   it("ignores an unknown tab id and an empty patch", () => {
     const make = ids();
     const state = openTab(createEmptyPanel(make), fileTab("a.md"), make);
-    expect(updateTab(state, "nope", { view: "source" })).toEqual(state);
+    expect(updateTab(state, "nope", { view: "source" })).toBe(state);
     const tabId = tabIdsOf(state, onlyGroupId(state))[0];
     if (tabId === undefined) throw new Error("expected a tab");
-    expect(updateTab(state, tabId, {})).toEqual(state);
+    expect(updateTab(state, tabId, {})).toBe(state);
+  });
+
+  // The expensive no-op: rebuilding `state.tabs` invalidates the record
+  // every *other* tab's body is memoised against, so a terminal writing the
+  // cwd it already had would re-render every hidden tab in the panel —
+  // exactly what WSP-09 forbids.
+  it("is the identity when the patch changes nothing", () => {
+    const make = ids();
+    let state = openTab(createEmptyPanel(make), terminalTab("/repo"), make);
+    state = openTab(state, fileTab("a.md"), make);
+    const [terminalId, fileId] = tabIdsOf(state, onlyGroupId(state));
+    if (terminalId === undefined || fileId === undefined)
+      throw new Error("expected two tabs");
+
+    expect(updateTab(state, terminalId, { cwd: "/repo" })).toBe(state);
+    expect(updateTab(state, fileId, { view: "preview" })).toBe(state);
+    expect(updateTab(state, terminalId, { terminalId: null })).toBe(state);
+  });
+
+  it("keeps every other tab's identity when one tab does change", () => {
+    const make = ids();
+    let state = openTab(createEmptyPanel(make), terminalTab("/repo"), make);
+    state = openTab(state, fileTab("a.md"), make);
+    const [terminalId, fileId] = tabIdsOf(state, onlyGroupId(state));
+    if (terminalId === undefined || fileId === undefined)
+      throw new Error("expected two tabs");
+
+    const next = updateTab(state, terminalId, { cwd: "/repo/apps" });
+
+    expect(next).not.toBe(state);
+    expect(next.tabs[fileId]).toBe(state.tabs[fileId]);
   });
 });
 

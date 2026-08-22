@@ -214,8 +214,12 @@ export function openTab(
   const existing = Object.values(state.tabs).find((open) =>
     sameTarget(open, tab),
   );
-  if (existing !== undefined)
-    return { ...activateTab(state, existing.id), open: true };
+  if (existing !== undefined) {
+    const revealed = activateTab(state, existing.id);
+    // Already active, already focused, already visible: nothing to reveal.
+    if (revealed === state && state.open) return state;
+    return { ...revealed, open: true };
+  }
 
   const id = makeId();
   const created = withId(tab, id);
@@ -259,6 +263,8 @@ export function closeTab(state: PanelState, tabId: TabId): PanelState {
 export function activateTab(state: PanelState, tabId: TabId): PanelState {
   const group = groupOf(state, tabId);
   if (group === null) return state;
+  if (group.activeTabId === tabId && state.focusedGroupId === group.id)
+    return state;
   return {
     ...state,
     groups: { ...state.groups, [group.id]: { ...group, activeTabId: tabId } },
@@ -375,6 +381,7 @@ export function closeGroup(state: PanelState, groupId: GroupId): PanelState {
 
 export function focusGroup(state: PanelState, groupId: GroupId): PanelState {
   if (!(groupId in state.groups)) return state;
+  if (state.focusedGroupId === groupId) return state;
   return { ...state, focusedGroupId: groupId };
 }
 
@@ -410,39 +417,58 @@ export function updateTab(
   const tab = state.tabs[tabId];
   if (tab === undefined) return state;
   const next = patchTab(tab, patch);
+  // `state.tabs` is the record every tab body is memoised against, so
+  // rebuilding it for a patch that changed nothing would re-render every
+  // hidden tab in the panel — a terminal reporting the cwd it already had
+  // would cost the whole panel a render (WSP-09).
+  if (next === tab) return state;
   return { ...state, tabs: { ...state.tabs, [tabId]: next } };
 }
 
-// `terminalId` is applied with an explicit `undefined` check because null is
-// a meaningful value for it: a terminal whose process has gone is detached
-// by patching it back to null.
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, at) => value === b[at]);
+}
+
+// Returns the tab itself, by reference, when the patch asks for what the tab
+// already has: see updateTab. `terminalId` is applied with an explicit
+// `undefined` check because null is a meaningful value for it — a terminal
+// whose process has gone is detached by patching it back to null.
 function patchTab(tab: PanelTab, patch: TabPatch): PanelTab {
   switch (tab.type) {
     case "changes":
       return tab; // a Changes tab has no state of its own to patch
-    case "files":
-      return { ...tab, search: patch.search ?? tab.search };
-    case "file":
-      return { ...tab, view: patch.view ?? tab.view };
-    case "diff":
-      return {
-        ...tab,
-        collapsedHunks: patch.collapsedHunks ?? tab.collapsedHunks,
-      };
-    case "terminal":
-      return {
-        ...tab,
-        cwd: patch.cwd ?? tab.cwd,
-        terminalId:
-          patch.terminalId === undefined ? tab.terminalId : patch.terminalId,
-      };
-    case "browser":
-      return {
-        ...tab,
-        url: patch.url ?? tab.url,
-        history: patch.history ?? tab.history,
-        historyIndex: patch.historyIndex ?? tab.historyIndex,
-      };
+    case "files": {
+      const search = patch.search ?? tab.search;
+      return search === tab.search ? tab : { ...tab, search };
+    }
+    case "file": {
+      const view = patch.view ?? tab.view;
+      return view === tab.view ? tab : { ...tab, view };
+    }
+    case "diff": {
+      const collapsedHunks = patch.collapsedHunks ?? tab.collapsedHunks;
+      return sameList(collapsedHunks, tab.collapsedHunks)
+        ? tab
+        : { ...tab, collapsedHunks };
+    }
+    case "terminal": {
+      const cwd = patch.cwd ?? tab.cwd;
+      const terminalId =
+        patch.terminalId === undefined ? tab.terminalId : patch.terminalId;
+      return cwd === tab.cwd && terminalId === tab.terminalId
+        ? tab
+        : { ...tab, cwd, terminalId };
+    }
+    case "browser": {
+      const url = patch.url ?? tab.url;
+      const history = patch.history ?? tab.history;
+      const historyIndex = patch.historyIndex ?? tab.historyIndex;
+      return url === tab.url &&
+        historyIndex === tab.historyIndex &&
+        sameList(history, tab.history)
+        ? tab
+        : { ...tab, url, history, historyIndex };
+    }
   }
 }
 

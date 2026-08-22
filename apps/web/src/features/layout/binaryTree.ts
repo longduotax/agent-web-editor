@@ -130,14 +130,20 @@ export function containsLeaf<Tag extends string, Id>(
 
 // Sets the sizes of the split identified by `splitId`, wherever it sits in
 // the tree, normalizing them first. Returns the identical tree when the
-// split is not found, so callers can detect a miss by reference.
+// split is not found — and when the normalized sizes are the ones it
+// already has — so callers can detect a miss, or a drag that ended where it
+// started, by reference.
 export function setSplitSizes<Tag extends string, Id>(
   node: TreeNode<Tag, Id>,
   splitId: string,
   sizes: [number, number],
 ): TreeNode<Tag, Id> {
   if (!isSplit(node)) return node;
-  if (node.id === splitId) return { ...node, sizes: normalizeSizes(sizes) };
+  if (node.id === splitId) {
+    const next = normalizeSizes(sizes);
+    if (next[0] === node.sizes[0] && next[1] === node.sizes[1]) return node;
+    return { ...node, sizes: next };
+  }
   const [a, b] = node.children;
   const na = setSplitSizes(a, splitId, sizes);
   const nb = setSplitSizes(b, splitId, sizes);
