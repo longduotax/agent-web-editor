@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { promisify } from "node:util";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
@@ -93,6 +95,28 @@ async function availablePort(): Promise<number> {
   });
 }
 
+const exec = promisify(execFile);
+
+/**
+ * Git inside the fixture project, and nowhere else.
+ *
+ * The global and system configurations are cut out so a developer's own
+ * settings — a signing key, a template directory, an alias — cannot decide
+ * whether this suite passes. The identity is supplied per commit for the
+ * same reason.
+ */
+async function git(args: string[]): Promise<void> {
+  await exec("git", args, {
+    cwd: projectPath,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
+}
+
 let server: WorkspaceServer;
 let root: string;
 let projectPath: string;
@@ -149,15 +173,6 @@ test.beforeAll(async () => {
   // project README beside two hundred dependency copies of the same name,
   // with an ignore rule that says which is which.
   await writeFile(join(projectPath, ".gitignore"), "node_modules\n", "utf8");
-  // Not a working repository — nothing here reads Git — but a real `.git`
-  // directory, so "`.git` is excluded in both modes" is a claim this suite
-  // can actually falsify.
-  await mkdir(join(projectPath, ".git"));
-  await writeFile(
-    join(projectPath, ".git", "HEAD"),
-    "ref: refs/heads/main\n",
-    "utf8",
-  );
   await writeFile(
     join(projectPath, "README.md"),
     "# The project's own README\n",
@@ -230,6 +245,96 @@ test.beforeAll(async () => {
       "utf8",
     );
   }
+  // The diff fixtures, and the repository they need. Milestone 6 is about
+  // reading real `git diff` output, so this project is a real working tree:
+  // a fabricated `.git` directory would exercise the parser against a string
+  // this suite wrote itself, which is the one thing a unit test already does
+  // better. It is a temporary directory, created and removed by this file,
+  // and no command here touches any repository of the user's.
+  await writeFile(
+    join(projectPath, "diff-target.txt"),
+    `${Array.from({ length: 40 }, (_, index) => `line ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond\nthird\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "wide-diff.json"),
+    '[\n  {"note":"short"}\n]\n',
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "long-diff.txt"),
+    `${Array.from({ length: 400 }, (_, index) => `original ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  await git(["init", "-q", "-b", "main"]);
+  await git(["add", "-A"]);
+  await git([
+    "-c",
+    "user.name=Workspace panel e2e",
+    "-c",
+    "user.email=e2e@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--no-verify",
+    "-m",
+    "fixture",
+  ]);
+  // Two edits far enough apart that Git writes two hunks, which is what a
+  // per-hunk disclosure needs to be a claim about anything.
+  await writeFile(
+    join(projectPath, "diff-target.txt"),
+    `${Array.from({ length: 40 }, (_, index) =>
+      index === 1
+        ? "line 2 CHANGED"
+        : index === 29
+          ? "line 30 CHANGED"
+          : `line ${String(index + 1)}`,
+    ).join("\n")}\n`,
+    "utf8",
+  );
+  // A staged change, so the tab has both of its labelled sections.
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond STAGED\nthird\n",
+    "utf8",
+  );
+  await git(["add", "staged-target.txt"]);
+  // ...and then edited again, so the same file has a staged change AND an
+  // unstaged one and the tab has to label both.
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond STAGED\nthird UNSTAGED\n",
+    "utf8",
+  );
+  // One diff line far wider than the panel, which is the shape F2 was about.
+  await writeFile(
+    join(projectPath, "wide-diff.json"),
+    `[\n  {"note":"${"reachable-only-by-horizontal-scrolling-".repeat(24)}"}\n]\n`,
+    "utf8",
+  );
+  // A diff taller than the panel, so "the header stays put while the body
+  // scrolls" is a claim about something that scrolls. 400 changed lines is
+  // 800 diff lines, inside the render budget on purpose: this case is about
+  // the geometry and not about the bound.
+  await writeFile(
+    join(projectPath, "long-diff.txt"),
+    `${Array.from({ length: 400 }, (_, index) => `rewritten ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  // A file Git does not track at all, which the read boundary answers with a
+  // `/dev/null`-style preview: all additions, and no old side.
+  await writeFile(
+    join(projectPath, "untracked-note.txt"),
+    "brand new\nsecond line\n",
+    "utf8",
+  );
   const port = await availablePort();
   const config = parseConfig({
     argv: ["--port", String(port)],
@@ -862,7 +967,10 @@ test("panel files search: the project's own README, not two hundred dependency c
   // Exactly one match, and it is the project's own. Before the ignore rules
   // this search returned two hundred rows, every one of them under
   // `node_modules`, and the project's README was on none of them.
-  const matches = page.locator(".file-list li");
+  // Scoped to the tab that is showing: the Changes tab uses the same
+  // `.file-list` markup and is still mounted behind this one (WSP-09 keeps
+  // a hidden body alive), so an unscoped selector counts its rows too.
+  const matches = page.locator('[role="tabpanel"]:not([hidden]) .file-list li');
   await expect(matches).toHaveCount(1);
   await expect(
     matches.getByRole("button", { name: "README.md" }),
@@ -1304,9 +1412,10 @@ test("panel file tab: a one-line bundle is bounded by characters and says what i
   await openProjectWithThread(page);
   await openPanelTab(page, "Files");
   await clickTreeRow(page, "bundle.min.js");
-  await expect(
-    page.getByRole("button", { name: "Copy contents" }),
-  ).toBeVisible();
+  // The read itself, not the header that appears while it is in flight: the
+  // notice below is the first thing that exists only once the content has
+  // arrived, and measuring the `pre` before then measures nothing.
+  await expect(page.getByText(/Only its first 2 MiB were read/)).toBeVisible();
 
   const painted = await page.evaluate(() => {
     const pre = document.querySelector(
@@ -2662,4 +2771,282 @@ test("panel drag: a dragged terminal keeps its shell and its scrollback", async 
     "dragged-marker-6620",
   );
   expect(await attachFrameCount(page)).toBe(attachesBefore);
+});
+
+// Milestone 6: the Diff tab (WSP-06, acceptance 6).
+//
+// End to end because every claim below is one jsdom cannot settle: a number
+// drawn as generated content, what a selection of the diff actually
+// contains, whether a header stays put while a body scrolls, and where a
+// long line's scrollbar ends up. The working tree is a real repository and
+// the diffs are real `git diff` output, for the same reason milestone 4's
+// tree was driven against real files.
+
+/** The Changes row for one path, whose name now carries the kind as a word. */
+function changeRow(page: Page, path: string) {
+  return page.getByRole("button", { name: new RegExp(`${path}$`) });
+}
+
+/**
+ * Every painted diff line: its two gutters as the browser draws them, and
+ * the text of the line itself.
+ *
+ * The numbers are `::before` content generated from `data-old` and
+ * `data-new`, which is exactly why a selection cannot reach them — and that
+ * is a claim only a real browser can settle, because jsdom renders no
+ * pseudo-elements.
+ */
+function diffLineNumbers() {
+  const unquote = (value: string) =>
+    value === "none" ? "" : value.replace(/^"|"$/g, "");
+  return [
+    ...document.querySelectorAll(
+      '[role="tabpanel"]:not([hidden]) .diff-lines .diff-line',
+    ),
+  ].map((line) => {
+    const body = line.querySelector(".diff-line-body");
+    return {
+      old: unquote(getComputedStyle(line, "::before").content),
+      new:
+        body === null
+          ? ""
+          : unquote(getComputedStyle(body, "::before").content),
+      text: (body?.textContent ?? "").replace(/\n$/, ""),
+    };
+  });
+}
+
+/** What a copy of the visible diff would carry. */
+function diffSelection() {
+  const lines = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-lines',
+  );
+  const selection = window.getSelection();
+  if (lines === null || selection === null) return null;
+  const range = document.createRange();
+  range.selectNodeContents(lines);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const selected = selection.toString();
+  selection.removeAllRanges();
+  return { selected, text: lines.textContent ?? "" };
+}
+
+/** The pinned header, the box that scrolls, and the tab body around them. */
+function diffGeometry() {
+  const body = document.querySelector('[role="tabpanel"]:not([hidden])');
+  const header = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-view > header',
+  );
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (body === null || header === null || scroller === null) return null;
+  const bodyRect = body.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  return {
+    headerY: header.getBoundingClientRect().y,
+    scrollTop: scroller.scrollTop,
+    overflowY: scroller.scrollHeight - scroller.clientHeight,
+    overflowX: scroller.scrollWidth - scroller.clientWidth,
+    scrollerBottom: scrollerRect.y + scrollerRect.height,
+    viewBottom: bodyRect.y + bodyRect.height,
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    bodyOverflowY: body.scrollHeight - body.clientHeight,
+  };
+}
+
+/** Scrolls the diff's one scrolling box, and reports where it got to. */
+function scrollDiffBody(by: number) {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (scroller === null) return -1;
+  scroller.scrollTop = by;
+  return scroller.scrollTop;
+}
+
+test("panel diff: two hunks, two gutters, and a collapse that survives a reload", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "diff-target.txt").click();
+  await expect(
+    page.getByRole("tab", { name: "diff-target.txt" }),
+  ).toBeVisible();
+
+  // Two edits thirty lines apart are two hunks, each under its own header.
+  const hunks = page.getByRole("button", { name: /^@@/ });
+  await expect(hunks).toHaveCount(2);
+  await expect(page.getByText("2 added")).toBeVisible();
+  await expect(page.getByText("2 deleted")).toBeVisible();
+  await expect(page.getByText("Unstaged")).toBeVisible();
+
+  // The arithmetic, drawn: a context line advances both sides, a removed
+  // line only the old, an added line only the new — so the two gutters stop
+  // agreeing at the change and never agree again inside the hunk.
+  const numbers = await page.evaluate(diffLineNumbers);
+  expect(numbers.slice(0, 4)).toEqual([
+    { old: "1", new: "1", text: " line 1" },
+    { old: "2", new: "", text: "-line 2" },
+    { old: "", new: "2", text: "+line 2 CHANGED" },
+    { old: "3", new: "3", text: " line 3" },
+  ]);
+  // The second hunk starts where Git says it does, not where the first one
+  // left off.
+  const second = numbers.findIndex((line) => line.text === "-line 30");
+  expect(second).toBeGreaterThan(0);
+  expect(numbers[second]).toEqual({ old: "30", new: "", text: "-line 30" });
+  expect(numbers[second + 1]).toEqual({
+    old: "",
+    new: "30",
+    text: "+line 30 CHANGED",
+  });
+
+  // Collapsing is state the TAB owns (WSP-04), which is what carries it
+  // through a reload.
+  await hunks.first().click();
+  await expect(hunks.first()).toHaveAttribute("aria-expanded", "false");
+  // Hidden rather than unmounted, so collapsing costs no layout and
+  // expanding re-does no work (WSP-09).
+  await expect(page.getByText("-line 2", { exact: true })).toBeHidden();
+  await expect(page.getByText("-line 30", { exact: true })).toBeVisible();
+
+  await page.reload();
+
+  const restored = page.getByRole("button", { name: /^@@/ });
+  await expect(restored.first()).toHaveAttribute("aria-expanded", "false");
+  await expect(restored.nth(1)).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("-line 2", { exact: true })).toBeHidden();
+  await expect(page.getByText("-line 30", { exact: true })).toBeVisible();
+
+  // And it opens again from where it was left.
+  await restored.first().click();
+  await expect(page.getByText("-line 2", { exact: true })).toBeVisible();
+});
+
+test("panel diff: a copied selection is the diff, with no line numbers in it", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "diff-target.txt").click();
+  await expect(page.getByText("+line 2 CHANGED")).toBeVisible();
+
+  const copied = await page.evaluate(diffSelection);
+  expect(copied).not.toBeNull();
+  if (copied === null) return;
+  // The requirement that rules out rendering a number as a text node: the
+  // first line of a copy is the diff's first line, not "1 1  line 1".
+  expect(copied.selected.split("\n")[0]).toBe(" line 1");
+  expect(copied.selected).toContain("+line 2 CHANGED");
+  expect(copied.text).toBe(copied.selected);
+  // Nothing in the copy carries a gutter: no line begins with a digit,
+  // because every diff line begins with a space, a plus or a minus.
+  expect(
+    copied.selected.split("\n").filter((line) => /^\d/.test(line)),
+  ).toEqual([]);
+});
+
+test("panel diff: the staged and the unstaged change are labelled separately", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "staged-target.txt").click();
+
+  await expect(page.getByText("Staged", { exact: true })).toBeVisible();
+  await expect(page.getByText("Unstaged", { exact: true })).toBeVisible();
+  await expect(page.getByText("+second STAGED")).toBeVisible();
+  await expect(page.getByText("+third UNSTAGED")).toBeVisible();
+  // Read-only: nothing here stages, unstages, reverts or commits (an
+  // explicit product non-goal). The regex is anchored, because the tab
+  // itself is called `staged-target.txt`.
+  await expect(
+    page.getByRole("button", {
+      name: /^(stage|unstage|revert|discard|commit|apply)\b/i,
+    }),
+  ).toHaveCount(0);
+});
+
+test("panel diff: an untracked file is all additions, with no old side", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "untracked-note.txt").click();
+  await expect(page.getByText("+brand new")).toBeVisible();
+
+  await expect(page.getByText("new file mode 100644")).toBeVisible();
+  const numbers = await page.evaluate(diffLineNumbers);
+  expect(numbers).toEqual([
+    { old: "", new: "1", text: "+brand new" },
+    { old: "", new: "2", text: "+second line" },
+  ]);
+  await expect(page.getByText("2 added")).toBeVisible();
+  await expect(page.getByText("0 deleted")).toBeVisible();
+});
+
+test("panel diff: the header stays put while the body scrolls", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "long-diff.txt").click();
+  await expect(page.getByText("-original 1", { exact: true })).toBeVisible();
+
+  const before = await page.evaluate(diffGeometry);
+  expect(before).not.toBeNull();
+  if (before === null) return;
+  // There is genuinely something to scroll.
+  expect(before.overflowY).toBeGreaterThan(0);
+
+  const reached = await page.evaluate(scrollDiffBody, 400);
+  expect(reached).toBeGreaterThan(0);
+
+  const after = await page.evaluate(diffGeometry);
+  expect(after).not.toBeNull();
+  if (after === null) return;
+  // The header did not move, and the scrolling box did.
+  expect(after.headerY).toBe(before.headerY);
+  expect(after.scrollTop).toBeGreaterThan(0);
+  // And the tab body itself never became the scroller (F2): the box that
+  // scrolls is bounded to the tab's own height.
+  expect(after.bodyOverflowY).toBeLessThanOrEqual(0);
+  expect(after.scrollerBottom).toBeLessThanOrEqual(after.viewBottom + 1);
+});
+
+test("panel diff: a long diff line's scrollbar is on screen at every panel width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+
+  // Overlay scrollbars cost nothing visible; the reporter's machine does not
+  // have them, and neither does this measurement.
+  await page.evaluate(forceClassicScrollbars);
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    const geometry = await page.evaluate(diffGeometry);
+    expect(geometry).not.toBeNull();
+    if (geometry === null) return;
+
+    // The case under test: content really does extend past the right edge...
+    expect(geometry.overflowX).toBeGreaterThan(0);
+    // ...and the bottom edge of the box that scrolls — where its scrollbar
+    // is drawn — is inside the visible area rather than a thousand pixels
+    // below it.
+    expect(geometry.scrollerBottom).toBeLessThanOrEqual(
+      geometry.viewBottom + 1,
+    );
+    // And the overflow stays contained: the panel never scrolls sideways.
+    expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
+    expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
+  }
 });

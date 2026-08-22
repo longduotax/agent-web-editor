@@ -216,7 +216,18 @@ export async function getGitDiff(cwd: string, rawPath: unknown) {
   ]);
   const unstagedResult =
     file.kind === "untracked"
-      ? await runGit(cwd, ["diff", "--no-index", "--", "/dev/null", path])
+      ? // `--no-ext-diff` here too: a user's `diff.external` would otherwise
+        // decide what an untracked file's preview looks like, and this is
+        // the one diff the browser renders that Git is not producing from
+        // its own index.
+        await runGit(cwd, [
+          "diff",
+          "--no-index",
+          "--no-ext-diff",
+          "--",
+          "/dev/null",
+          path,
+        ])
       : await runGit(cwd, ["diff", "--no-ext-diff", "--", path]);
   if (stagedResult.code !== 0 && stagedResult.code !== 1)
     throw new Error("git_diff_failed");
