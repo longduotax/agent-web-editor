@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
@@ -57,19 +58,45 @@ const context: TabContext = {
   label: "Example project",
 };
 
+// Every socket the render opens, so a test can drive server frames into the
+// view and read back what it sent.
+const sockets: MockWebSocket[] = [];
+
 class MockWebSocket extends EventTarget {
   public static readonly OPEN = 1;
   public readyState = MockWebSocket.OPEN;
+  public readonly sent: string[] = [];
   public constructor(url: string) {
     super();
     void url;
+    sockets.push(this);
   }
   public close(): void {
     this.readyState = 3;
   }
-  public send(): void {
-    return undefined;
+  public send(data: string): void {
+    this.sent.push(data);
   }
+  /** What the server would push down the wire. */
+  public deliver(frame: unknown): void {
+    act(() => {
+      this.dispatchEvent(
+        new MessageEvent("message", { data: JSON.stringify(frame) }),
+      );
+    });
+  }
+}
+
+const terminalId = "30000000-0000-4000-8000-000000000001";
+
+function ready(socket: MockWebSocket): void {
+  socket.deliver({ version: 1, type: "ready", projectId, terminalId });
+}
+
+function sentTypes(socket: MockWebSocket): string[] {
+  return socket.sent.map(
+    (frame) => (JSON.parse(frame) as { type: string }).type,
+  );
 }
 
 function actionsSpy(): PanelActions {
@@ -92,7 +119,13 @@ function actionsSpy(): PanelActions {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  sockets.length = 0;
+  resizeObservers.length = 0;
 });
+
+// Every live ResizeObserver, so a test can fire the callback the browser
+// would fire when the panel is resized.
+const resizeObservers: (() => void)[] = [];
 
 function stubEnvironment() {
   vi.stubGlobal("WebSocket", MockWebSocket);
@@ -104,6 +137,9 @@ function stubEnvironment() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
+      public constructor(callback: () => void) {
+        resizeObservers.push(callback);
+      }
       public observe(): void {
         return undefined;
       }
@@ -112,6 +148,12 @@ function stubEnvironment() {
       }
     },
   );
+}
+
+function fireResize(): void {
+  act(() => {
+    for (const callback of resizeObservers) callback();
+  });
 }
 
 const tab = {
@@ -133,6 +175,93 @@ describe("TerminalTab", () => {
     expect(
       screen.getAllByText(/Direct local shell — not sandboxed/),
     ).toHaveLength(1);
+  });
+
+  // WSP-07: the warning belongs to the terminal, so two terminal tabs carry
+  // two warnings — it is not a per-panel banner that a second shell inherits.
+  it("carries its own shell warning per tab", () => {
+    stubEnvironment();
+    render(
+      <>
+        <TerminalTab tab={tab} visible actions={actionsSpy()} />
+        <TerminalTab
+          tab={{ ...tab, id: "t2" }}
+          visible
+          actions={actionsSpy()}
+        />
+      </>,
+    );
+
+    expect(screen.getAllByLabelText("Project terminal")).toHaveLength(2);
+    expect(
+      screen.getAllByText(/Direct local shell — not sandboxed/),
+    ).toHaveLength(2);
+  });
+
+  // WSP-07: a process that is genuinely gone is reported as gone, with a
+  // restart action — not left looking like a live but silent shell.
+  it("reports a process that has exited, and offers a way to start another", async () => {
+    const user = userEvent.setup();
+    stubEnvironment();
+    render(<TerminalTab tab={tab} visible actions={actionsSpy()} />);
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    if (socket === undefined) return;
+
+    ready(socket);
+    expect(screen.getByText("Terminal running")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Start terminal" }),
+    ).not.toBeInTheDocument();
+
+    socket.deliver({
+      version: 1,
+      type: "exit",
+      projectId,
+      exitCode: 0,
+      signal: null,
+    });
+
+    expect(screen.getByText("Terminal exited")).toBeInTheDocument();
+    const restart = screen.getByRole("button", { name: "Start terminal" });
+    await user.click(restart);
+    expect(sentTypes(socket)).toContain("attach");
+  });
+
+  // D4. `visible` used to be accepted and silently dropped. A hidden
+  // terminal is a zero-size box, so measuring it proposes nonsense and would
+  // push a bogus size to the PTY; the process and its buffer are untouched
+  // either way (WSP-09).
+  it("does no measuring while it is hidden, and refits when it comes back", () => {
+    stubEnvironment();
+    const { rerender } = render(
+      <TerminalTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    if (socket === undefined) return;
+    ready(socket);
+
+    fireResize();
+    expect(sentTypes(socket).filter((type) => type === "resize")).toHaveLength(
+      1,
+    );
+
+    rerender(<TerminalTab tab={tab} visible={false} actions={actionsSpy()} />);
+    fireResize();
+    fireResize();
+    // Still exactly one socket: hiding a terminal does not restart it.
+    expect(sockets).toHaveLength(1);
+    expect(sentTypes(socket).filter((type) => type === "resize")).toHaveLength(
+      1,
+    );
+
+    rerender(<TerminalTab tab={tab} visible actions={actionsSpy()} />);
+    // Refitted once on the way back, because the panel may have been resized
+    // while this tab was away.
+    expect(sentTypes(socket).filter((type) => type === "resize")).toHaveLength(
+      2,
+    );
   });
 
   it("says so, and starts no shell, when it has no worktree to run in", () => {

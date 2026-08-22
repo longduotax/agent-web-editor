@@ -54,13 +54,30 @@ function observeThemeChanges(onChange: () => void): () => void {
 export function TerminalView({
   projectId,
   threadId,
+  visible = true,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
+  /**
+   * Whether this terminal is on screen. WSP-09: a terminal that is not
+   * visible "keeps its process and buffers output but performs no rendering
+   * work". Output frames are still written, because xterm's own buffer IS
+   * the buffering the requirement asks for and it is the only one that trims
+   * to the scrollback bound; what this suppresses is the measuring work,
+   * which is both wasted and wrong on a `display: none` element — a zero-size
+   * box makes the fit addon propose nonsense and pushes a bogus resize to the
+   * PTY. The terminal is refitted once, on the way back to visible, because
+   * the panel may have been resized while it was away.
+   */
+  visible?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);
   const terminalId = useRef<TerminalId | null>(null);
+  // Read by the resize observer, which must not be torn down and rebuilt
+  // when visibility changes: that effect owns the socket and the process.
+  const visibleRef = useRef(visible);
+  const refit = useRef<() => void>(() => undefined);
   // Mirrors terminalId for rendering. Reading the ref during render made the
   // "Start terminal" button's visibility depend on an unrelated re-render.
   const [attached, setAttached] = useState(false);
@@ -144,7 +161,7 @@ export function TerminalView({
           }),
         );
     });
-    const resize = new ResizeObserver(() => {
+    const fitToContainer = () => {
       fit.fit();
       const currentTerminalId = terminalId.current;
       if (ws.readyState === WebSocket.OPEN && currentTerminalId !== null)
@@ -159,6 +176,13 @@ export function TerminalView({
             rows: terminal.rows,
           }),
         );
+    };
+    refit.current = fitToContainer;
+    const resize = new ResizeObserver(() => {
+      // A hidden terminal is a zero-size box: measuring it proposes nonsense
+      // and would push a bogus size to the PTY (WSP-09).
+      if (!visibleRef.current) return;
+      fitToContainer();
     });
     resize.observe(element);
     return () => {
@@ -169,8 +193,17 @@ export function TerminalView({
       terminal.dispose();
       terminalId.current = null;
       socket.current = null;
+      refit.current = () => undefined;
     };
   }, [projectId, threadId]);
+
+  // Deliberately separate from the effect above: that one owns the socket and
+  // the process, and re-running it on a tab switch is exactly what WSP-09
+  // forbids.
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (visible) refit.current();
+  }, [visible]);
 
   const attach = () => {
     if (socket.current?.readyState === WebSocket.OPEN)

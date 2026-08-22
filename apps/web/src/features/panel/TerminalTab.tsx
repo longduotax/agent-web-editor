@@ -21,10 +21,18 @@ import type { TabBodyProps } from "./tabBody.js";
 
 export const TerminalTab = memo(function TerminalTab({
   tab,
+  visible,
 }: TabBodyProps<"terminal">): JSX.Element {
   const context = tab.context;
   if (context === null) return <UnboundNotice />;
+  // `visible` used to be accepted and dropped (D4). It is the terminal's
+  // half of WSP-09: the process and the buffer are kept either way, but a
+  // hidden terminal must not measure itself — see TerminalView's own note.
   return (
-    <TerminalView projectId={context.projectId} threadId={context.threadId} />
+    <TerminalView
+      projectId={context.projectId}
+      threadId={context.threadId}
+      visible={visible}
+    />
   );
 });
