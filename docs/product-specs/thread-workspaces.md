@@ -56,11 +56,16 @@ Selecting New chat opens a new-chat composer with one compact configuration bar
 above it. The bar follows the supplied Codex interaction pattern and contains,
 in order:
 
-1. project;
-2. execution location (`New worktree` or `Local checkout`);
-3. starting state (`Clean start`, `Include local changes`, or the read-only
+1. execution location (`New worktree` or `Local checkout`);
+2. starting state (`Clean start`, `Include local changes`, or the read-only
    `Current local files` state); and
-4. base/current branch.
+3. base/current branch.
+
+The composer carries no project control. It always opens inside a workspace
+surface whose project is already settled — a split pane inherits the pane it
+came from, and the sidebar's New thread action carries the project it was
+invoked on — so the composer names that project rather than asking for it.
+Choosing or switching projects belongs to the sidebar.
 
 There is no environment control while the product has no environment capability.
 The first-message composer and all applicable choices are usable without opening
@@ -90,8 +95,8 @@ move an existing conversation between execution locations.
 
 Every new isolated chat starts with `Clean start`, including after a prior chat
 used local-change transfer. The application does not remember
-`Include local changes` as a default. Changing the selected project or base
-resets the starting state to `Clean start`.
+`Include local changes` as a default. Changing the base resets the starting
+state to `Clean start`.
 
 A clean worktree is created from the exact committed object resolved for the
 selected local base branch. Staged, unstaged, untracked, and ignored source files
@@ -227,9 +232,9 @@ session because those identities must remain stable after provisioning.
 
 ## Acceptance criteria
 
-1. The New chat screen matches the agreed inline toolbar structure with project,
-   execution location, starting state, and branch controls, no environment
-   control, and a first-message composer.
+1. The New chat screen matches the agreed inline toolbar structure with
+   execution location, starting state, and branch controls, no project or
+   environment control, and a first-message composer.
 2. A dirty Git project can create a clean isolated chat whose source checkout is
    byte-for-byte/status unchanged, whose worktree starts at the selected commit,
    and whose worktree status is clean.

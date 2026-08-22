@@ -1,7 +1,6 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
-import { useNavigate } from "react-router-dom";
 
 import {
   commandId,
@@ -33,7 +32,6 @@ export interface NewChatPaneProps {
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
   const draftKey = newChatDraftKey(projectId, paneId);
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const workspace = useQuery({
     queryKey: ["workspace"],
@@ -133,22 +131,6 @@ export function NewChatPane(props: NewChatPaneProps) {
       <main className="center new-chat">
         <form className="new-chat-card" onSubmit={submit}>
           <div className="new-chat-toolbar" aria-label="New chat configuration">
-            <label>
-              <span className="sr-only">Project</span>
-              <select
-                aria-label="Project"
-                value={projectId}
-                onChange={(event) => {
-                  void navigate(`/projects/${event.target.value}/new`);
-                }}
-              >
-                {workspace.data?.projects.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label>
               <span className="sr-only">Execution location</span>
               <select

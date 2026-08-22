@@ -230,6 +230,23 @@ describe("WorkspaceView", () => {
     expect(screen.getAllByLabelText("New chat")).toHaveLength(1);
   });
 
+  // The composer only ever opens inside a surface that already has a project:
+  // a split pane inherits the pane it came from, and the sidebar's New thread
+  // button carries the project it was clicked on. A control here could only
+  // restate what the pane header already shows, so there is none.
+  it("offers no project control in the new-chat composer", async () => {
+    renderWorkspace(`/projects/${projectId}/new`);
+    const composer = await screen.findByRole("region", { name: "New chat" });
+
+    expect(
+      within(composer).queryByRole("combobox", { name: "Project" }),
+    ).toBeNull();
+    for (const name of ["Execution location", "Starting state", "Base branch"])
+      expect(
+        within(composer).getByRole("combobox", { name }),
+      ).toBeInTheDocument();
+  });
+
   function closeButtonFor(name: string): HTMLElement {
     const region = screen.getByRole("region", { name });
     const closeButton = region
