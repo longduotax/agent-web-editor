@@ -1321,6 +1321,24 @@ see any of these.
    "flicker at the bottom of the terminal". It is now absolutely positioned
    over the panel's bottom edge — still visible, still in the `role="status"`
    region, owning no layout.
+
+   **Closed by the reporter, 2026-08-22.** The user confirmed on their own
+   display that the flicker is gone. This is worth recording as evidence
+   rather than as a formality, because no automated check ever reproduced the
+   symptom: the fixing agent could not, because headless Chromium uses
+   zero-width overlay scrollbars and the feedback path needs a real scrollbar;
+   and the hands-on pass could not either, across 691 consecutive stable
+   frames at 60fps with a 120-character prompt at 33 columns. What the tests
+   pin is the **precondition** — `.terminal-surface` is `overflow: hidden`, no
+   scrollbar can appear to re-narrow the measured box, and the announcement
+   owns no layout — not the oscillation itself. Three separate diagnoses of
+   this symptom were wrong before the measured one (a `min-width: 0`
+   max-content theory from the coordinator, a stale `.xterm-scrollable-element`
+   height, and the border-box arithmetic of F4, of which only the last two were
+   real defects at all). If it ever returns, start by reproducing it on a
+   display with classic scrollbars; do not trust a green suite as evidence
+   about this particular symptom.
+
 4. **Every terminal was up to ~12.8px taller than its container (F4).** The fit
    addon reads `getComputedStyle(parent).height`, which for a border-box
    element is the BORDER box (218.917px measured against a 206.1px content
