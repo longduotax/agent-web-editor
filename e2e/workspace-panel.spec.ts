@@ -153,6 +153,23 @@ test.beforeAll(async () => {
     "# The project's own README\n",
     "utf8",
   );
+  // A document with everything a previewed markdown file has to answer for:
+  // a heading, a link into the repository, a link out of it, and an image
+  // that must never be fetched.
+  await mkdir(join(projectPath, "docs"));
+  await writeFile(
+    join(projectPath, "docs", "guide.md"),
+    [
+      "# Workspace guide",
+      "",
+      "A paragraph, a [local reference](../src/main.ts) and an",
+      "[external one](https://example.com/docs).",
+      "",
+      "![A missing diagram](https://example.com/diagram.png)",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
   await mkdir(join(projectPath, "src", "features"), { recursive: true });
   await writeFile(
     join(projectPath, "src", "main.ts"),
@@ -247,6 +264,7 @@ declare const document: {
 declare function getComputedStyle(element: ProbeElement): {
   display: string;
   fontSize: string;
+  color: string;
   getPropertyValue(property: string): string;
   borderTopColor: string;
   backgroundColor: string;
@@ -1013,6 +1031,10 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   // Overlay scrollbars cost nothing visible; the reporter's machine does not
   // have them, and neither does this measurement.
@@ -1041,6 +1063,202 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
     expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
   }
+});
+
+// Milestone 5: the File tab (WSP-05, acceptance 5).
+//
+// End to end because none of it exists in jsdom: whether a chunk was
+// requested, when it was requested, and what colour a token actually
+// computes to are all questions about a real browser loading real assets.
+
+/**
+ * What a highlighted token is painted, against what the body text is, and
+ * against what the stylesheet's own token says in the active theme.
+ *
+ * One function, because it is serialized into the page: a helper it called
+ * would not travel with it.
+ */
+function tokenColours() {
+  const token = document.querySelector(".file-preview .file-token");
+  const pre = document.querySelector(".file-preview pre");
+  if (token === null || pre === null) return null;
+  return {
+    token: getComputedStyle(token).color,
+    plain: getComputedStyle(pre).color,
+    declaredKeyword: getComputedStyle(document.documentElement)
+      .getPropertyValue("--code-keyword")
+      .trim(),
+  };
+}
+
+/** `#rrggbb` as the `rgb(r, g, b)` a computed style reports. */
+function asRgb(hex: string): string {
+  const value = Number.parseInt(hex.replace("#", ""), 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgb(${String(red)}, ${String(green)}, ${String(blue)})`;
+}
+
+test("panel file tab: markdown renders formatted, fetches no image, and its source view survives a reload", async ({
+  page,
+}) => {
+  const fetched: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("example.com")) fetched.push(request.url());
+  });
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+
+  // Formatted output, not the file's characters.
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+  await expect(page.locator(".file-preview pre")).toHaveCount(0);
+
+  // No image element exists, so no request was ever issued for one — the
+  // absence of the element is the mechanism, and the absence of the request
+  // is what it buys.
+  await expect(page.locator(".file-preview img")).toHaveCount(0);
+  await expect(page.getByText(/A missing diagram — not loaded/)).toBeVisible();
+  expect(fetched).toEqual([]);
+
+  // An address leaves for a real browser tab and says so; a repository path
+  // is not an address at all.
+  const external = page.getByRole("link", { name: /external one/ });
+  await expect(external).toHaveAttribute("target", "_blank");
+  await expect(external).toHaveAttribute("rel", "noreferrer noopener");
+  await expect(
+    page.getByRole("button", { name: /local reference/ }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "View source" }).click();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+
+  // The choice is on the tab record, so it is still there after a reload
+  // (WSP-04) — and the way back is still offered.
+  await page.reload();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+  await page.getByRole("button", { name: "View preview" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+});
+
+test("panel file tab: a link into the repository opens that file in its own tab", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: /local reference/ }).click();
+
+  // `../src/main.ts` from `docs/guide.md`, resolved against the file it was
+  // written in, opened as a File tab of its own rather than navigating.
+  const opened = page.getByRole("tab", { name: "main.ts" });
+  await expect(opened).toBeVisible();
+  await expect(opened).toHaveAttribute("aria-selected", "true");
+  // The VISIBLE body: every mounted tab keeps its own, and the one the user
+  // is looking at is the one that must name the file that was linked.
+  await expect(
+    page.locator('[role="tabpanel"]:not([hidden]) .file-preview > header span'),
+  ).toHaveText("src/main.ts");
+});
+
+test("panel file tab: a code file is readable before highlighting arrives, and coloured from the theme after", async ({
+  page,
+}) => {
+  // The chunk is held until the assertions about the plain text have run:
+  // WSP-05 requires the file to be readable throughout, and "highlighting
+  // never blocks first paint" is only a claim about the time before it
+  // arrives.
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/syntaxHighlight-.*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+
+  const preview = page.locator(".file-preview pre");
+  await expect(preview).toContainText("export const main = 1;");
+  await expect(page.locator(".file-preview .file-token")).toHaveCount(0);
+
+  release();
+
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+  // The text is still the file's own text, unchanged by the decoration.
+  await expect(preview).toContainText("export const main = 1;");
+
+  const light = await page.evaluate(tokenColours);
+  expect(light).not.toBeNull();
+  if (light === null) return;
+  // The colour is the stylesheet's token, resolved by the cascade — not a
+  // colour the highlighter brought with it (WSP-05).
+  expect(light.token).toBe(asRgb(light.declaredKeyword));
+  expect(light.token).not.toBe(light.plain);
+
+  // And a theme switch re-maps it with no reload and no re-highlight: the
+  // same DOM node, the same inline `var(--code-keyword)`, the other block's
+  // value.
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await page.evaluate(tokenColours);
+  expect(dark).not.toBeNull();
+  if (dark === null) return;
+  expect(dark.declaredKeyword).not.toBe(light.declaredKeyword);
+  expect(dark.token).toBe(asRgb(dark.declaredKeyword));
+});
+
+test("panel file tab: the highlighter is not requested until a code file is opened", async ({
+  page,
+}) => {
+  const chunks: string[] = [];
+  page.on("request", (request) => {
+    if (/syntaxHighlight-|typescript-/.test(request.url()))
+      chunks.push(new URL(request.url()).pathname);
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  // A markdown file is rendered by the preview, and its source view is the
+  // file's characters: neither is highlighted, so neither pays for Shiki.
+  await page.getByRole("button", { name: "View source" }).click();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+  expect(chunks).toEqual([]);
+
+  await page.getByRole("tab", { name: "Files" }).click();
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+
+  // Now, and only now: the highlighter, and the one grammar this file needs.
+  expect(chunks.some((path) => path.includes("syntaxHighlight-"))).toBe(true);
+  expect(chunks.some((path) => path.includes("typescript-"))).toBe(true);
 });
 
 // G1. WSP-09's "returning to it restores its scroll position" and WSP-03's
@@ -1103,6 +1321,10 @@ test("panel file tab: returning to a tab restores the scroll offset of the eleme
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   const scrolled = await page.evaluate(scrollPreview, { top: 800, left: 1200 });
   expect(scrolled).not.toBeNull();
@@ -1993,6 +2215,10 @@ test("panel drag: a dragged tab keeps the scroll offset of the element that scro
   await openPanelTab(page, "Files");
   await page.getByRole("treeitem", { name: "wide.json" }).click();
   await expect(page.getByRole("tab")).toHaveCount(3);
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   // Two groups, the File tab alone in the second one, so dropping it back
   // into the first is a real move between groups.
