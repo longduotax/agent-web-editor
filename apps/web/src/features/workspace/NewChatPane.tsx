@@ -210,8 +210,13 @@ export function NewChatPane(props: NewChatPaneProps) {
           // until you open each dropdown. Both go away the moment a message
           // is sent; they are orientation, not chrome.
           <div className="new-chat-intro">
+            {/* role="group", not the landmark a named <section> would
+                imply: these are orientation inside a pane, and a screen
+                reader's landmark list should hold the pane, not two more
+                entries per empty pane. The heading still names them. */}
             <section
               className="new-chat-block"
+              role="group"
               aria-labelledby={`new-chat-examples-${paneId}`}
             >
               <h2
@@ -252,6 +257,7 @@ export function NewChatPane(props: NewChatPaneProps) {
             </section>
             <section
               className="new-chat-block"
+              role="group"
               aria-labelledby={`new-chat-choices-${paneId}`}
             >
               <h2

@@ -157,13 +157,14 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
     .fill("Inspect this project");
   await page.getByRole("button", { name: "Create chat and send" }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/threads\/[0-9a-f-]+$/);
-  await expect(
-    page.getByText(/Pi tools run with your user permissions/),
-  ).toBeVisible();
+  // The pane shows a width-appropriate form of this and keeps the whole
+  // sentence in the accessibility tree, so assert the complete wording rather
+  // than whichever abbreviation the current width happens to select.
+  const trustNotice =
+    "Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.";
+  await expect(page.getByText(trustNotice, { exact: true })).toHaveCount(1);
   await page.reload();
-  await expect(
-    page.getByText(/Pi tools run with your user permissions/),
-  ).toBeVisible();
+  await expect(page.getByText(trustNotice, { exact: true })).toHaveCount(1);
 
   const panel = page.getByRole("complementary", {
     name: "Workspace panel",
