@@ -9,14 +9,25 @@ import {
 
 const OUTPUT_LIMIT = 5 * 1024 * 1024;
 
-interface ProcessResult {
+export interface ProcessResult {
   code: number;
   stdout: Buffer;
   stderr: Buffer;
   truncated: boolean;
 }
 
-async function runGit(cwd: string, args: string[]): Promise<ProcessResult> {
+/**
+ * The one place this application spawns Git.
+ *
+ * Exported so the tracked-path index (`trackedFiles.ts`) inherits this
+ * policy — argument array, no shell, minimal environment, no pager or
+ * colour, a 10-second timeout and a 5 MiB output limit — rather than
+ * spawning a second Git with rules of its own.
+ */
+export async function runGit(
+  cwd: string,
+  args: string[],
+): Promise<ProcessResult> {
   return await new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(
       "git",

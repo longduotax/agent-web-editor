@@ -13,6 +13,11 @@ import {
   loadRootIgnoreLayers,
   type IgnoreLayer,
 } from "./ignoreRules.js";
+import {
+  isTracked,
+  loadTrackedPaths,
+  type TrackedIndex,
+} from "./trackedFiles.js";
 
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 20_000;
@@ -105,6 +110,12 @@ export async function listProjectFiles(
   const baseLayers = showIgnored
     ? []
     : await loadIgnoreLayersFor(root, resolved.relativePath);
+  // What the working tree's Git index holds, or null when there is no index
+  // to read. A tracked path is never ignored, whatever the patterns say
+  // (H1); a null index exempts nothing, which is exactly what shipped.
+  const tracked: TrackedIndex | null = showIgnored
+    ? null
+    : await loadTrackedPaths(root);
 
   function atCapacity(): boolean {
     return (
@@ -117,6 +128,18 @@ export async function listProjectFiles(
     directory: string,
     layers: IgnoreLayer[],
     remaining: number,
+    /**
+     * Whether this directory is itself excluded, which is only reachable
+     * because something tracked lives under it.
+     *
+     * Git's rule, kept exactly: a path under an excluded directory cannot be
+     * re-included, so inside one the only visible entries are the tracked
+     * ones. Without this the walk would descend into an excluded directory
+     * on account of one committed file and then show every uncommitted
+     * sibling beside it, because a floating pattern like `dist` matches the
+     * directory and not the paths beneath it.
+     */
+    insideIgnored: boolean,
   ): Promise<void> {
     if (atCapacity()) {
       truncated = true;
@@ -150,7 +173,10 @@ export async function listProjectFiles(
       const absolute = resolve(directory, child.name);
       const displayPath = relative(root, absolute).split(sep).join("/");
       const isDirectory = child.kind === "directory";
-      if (!showIgnored && isIgnored(layers, displayPath, isDirectory)) {
+      const excluded =
+        !showIgnored &&
+        (insideIgnored || isIgnored(layers, displayPath, isDirectory));
+      if (excluded && !isTracked(tracked, displayPath)) {
         // Recorded so the tab can say it is showing less than everything;
         // an under-reporting listing that stays quiet is not acceptable.
         ignoredHidden = true;
@@ -176,7 +202,7 @@ export async function listProjectFiles(
         const nested = showIgnored
           ? layers
           : await appendDirectoryLayer(layers, absolute, displayPath);
-        await visit(absolute, nested, remaining - 1);
+        await visit(absolute, nested, remaining - 1, excluded);
       }
       if (atCapacity()) {
         truncated = true;
@@ -192,6 +218,13 @@ export async function listProjectFiles(
     resolved.target,
     baseLayers,
     depth === "1" ? 0 : Number.POSITIVE_INFINITY,
+    // The requested root is subject to the same rules as any entry (H2): a
+    // directory that is itself excluded is refused above unless something
+    // tracked lives under it, and when it is reached that way its children
+    // are inside an excluded directory.
+    !showIgnored &&
+      resolved.relativePath !== "" &&
+      isIgnored(baseLayers, resolved.relativePath, true),
   );
   return FileTreeResponseSchema.parse({ entries, truncated, ignoredHidden });
 }
