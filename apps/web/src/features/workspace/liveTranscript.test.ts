@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
 import {
+  countUserMessages,
   dropSettledSteers,
   isReaderFacingDiagnostic,
   isSteerEcho,
@@ -9,6 +10,7 @@ import {
   mergePendingSteers,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
+  type PendingSteer,
 } from "./liveTranscript.js";
 
 function streaming(
@@ -197,12 +199,28 @@ describe("pending steers", () => {
     };
   }
   const runId = "50000000-0000-4000-8000-000000000009";
+  let ordinal = 0;
+  // Minted exactly as the pane mints one: against the transcript as it stood
+  // when the steer was sent. The baseline is the whole identity rule, so a
+  // test that hand-wrote it would be testing nothing.
+  function mint(
+    transcript: readonly TranscriptItem[],
+    text: string,
+  ): PendingSteer {
+    ordinal += 1;
+    return {
+      runId,
+      text,
+      ordinal,
+      priorCopies: countUserMessages(transcript, text),
+    };
+  }
 
   it("echoes an unpersisted steer at the foot of the transcript", () => {
-    const merged = mergePendingSteers(
-      [user("Explore the repo"), settled("Working on it.")],
-      [{ runId, text: "Actually, stop and reply BANANA" }],
-    );
+    const transcript = [user("Explore the repo"), settled("Working on it.")];
+    const merged = mergePendingSteers(transcript, [
+      mint(transcript, "Actually, stop and reply BANANA"),
+    ]);
     expect(merged).toHaveLength(3);
     const echo = merged.at(2);
     if (echo === undefined) throw new Error("expected an echoed steer");
@@ -217,35 +235,71 @@ describe("pending steers", () => {
   });
 
   it("retires an echo once Pi has persisted the same words", () => {
-    const pending = [{ runId, text: "Reply BANANA" }];
-    expect(dropSettledSteers([user("Explore the repo")], pending)).toBe(
-      pending,
-    );
+    const before = [user("Explore the repo")];
+    const pending = [mint(before, "Reply BANANA")];
+    expect(dropSettledSteers(before, pending)).toBe(pending);
     expect(
-      dropSettledSteers(
-        [user("Explore the repo"), user("Reply BANANA")],
-        pending,
-      ),
+      dropSettledSteers([...before, user("Reply BANANA")], pending),
     ).toEqual([]);
   });
 
   it("retires one echo per persisted copy when the same words are sent twice", () => {
-    const twice = [
-      { runId, text: "Hurry up" },
-      { runId, text: "Hurry up" },
-    ];
+    const twice = [mint([], "Hurry up"), mint([], "Hurry up")];
     // Only one has landed, so exactly one echo may go.
-    expect(dropSettledSteers([user("Hurry up")], twice)).toEqual([
-      { runId, text: "Hurry up" },
-    ]);
+    expect(dropSettledSteers([user("Hurry up")], twice)).toEqual([twice[1]]);
     expect(
       dropSettledSteers([user("Hurry up", "a"), user("Hurry up", "b")], twice),
     ).toEqual([]);
   });
 
   it("does not mistake the assistant repeating the words for the steer landing", () => {
-    const pending = [{ runId, text: "Reply BANANA" }];
+    const pending = [mint([], "Reply BANANA")];
     expect(dropSettledSteers([settled("Reply BANANA")], pending)).toBe(pending);
+  });
+
+  // BL1. The words a steer uses -- "keep going", "continue", "run the tests"
+  // -- are exactly the words an earlier PROMPT used. That earlier prompt was
+  // never in `pending`, so nothing ever consumed it, and it sits in the
+  // transcript for the life of the thread ready to retire any future echo of
+  // the same words. Counting matches across the whole history therefore
+  // reproduced G3 for every repeated phrase: the steer vanished the next time
+  // anything changed the transcript, which during a run is every few seconds.
+  it("does not let an earlier prompt with the same words retire the echo", () => {
+    const before = [
+      user("keep going"),
+      settled("On it."),
+      user("now refactor it"),
+    ];
+    const pending = [mint(before, "keep going")];
+    expect(dropSettledSteers(before, pending)).toBe(pending);
+  });
+
+  it("retires the echo once a copy arrives ON TOP of the earlier prompt", () => {
+    const before = [user("keep going", "pi-earlier"), settled("On it.")];
+    const pending = [mint(before, "keep going")];
+    expect(
+      dropSettledSteers([...before, user("keep going", "pi-steer")], pending),
+    ).toEqual([]);
+  });
+
+  it("ignores an echo already merged into the transcript it is judged against", () => {
+    // Defence for the one way this could retire itself: `dropSettledSteers`
+    // must be handed the authoritative transcript, never the merged one.
+    const pending = [mint([], "keep going")];
+    const merged = mergePendingSteers([], pending);
+    expect(dropSettledSteers(merged, pending)).toBe(pending);
+  });
+
+  it("keeps every echo's id stable when an earlier one retires", () => {
+    const two = [mint([], "first"), mint([], "second")];
+    const before = mergePendingSteers([], two);
+    const after = mergePendingSteers(
+      [],
+      dropSettledSteers([user("first")], two),
+    );
+    // The surviving echo is the same bubble it was a frame ago. Deriving the
+    // id from the array index remounted it when its neighbour retired.
+    expect(after.at(0)?.id).toBe(before.at(1)?.id);
   });
 
   it("leaves the transcript untouched when nothing is pending", () => {
