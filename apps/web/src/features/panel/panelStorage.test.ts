@@ -226,6 +226,77 @@ describe("readPanelState", () => {
     expect(removed).toContain(PANEL_STORAGE_KEY);
   });
 
+  // WSP-04 ("enforces a minimum outer width") and WSP-01 ("clamped size
+  // fractions") are promises about what the panel renders, so they have to
+  // hold for a width and a pair of fractions that arrive from storage, not
+  // only for ones a drag produced. A stored width of 0 is the worst case:
+  // the resize edge of a 0px panel cannot be grabbed, so there is no
+  // in-product way back.
+  function storedPanel(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      version: PANEL_STATE_VERSION,
+      root: { type: "group", id: "g1" },
+      groups: { g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" } },
+      tabs: { t1: { id: "t1", type: "changes", context: null } },
+      focusedGroupId: "g1",
+      width: 400,
+      open: true,
+      ...overrides,
+    });
+  }
+
+  function splitPanel(sizes: [number, number]): string {
+    return storedPanel({
+      root: {
+        type: "split",
+        id: "s1",
+        axis: "row",
+        children: [
+          { type: "group", id: "g1" },
+          { type: "group", id: "g2" },
+        ],
+        sizes,
+      },
+      groups: {
+        g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" },
+        g2: { id: "g2", tabIds: ["t2"], activeTabId: "t2" },
+      },
+      tabs: {
+        t1: { id: "t1", type: "changes", context: null },
+        t2: { id: "t2", type: "files", context: null, search: "" },
+      },
+    });
+  }
+
+  it.each([
+    [3, 280],
+    [0, 280],
+    [-1000, 280],
+    [1e12, 4096],
+    [512.4, 512],
+  ])("clamps a stored width of %p to %p", (stored, expected) => {
+    stubStorage({ [PANEL_STORAGE_KEY]: storedPanel({ width: stored }) });
+    expect(readPanelState(ids()).width).toBe(expected);
+  });
+
+  it.each([
+    [[0, 1] as [number, number]],
+    [[-5, 900] as [number, number]],
+    [[0.5, 0.5] as [number, number]],
+  ])("normalizes stored split fractions %p", (sizes) => {
+    stubStorage({ [PANEL_STORAGE_KEY]: splitPanel(sizes) });
+
+    const root = readPanelState(ids()).root;
+
+    if (root?.type !== "split") throw new Error("expected a split root");
+    const [a, b] = root.sizes;
+    expect(a).toBeGreaterThan(0);
+    expect(b).toBeGreaterThan(0);
+    expect(a).toBeLessThan(1);
+    expect(b).toBeLessThan(1);
+    expect(a + b).toBeCloseTo(1, 10);
+  });
+
   it("discards a record whose group activates a tab it does not hold", () => {
     const { removed } = stubStorage({
       [PANEL_STORAGE_KEY]: JSON.stringify({
@@ -297,6 +368,24 @@ describe("migration from the v1 inspector preference", () => {
     expect(tab.terminalId).toBeNull();
     expect(state.width).toBe(600);
   });
+
+  // The shipped inspector bounded its own width to [280, 4096]; the panel
+  // that replaces it must not accept a record the record's own writer would
+  // have refused.
+  it.each([0, 3, -1000, 1e12, 400.5])(
+    "refuses a v1 width of %p rather than restoring an unusable panel",
+    (width) => {
+      stubStorage({
+        [INSPECTOR_MIGRATION_KEY]: JSON.stringify({
+          version: 1,
+          open: true,
+          activeTab: "files",
+          width,
+        }),
+      });
+      expectDefaultPanel(readPanelState(ids()));
+    },
+  );
 
   it("ignores a malformed v1 record and falls back to the default panel", () => {
     stubStorage({

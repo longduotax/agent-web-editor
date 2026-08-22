@@ -1,8 +1,16 @@
 import { z } from "zod";
 import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
 
+import { normalizeSizes } from "../layout/binaryTree.js";
 import type { TreeNode } from "../layout/binaryTree.js";
-import { createEmptyPanel, openTab, panelStateProblems } from "./panelModel.js";
+import { clampPanelWidth } from "./panelGeometry.js";
+import {
+  createEmptyPanel,
+  openTab,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  panelStateProblems,
+} from "./panelModel.js";
 import type { GroupId, PanelState } from "./panelModel.js";
 import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 
@@ -104,13 +112,40 @@ const PanelStateSchema = z.object({
   open: z.boolean(),
 });
 
-// The shipped inspector preference this panel replaces.
+// The shipped inspector preference this panel replaces, with the width bound
+// it was written under. The panel must not accept a record that the record's
+// own writer would have refused: relaxing this to a bare number let a
+// hand-edited `width: 0` through, and a 0px panel has no resize edge to grab.
 const InspectorPreferencesV1Schema = z.object({
   version: z.literal(1),
   open: z.boolean(),
   activeTab: z.enum(["changes", "files", "terminal"]),
-  width: z.number(),
+  width: z.number().int().min(PANEL_MIN_WIDTH).max(PANEL_MAX_WIDTH),
 });
+
+// The width bound that holds with no viewport to measure against. A record
+// is read before anything is laid out, so `clampPanelWidth` is given an
+// unbounded viewport here and applied again — against the real one — when
+// the panel is rendered and resized.
+function storedWidth(width: number): number {
+  return clampPanelWidth(width, Number.POSITIVE_INFINITY);
+}
+
+// WSP-01's clamped size fractions are a promise about what is rendered, so
+// they have to hold for fractions that arrive from storage as much as for
+// ones a divider drag produced. `[0, 1]` parses as a pair of numbers and
+// would render a tile with no grabbable edge.
+function normalizedTree(node: GroupNode): GroupNode {
+  if (node.type !== "split") return node;
+  return {
+    ...node,
+    children: [
+      normalizedTree(node.children[0]),
+      normalizedTree(node.children[1]),
+    ],
+    sizes: normalizeSizes(node.sizes),
+  };
+}
 
 interface PreferenceStorage {
   getItem(key: string): unknown;
@@ -214,7 +249,7 @@ function migrateFromInspector(
     migratedTab(activeTab),
     makeId,
   );
-  return { ...state, width, open };
+  return { ...state, width: storedWidth(width), open };
 }
 
 export function readPanelState(
@@ -234,11 +269,11 @@ export function readPanelState(
           ]),
         );
         const state: PanelState = {
-          root,
+          root: root === null ? null : normalizedTree(root),
           groups,
           tabs,
           focusedGroupId,
-          width,
+          width: storedWidth(width),
           open,
         };
         // Shape is not soundness: a record can parse cleanly and still have
