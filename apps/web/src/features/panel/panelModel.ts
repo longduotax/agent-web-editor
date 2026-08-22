@@ -164,7 +164,7 @@ function targetGroupId(state: PanelState, requested?: GroupId): GroupId | null {
 
 // The one route by which a tab's context is set after it is opened; see the
 // note on TabPatch, which deliberately cannot. Spelled out per type for the
-// same reason as `withId`.
+// same reason as `withId` below.
 function withContext(tab: PanelTab, context: TabContext): PanelTab {
   switch (tab.type) {
     case "changes":
@@ -182,6 +182,13 @@ function withContext(tab: PanelTab, context: TabContext): PanelTab {
   }
 }
 
+// Six branches that read identically on purpose. Spreading the union in one
+// line — `{ ...tab, id }` where `tab: NewPanelTab` — produces a union of
+// spreads that TypeScript will not accept as a `PanelTab`, and the usual way
+// past that is a cast, which would silently survive a seventh tab type being
+// added with a field the others do not have. Narrowing first means each
+// branch spreads a single known shape, so the compiler checks every one, and
+// a new tab type is a missing-case error here rather than a runtime surprise.
 function withId(tab: NewPanelTab, id: TabId): PanelTab {
   switch (tab.type) {
     case "changes":
