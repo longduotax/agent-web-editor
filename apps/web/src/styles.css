@@ -44,17 +44,41 @@
   --dock-shadow: -2px 0 8px -2px rgba(20, 25, 40, 0.16);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
-/* One reading column for the whole surface (D-3). The transcript, the
-   composer and the new-chat card all size on this and nothing else; no
-   component may hardcode its own measure. */
+/* The surface's widths (D-3). TWO tokens, not one, and the distinction is
+   load-bearing: --surface-measure is the axis every surface sits on, and
+   --transcript-measure narrows the transcript's prose column inside it. Both
+   still live here -- no component may hardcode a measure of its own. The
+   split is deliberate: one measure could not serve a card of controls, a
+   composer, running prose and 80-column code at once, and the version that
+   tried made the new-chat toolbar wrap. */
 :root {
-  /* Sized from the measured line length of real transcript prose, not from a
-     round number: at 48rem the median FULL line of an assistant paragraph ran
-     112 characters, far past the 60-75 that keeps the eye from losing its
-     place on line return. 35rem at the 1rem body copy below lands the median
-     at 74. One token still drives the transcript, the composer and the
-     new-chat card together (CWS-07), so they stay on one axis. */
-  --surface-measure: 35rem;
+  /* The surface axis (CWS-07): the width the composer and the new-chat card
+     size on, and the outer bound of the transcript. Unchanged at 48rem --
+     narrowing THIS is what pushed the new-chat toolbar's three selects toward
+     a second row, and prose readability is not a good enough reason to reflow
+     a card that is not prose. */
+  --surface-measure: 48rem;
+  /* The transcript's own, tighter reading measure, nested INSIDE the surface
+     axis rather than competing with it (see .transcript-column). Prose and
+     code pull in opposite directions here and the two cannot both be
+     satisfied; this value resolves the conflict in favour of code, and the
+     numbers behind it are:
+
+       - An 80-column block must not scroll horizontally. `.markdown pre` sets
+         0.78rem (12.48px) ui-monospace, whose advance measures 7.5056px in
+         Chrome (0.6014em), so 80 columns is 600.5px; plus 2x0.8rem padding
+         and 2x1px border, the column must be at least 628.7px = 39.3rem.
+       - Prose wants the opposite. Measured across 48 real transcript
+         paragraphs, the median FULL line runs 80 characters at 38rem and 83
+         at 40rem -- so a <=80 measure needs <=38rem.
+
+     There is no width that does both. 40rem is the narrowest ROUND value that
+     clears the code floor with real slack (11.3px, ~1.5 columns, enough to
+     absorb the advance difference between SF Mono and the Menlo fallback);
+     39.5rem clears it by only 3.3px. Prose lands at 83 -- three characters
+     over target, and far better than the 112 it started at. Flip this one
+     token to 38rem to spend it the other way. */
+  --transcript-measure: 40rem;
   /* One height for the top-of-column header rows (the panel's tab strip and
      its collapsed rail). */
   --header-h: 3.8rem;
@@ -513,8 +537,17 @@ a:focus-visible {
   border-radius: 0.5rem;
   background: var(--card);
   /* Was `#0008` -- 53% black, which on a near-white sidebar reads as a muddy
-     bruise rather than elevation. Share the app's popover token instead: 12%
-     at the spread, 6% at the contact edge, and dark-mode-correct for free. */
+     bruise rather than elevation. Share the app's popover token instead, so
+     this menu weighs the same as .panel-menu and .undo-toast rather than
+     carrying a hardcoded alpha of its own.
+
+     IN LIGHT MODE that is the fix the finding asked for: 12% at the spread,
+     6% at the contact edge. IN DARK MODE --pop-shadow is deliberately much
+     heavier (50% black) and this menu inherits that. It is not an oversight
+     and it is not "free": a shadow tuned for a white page is invisible on a
+     #131417 one, which is the same reason --dock-shadow above carries its own
+     dark value. 53% black was wrong under a near-white popover and is right
+     under a dark one. */
   box-shadow: var(--pop-shadow);
 }
 .thread-context-menu button {
@@ -1054,13 +1087,17 @@ a:focus-visible {
      centered reading column off the composer's axis. */
   scrollbar-gutter: stable both-edges;
 }
-/* The reading column. Shares --surface-measure with the composer and the
-   new-chat card so the conversation and the input it answers sit on one
-   axis; below that width it shrinks with the pane instead of clipping. */
+/* The reading column, capped by BOTH measures. --surface-measure is the axis
+   the composer and the new-chat card sit on, and the transcript may never
+   exceed it -- a reply wider than the input that asked for it is exactly the
+   misalignment CWS-07 exists to prevent. --transcript-measure then narrows it
+   further for prose. The transcript's measure is therefore nested inside the
+   shared axis, not competing with it: whichever is tighter wins, and below
+   either the column shrinks with the pane instead of clipping. */
 .transcript-column {
   width: 100%;
   min-width: 0;
-  max-width: var(--surface-measure);
+  max-width: min(var(--transcript-measure), var(--surface-measure));
   margin-inline: auto;
 }
 /* Load-bearing containment rule: NOTHING in the transcript may widen the

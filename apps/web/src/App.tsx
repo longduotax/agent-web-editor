@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -70,27 +71,26 @@ interface PendingArchive {
   title: string;
 }
 
-// The thread context menu's own footprint, mirrored from `.thread-context-menu`
-// in styles.css (min-width 9rem, 0.3rem padding, 1px border; two 0.45rem/0.55rem
-// items). Only ever used to keep the menu inside the viewport, so an estimate
-// that errs LARGE is the safe direction — it can only pull the menu further in.
-const THREAD_MENU_WIDTH = 160;
-const THREAD_MENU_HEIGHT = 96;
+// How close the thread context menu may come to the edge of the window.
 const VIEWPORT_INSET = 8;
 
-// Anchors the menu beside the row that opened it rather than below it. Opening
-// downward from the button's bottom edge covered the very next thread — the
-// user lost sight of the list they were acting on — so the menu is placed off
-// the row's right edge, level with its top, and clamped into the viewport.
-function clampThreadMenu(left: number, top: number) {
+// Keeps an already-rendered menu inside the window, using the size the browser
+// actually laid it out at. An earlier version carried `.thread-context-menu`'s
+// min-width and item metrics as JS constants; those are the stylesheet's to
+// change, and a copy of them here is a copy that drifts. Measuring costs one
+// layout read in an effect that already runs on open.
+function clampToViewport(
+  anchor: { left: number; top: number },
+  size: { width: number; height: number },
+) {
   return {
     left: Math.max(
       VIEWPORT_INSET,
-      Math.min(left, window.innerWidth - THREAD_MENU_WIDTH - VIEWPORT_INSET),
+      Math.min(anchor.left, window.innerWidth - size.width - VIEWPORT_INSET),
     ),
     top: Math.max(
       VIEWPORT_INSET,
-      Math.min(top, window.innerHeight - THREAD_MENU_HEIGHT - VIEWPORT_INSET),
+      Math.min(anchor.top, window.innerHeight - size.height - VIEWPORT_INSET),
     ),
   };
 }
@@ -261,6 +261,21 @@ function Sidebar({
       ]);
     },
   });
+
+  // The menu opens off the right edge of the row that asked for it, level with
+  // that row's top, so it never covers the thread below. That anchor can fall
+  // outside the window near an edge, so it is corrected here — before paint,
+  // and against the size the browser actually laid the menu out at rather than
+  // against a copy of its CSS. Converges after one pass: the corrected anchor
+  // clamps to itself.
+  useLayoutEffect(() => {
+    const menu = threadMenuRef.current;
+    if (threadMenu === null || menu === null) return;
+    const { width, height } = menu.getBoundingClientRect();
+    const clamped = clampToViewport(threadMenu, { width, height });
+    if (clamped.left !== threadMenu.left || clamped.top !== threadMenu.top)
+      setThreadMenu({ ...threadMenu, ...clamped });
+  }, [threadMenu]);
 
   useEffect(() => {
     if (threadMenu === null) return;
@@ -499,7 +514,8 @@ function Sidebar({
                           threadId: thread.id,
                           title: thread.title,
                           running,
-                          ...clampThreadMenu(left, top),
+                          left,
+                          top,
                         });
                       };
                       return (

@@ -1985,13 +1985,34 @@ describe("shell layout and light-mode palette", () => {
       expect(ruleBody(css, selector)).toMatch(/color:\s*var\(--glyph\)/);
   });
 
-  // F5. A measure means nothing without the type set in it, so both halves
-  // are asserted together: 35rem at 1rem lands the median full line at 74
-  // characters, measured in Chrome against real transcript prose.
-  it("sets a reading measure and body copy that produce a 60-75 character line", async () => {
+  // F5/S6. Two measures, and the split is the point: narrowing the shared
+  // surface axis to buy prose a tighter measure also narrowed the new-chat
+  // card, whose three selects then wrapped to a second row.
+  it("narrows only the transcript, leaving the surface axis the cards sit on alone", async () => {
     const css = await readStyles();
 
-    expect(css).toMatch(/--surface-measure:\s*35rem;/);
+    expect(css).toMatch(/--surface-measure:\s*48rem;/);
+    expect(css).toMatch(/--transcript-measure:\s*[\d.]+rem;/);
+
+    // The transcript is capped by BOTH: its own measure narrows it, and the
+    // surface axis still bounds it, so a reply can never be laid out wider
+    // than the composer that asked for it.
+    expect(ruleBody(css, ".transcript-column")).toMatch(
+      /max-width:\s*min\(\s*var\(--transcript-measure\),\s*var\(--surface-measure\)\s*\)/,
+    );
+
+    // Only the transcript gets the tighter measure; every other surface stays
+    // on the shared axis.
+    for (const selector of [".composer-input", ".new-chat-card"])
+      expect(ruleBody(css, selector)).toMatch(/var\(--surface-measure\)/);
+  });
+
+  // F5. A measure means nothing without the type set in it, so both halves
+  // are asserted together: 40rem at 1rem lands the median full line at 83
+  // characters, measured in Chrome across 48 real transcript paragraphs.
+  it("sets a reading measure and body copy that produce a comfortable line", async () => {
+    const css = await readStyles();
+
     expect(ruleBody(css, ".a-block")).toMatch(/font-size:\s*1rem;/);
     expect(ruleBody(css, ".u-bubble")).toMatch(/font-size:\s*1rem;/);
 
@@ -2003,6 +2024,47 @@ describe("shell layout and light-mode palette", () => {
     expect(gap, "paragraphs need an explicit bottom margin").not.toBeNull();
     const leading = /line-height:\s*([\d.]+);/.exec(ruleBody(css, ".markdown"));
     expect(Number(gap?.[1])).toBeGreaterThan(0.75 * Number(leading?.[1]));
+  });
+
+  // S6. The floor under --transcript-measure, and the reason it is not tuned
+  // purely for prose: this is a coding tool, and an 80-column block is the
+  // width code is written to. Prose would prefer 38rem; code needs 39.3rem;
+  // the token resolves that in code's favour, and this pins the floor so a
+  // future "let's tighten the measure" cannot quietly reintroduce the scroll.
+  it("keeps the transcript wide enough that an 80-column code block does not scroll", async () => {
+    const css = await readStyles();
+
+    // ui-monospace advances 0.6014em per character in Chrome, measured on the
+    // app's own `.markdown pre` at its computed 12.48px.
+    const monoAdvanceRatio = 0.6014;
+    const rootFontPx = 16;
+
+    const measure = /--transcript-measure:\s*([\d.]+)rem;/.exec(css);
+    expect(measure, "the transcript needs its own measure").not.toBeNull();
+
+    // This rule heads a selector list, so it is read directly rather than
+    // through ruleBody (which only matches a lone selector before its brace).
+    const pre = /\n\.markdown pre,[\s\S]*?\{([\s\S]*?)\}/.exec(css)?.[1] ?? "";
+    const fontRem = /font:\s*([\d.]+)rem\//.exec(pre);
+    const paddingRem = /padding:\s*([\d.]+)rem;/.exec(pre);
+    const borderPx = /border:\s*([\d.]+)px/.exec(pre);
+    for (const [name, match] of Object.entries({
+      fontRem,
+      paddingRem,
+      borderPx,
+    }))
+      expect(match, `.markdown pre should declare ${name}`).not.toBeNull();
+
+    const columnPx = Number(measure?.[1]) * rootFontPx;
+    const requiredPx =
+      80 * Number(fontRem?.[1]) * rootFontPx * monoAdvanceRatio +
+      2 * Number(paddingRem?.[1]) * rootFontPx +
+      2 * Number(borderPx?.[1]);
+
+    expect(
+      columnPx,
+      `an 80-column block needs ${requiredPx.toFixed(1)}px but the column is ${columnPx.toFixed(1)}px`,
+    ).toBeGreaterThanOrEqual(requiredPx);
   });
 
   // F11/F12. Red is the app's only irreversible-action signal, and archiving
@@ -2017,12 +2079,26 @@ describe("shell layout and light-mode palette", () => {
     // 53% black under a popover reads as a bruise on a near-white sidebar.
     const menu = ruleBody(css, ".thread-context-menu");
     expect(menu).toMatch(/box-shadow:\s*var\(--pop-shadow\)/);
-    const popShadow = /--pop-shadow:([\s\S]*?);/.exec(css)?.[1] ?? "";
-    const alphas = [...popShadow.matchAll(/rgba\([^)]*?,\s*([\d.]+)\)/g)].map(
-      (match) => Number(match[1]),
+
+    // Both themes are asserted, because they deliberately DIFFER and an
+    // earlier version of this test only ever read the first (light) block --
+    // it would have passed whatever dark held. Light must be quiet; dark must
+    // stay heavy, because a shadow tuned for a white page is invisible on a
+    // #131417 one. Neither value is allowed to drift into the other's range.
+    const declarations = [...css.matchAll(/--pop-shadow:([\s\S]*?);/g)].map(
+      (match) =>
+        [...(match[1] ?? "").matchAll(/rgba\([^)]*?,\s*([\d.]+)\)/g)].map(
+          (alpha) => Number(alpha[1]),
+        ),
     );
-    expect(alphas.length).toBeGreaterThan(0);
-    for (const alpha of alphas) expect(alpha).toBeLessThanOrEqual(0.15);
+    // One light :root, plus the prefers-color-scheme and [data-theme] blocks.
+    expect(declarations).toHaveLength(3);
+
+    const [light, ...dark] = declarations;
+    expect(light?.length).toBeGreaterThan(0);
+    for (const alpha of light ?? []) expect(alpha).toBeLessThanOrEqual(0.15);
+    for (const theme of dark)
+      for (const alpha of theme) expect(alpha).toBeGreaterThanOrEqual(0.3);
   });
 
   // F13. Neither of these had a ring at all: `outline: none` plus a hover
