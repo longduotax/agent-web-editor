@@ -192,6 +192,27 @@ function safeError(error: unknown): {
         message:
           "The requested path is hidden by this workspace's ignore rules.",
       },
+      // A directory that was expanded and persisted, and then deleted (H6).
+      path_not_found: {
+        status: 404,
+        code: "path_not_found",
+        message: "The requested path was not found.",
+      },
+      path_not_directory: {
+        status: 400,
+        code: "path_not_directory",
+        message: "The requested path is not a directory.",
+      },
+      path_unreadable: {
+        status: 403,
+        code: "path_unreadable",
+        message: "The requested path could not be read.",
+      },
+      file_not_regular: {
+        status: 400,
+        code: "file_not_regular",
+        message: "The requested path is not a regular file.",
+      },
       git_unavailable: {
         status: 409,
         code: "git_unavailable",

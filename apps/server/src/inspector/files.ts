@@ -45,6 +45,27 @@ function isGitInternal(relativePath: string): boolean {
   return relativePath.split("/").includes(".git");
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error))
+    return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/** A filesystem failure, as something the boundary can answer with. */
+function resolveFailure(error: unknown): Error {
+  const code = errorCode(error);
+  // A directory that was expanded and persisted, and then deleted, is the
+  // realistic case, and it answered 500 `internal_error` (H6).
+  if (code === "ENOENT" || code === "ENOTDIR")
+    return new Error("path_not_found", { cause: error });
+  if (code === "EACCES" || code === "EPERM")
+    return new Error("path_unreadable", { cause: error });
+  return error instanceof Error
+    ? error
+    : new Error("path_not_found", { cause: error });
+}
+
 export async function resolveContained(
   rootPath: string,
   rawRelativePath: unknown,
@@ -58,7 +79,12 @@ export async function resolveContained(
   if (isGitInternal(relativePath)) throw new Error("path_excluded");
   const lexical = resolve(root, ...relativePath.split("/"));
   if (!isContained(root, lexical)) throw new Error("path_escape");
-  const target = await realpath(lexical);
+  let target: string;
+  try {
+    target = await realpath(lexical);
+  } catch (error) {
+    throw resolveFailure(error);
+  }
   if (!isContained(root, target)) throw new Error("path_escape");
   return { root, target, relativePath };
 }
@@ -176,7 +202,20 @@ export async function listProjectFiles(
       // traversal must not follow one (design/inspector-and-terminal.md).
       walkable: boolean;
     }[] = [];
-    const handle = await opendir(directory);
+    let handle;
+    try {
+      handle = await opendir(directory);
+    } catch (error) {
+      // Only the requested root can fail here in practice — a child is
+      // reached from an entry that was just read — and it fails as something
+      // the client can act on rather than as an internal error (H6).
+      if (directory !== resolved.target) throw error;
+      // The resolve step proved the path exists, so `ENOTDIR` here means it
+      // exists and is a file: a different answer from "it is not there".
+      if (errorCode(error) === "ENOTDIR")
+        throw new Error("path_not_directory", { cause: error });
+      throw resolveFailure(error);
+    }
     for await (const entry of handle) {
       // Not an ignore rule and not revealed by the opt-in: `.git` is the
       // repository's own machinery, and reading it is not browsing.
@@ -313,9 +352,19 @@ export async function previewProjectFile(
   rawRelativePath: unknown,
 ) {
   const resolved = await resolveContained(rootPath, rawRelativePath);
-  const info = await stat(resolved.target);
-  if (!info.isFile()) throw new Error("file_not_regular");
-  const handle = await open(resolved.target, "r");
+  let info;
+  let handle;
+  try {
+    info = await stat(resolved.target);
+    if (!info.isFile()) throw new Error("file_not_regular");
+    handle = await open(resolved.target, "r");
+  } catch (error) {
+    // A file that disappeared between the resolve and the read is a scoped
+    // read error, never an internal one (H6).
+    if (error instanceof Error && error.message === "file_not_regular")
+      throw error;
+    throw resolveFailure(error);
+  }
   try {
     const capacity =
       Math.min(info.size, MAX_PREVIEW_BYTES) +

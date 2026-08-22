@@ -406,3 +406,29 @@ describe("the requested root obeys the same rules as any entry", () => {
     expect(tree.entries.map((entry) => entry.path)).toEqual(["dist/keep.js"]);
   });
 });
+
+describe("a path that is not there", () => {
+  it("is a typed not-found rather than an internal error", async () => {
+    const root = await repository();
+    await expect(
+      listProjectFiles(root, { depth: "1", path: "does/not/exist" }),
+    ).rejects.toThrow("path_not_found");
+    await expect(previewProjectFile(root, "gone.txt")).rejects.toThrow(
+      "path_not_found",
+    );
+  });
+
+  it("is a typed rejection when a file is asked to be a directory", async () => {
+    const root = await repository();
+    await expect(
+      listProjectFiles(root, { depth: "1", path: "README.md" }),
+    ).rejects.toThrow("path_not_directory");
+  });
+
+  it("is a typed rejection when a directory is asked to be a file", async () => {
+    const root = await repository();
+    await expect(previewProjectFile(root, "src")).rejects.toThrow(
+      "file_not_regular",
+    );
+  });
+});

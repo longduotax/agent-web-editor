@@ -320,6 +320,17 @@ describe("credential-free project API", () => {
       (await list("?path=node_modules&depth=1&showIgnored=true")).status,
     ).toBe(200);
 
+    // A directory that was expanded, persisted, and then deleted (H6). This
+    // answered 500 `internal_error`, which says nothing a client can act on.
+    const missing = await list("?path=does/not/exist&depth=1");
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({
+      error: {
+        code: "path_not_found",
+        message: "The requested path was not found.",
+      },
+    });
+    expect((await list("?path=README.md&depth=1")).status).toBe(400);
     // Containment itself was never at fault and stays where it was.
     expect((await list("?path=../../../etc&depth=1")).status).toBe(400);
 
@@ -333,6 +344,8 @@ describe("credential-free project API", () => {
     };
     // `.git/config` returned the file, remote URL and all.
     expect(await read("?path=.git/config")).toBe(403);
+    expect(await read("?path=does/not/exist")).toBe(404);
+    expect(await read("?path=src")).toBe(400);
     await server.close();
   });
 
