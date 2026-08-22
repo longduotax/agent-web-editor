@@ -2961,6 +2961,13 @@ test("panel diff: two hunks, two gutters, and a collapse that survives a reload"
   // Two edits thirty lines apart are two hunks, each under its own header.
   const hunks = page.getByRole("button", { name: /^@@/ });
   await expect(hunks).toHaveCount(2);
+  // K4: the header and the tally are separated in the computed name, so a
+  // screen reader does not read "…at at plus one minus one" as one run-on.
+  // It was `"@@ … @@ Ground truth is never a field on `Valuation`.+2 -0"` —
+  // "period plus two minus zero" — with nothing between the two spans.
+  await expect(
+    page.getByRole("button", { name: /^@@ -1,5 \+1,5 @@\s*,\s*\+1 -1$/ }),
+  ).toBeVisible();
   await expect(page.getByText("2 added")).toBeVisible();
   await expect(page.getByText("2 deleted")).toBeVisible();
   await expect(page.getByText("Unstaged")).toBeVisible();

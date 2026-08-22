@@ -282,6 +282,14 @@ function HunkView({
             {collapsed ? "▸" : "▾"}
           </span>
           <span className="diff-hunk-header">{hunk.header}</span>
+          {/* K4. This button takes its name from its content, and the two
+              spans either side of this one ran together into
+              `…on \`Subject\`/\`Trajectory\`/\`Valuation\`.+2 -0`, which a
+              screen reader reads as "period plus two minus zero". The
+              separator is here rather than in the tally's text because
+              nothing on screen needs it: the flex gap already separates
+              them for the eye. */}
+          <span className="sr-only">, </span>
           <span className="diff-hunk-tally">
             {`+${String(hunk.added)} -${String(hunk.deleted)}`}
           </span>

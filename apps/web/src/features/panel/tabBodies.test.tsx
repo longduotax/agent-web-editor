@@ -593,6 +593,36 @@ describe("DiffTab", () => {
     );
   });
 
+  it("separates the hunk header from its tally in the accessible name (K4)", async () => {
+    // Measured: `"@@ -43,6 +43,8 @@ Ground truth is never a field on
+    // `Subject`/`Trajectory`/`Valuation`.+2 -0"`, which a screen reader
+    // reads as "…period plus two minus zero" — the header's own trailing
+    // text runs straight into the tally with nothing between them. A
+    // visually hidden `", "` makes it a sentence with a pause in it, and
+    // changes nothing on screen.
+    api.getDiff.mockResolvedValue(diffOf());
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    // Tolerant of the separator's own spacing and not of what it separates,
+    // exactly as the Changes tab's kind-word case above is. The two
+    // implementations disagree about the whitespace and both are fine:
+    // jsdom trims each node and yields `@@ … @@,+1 -1`, Chrome puts a space
+    // either side of the out-of-flow `.sr-only` box and yields
+    // `@@ … @@ , +1 -1`. What matters is that the header no longer runs
+    // straight into the tally, which is what made it read as "period plus
+    // two minus zero".
+    expect(
+      await screen.findByRole("button", {
+        name: /^@@ -1,3 \+1,3 @@\s*,\s*\+1 -1$/,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: /^@@ -20,2 \+20,3 @@ function main\(\) \{\s*,\s*\+1 -0$/,
+      }),
+    ).toBeVisible();
+  });
+
   it("collapses a hunk into the tab's own record, and reopens it from there", async () => {
     const user = userEvent.setup();
     api.getDiff.mockResolvedValue(diffOf());
