@@ -185,7 +185,7 @@ function TabBodyHost({
   useLayoutEffect(() => {
     const parent = document.getElementById(groupBodiesElementId(groupId));
     const moved = parent !== null && host.parentNode !== parent;
-    if (moved && parent !== null) parent.appendChild(host);
+    if (moved) parent.appendChild(host);
     // Both ways a scroll offset is lost, and both are the browser's layout
     // rather than anything React does (measured in HeadlessChrome/151, on a
     // bare page as well as on this one):

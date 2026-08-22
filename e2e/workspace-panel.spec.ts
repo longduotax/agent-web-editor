@@ -168,6 +168,8 @@ declare const document: {
 };
 declare function getComputedStyle(element: ProbeElement): {
   display: string;
+  borderTopColor: string;
+  backgroundColor: string;
   boxShadow: string;
   opacity: string;
   position: string;
@@ -1284,6 +1286,88 @@ test("panel drag: releasing outside every drop target changes nothing", async ({
   });
 
   expect(await page.evaluate(panelLayout)).toEqual(before);
+});
+
+// G7. Discoverability: once a tab was picked up, every drop region was
+// fully transparent until the pointer was inside it, so the only way to
+// learn where the five targets were was to sweep the pointer around and
+// watch for a highlight. Each band now carries a faint outline for as long
+// as the drag lasts, in a token, so it reads in either theme — and the one
+// under the pointer is still plainly different from the other four.
+function bandOutlines() {
+  return [...document.querySelectorAll(".panel-drop-zones > *")].map(
+    (band) => ({
+      className: band.className,
+      border: getComputedStyle(band).borderTopColor,
+    }),
+  );
+}
+
+test("panel drag: every drop band is outlined while a drag is live, in both themes", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  const only = await pointsOfGroup(page, 0);
+
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await dragTabOver(page, "Changes", only.right);
+
+    const bands = await page.evaluate(bandOutlines);
+    // Four edges and a centre.
+    expect(bands, scheme).toHaveLength(5);
+    for (const band of bands)
+      expect(band.border, `${scheme} ${band.className}`).not.toBe(
+        "rgba(0, 0, 0, 0)",
+      );
+    const highlighted = bands.filter((band) =>
+      band.className.includes("active"),
+    );
+    const resting = bands.filter((band) => !band.className.includes("active"));
+    expect(highlighted, scheme).toHaveLength(1);
+    expect(highlighted[0]?.border, scheme).not.toBe(resting[0]?.border);
+
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+  }
+});
+
+// G4, in the shape it was reported in: the DEFAULT panel — one group, one
+// tab, which is also the state after every migration. Picking that tab up
+// and moving to any edge band highlighted it in the accent colour and
+// announced "Split Panel tab group to the right."; releasing answered
+// "Nothing moved." and changed nothing.
+test("panel drag: a drop that would be refused says so instead of highlighting", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  // The panel slides in over 180ms, and this case measures its geometry the
+  // moment it opens rather than after a menu interaction as the others do.
+  await page.waitForTimeout(400);
+  const before = await page.evaluate(panelLayout);
+
+  const only = await pointsOfGroup(page, 0);
+  await dragTabOver(page, "Changes", only.right);
+
+  const marks = await page.evaluate(() => ({
+    refused: [...document.querySelectorAll(".panel-drop-zones .refused")]
+      .length,
+    active: [...document.querySelectorAll(".panel-drop-zones .active")].length,
+  }));
+  expect(marks).toEqual({ refused: 1, active: 0 });
+  // The chord's own reason string, reused rather than reworded.
+  await expect(page.getByRole("status")).toContainText(
+    "Nothing to split — this group has one tab.",
+  );
+
+  await page.mouse.up();
+  expect(await page.evaluate(panelLayout)).toEqual({
+    ...before,
+    dropZones: 0,
+  });
 });
 
 // G3. A fast flick used to drop the whole gesture on the floor.

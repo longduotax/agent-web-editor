@@ -8,14 +8,15 @@ import {
 } from "react";
 
 import { leafIds } from "../layout/binaryTree.js";
-import { groupAccessibleName, panelGroupElementId } from "./TabGroupView.js";
+import { groupAccessibleName } from "./panelAnnouncements.js";
+import { panelGroupElementId } from "./TabGroupView.js";
 import type { GroupId, PanelState } from "./panelModel.js";
 import type { TabId } from "./panelTabs.js";
 import {
   DRAG_CANCELLED_MESSAGE,
   dragPickUpMessage,
+  dropAnnouncement,
   dropOutcomeMessage,
-  dropTargetMessage,
   moveIndexFor,
   planDrop,
   resolveDropTarget,
@@ -23,6 +24,7 @@ import {
   stripScrollStep,
   type DragPoint,
   type DragRect,
+  type DropPlan,
   type DropTarget,
   type GroupZone,
   type StripTabBox,
@@ -61,6 +63,15 @@ export interface TabDragState {
   title: string;
   /** What a release here would do, or null over no target at all. */
   target: DropTarget | null;
+  /**
+   * True when that target would be REFUSED — the commonest case being the
+   * edge bands of a group holding one tab, which is the default panel and
+   * the state after every migration. It used to highlight and announce
+   * exactly as an actionable target does and then answer the release with
+   * "Nothing moved." (G4). The target is still tracked, so the refusal can
+   * be drawn and named rather than silently ignored.
+   */
+  refused: boolean;
   /** The rectangles measured when the drag began. */
   zones: readonly GroupZone[];
 }
@@ -206,40 +217,78 @@ export function useTabDrag(
       };
     });
 
-  const announceTarget = (next: DropTarget) => {
+  /**
+   * What a release on `candidate` would do, against the panel as it is now.
+   *
+   * Resolved on every target change rather than only on the release (G4):
+   * the highlight and the announcement have to know whether the drop is
+   * actionable BEFORE they say it is.
+   */
+  const planFor = (candidate: DropTarget | null): DropPlan => {
+    const now = latest.current;
+    const source = tracking.current;
+    if (source === null) return { kind: "none", reason: "no-target" };
+    const group = now.groups[source.groupId];
+    return planDrop(
+      candidate,
+      {
+        groupId: source.groupId,
+        index: group?.tabIds.indexOf(source.tabId) ?? 0,
+        groupLength: group?.tabIds.length ?? 0,
+      },
+      candidate === null
+        ? 0
+        : (now.groups[candidate.groupId]?.tabIds.length ?? 0),
+    );
+  };
+
+  /** How the target under the pointer reads out loud. */
+  const targetAnnouncement = (
+    next: DropTarget | null,
+    plan: DropPlan,
+  ): string => {
     const current = latest.current;
     const source = tracking.current;
-    const ownGroup = source !== null && next.groupId === source.groupId;
+    if (next === null || source === null)
+      return dropAnnouncement(plan, null, {
+        groupLabel: "",
+        stripLength: 0,
+      });
+    const ownGroup = next.groupId === source.groupId;
     const length = current.groups[next.groupId]?.tabIds.length ?? 0;
     const at =
-      source === null
-        ? -1
-        : (current.groups[source.groupId]?.tabIds.indexOf(source.tabId) ?? -1);
-    actions.announce(
-      dropTargetMessage(
-        // A strip index counts the strip as it is now, and a tab moving
-        // within its own strip has to leave its old place first — so
-        // "position 3 of 2" is what an uncorrected index announces.
-        next.kind === "strip" && ownGroup
-          ? { ...next, index: moveIndexFor(next.index, at < 0 ? null : at) }
-          : next,
-        {
-          groupLabel: groupLabel(current, next.groupId),
-          // A tab arriving from another group makes that strip one longer,
-          // so "position 3 of 3" counts the tab being dropped.
-          stripLength: ownGroup ? length : length + 1,
-        },
-      ),
+      current.groups[source.groupId]?.tabIds.indexOf(source.tabId) ?? -1;
+    return dropAnnouncement(
+      plan,
+      // A strip index counts the strip as it is now, and a tab moving
+      // within its own strip has to leave its old place first — so
+      // "position 3 of 2" is what an uncorrected index announces.
+      next.kind === "strip" && ownGroup
+        ? { ...next, index: moveIndexFor(next.index, at < 0 ? null : at) }
+        : next,
+      {
+        groupLabel: groupLabel(current, next.groupId),
+        // A tab arriving from another group makes that strip one longer,
+        // so "position 3 of 3" counts the tab being dropped.
+        stripLength: ownGroup ? length : length + 1,
+      },
     );
   };
 
   const setTarget = (next: DropTarget | null) => {
     if (sameDropTarget(target.current, next)) return;
     target.current = next;
+    const plan = planFor(next);
     setDrag((current) =>
-      current === null ? current : { ...current, target: next },
+      current === null
+        ? current
+        : { ...current, target: next, refused: plan.kind === "none" },
     );
-    if (next !== null) announceTarget(next);
+    // Every change is announced, including leaving the last target for no
+    // target at all — which used to say nothing, leaving the live region
+    // still reading "Drop into … position 4 of 4." while a release there
+    // would have done nothing (G5).
+    actions.announce(targetAnnouncement(next, plan));
   };
 
   const releaseCapture = (current: Tracking) => {
@@ -276,25 +325,23 @@ export function useTabDrag(
   const commit = (current: Tracking) => {
     const now = latest.current;
     const chosen = target.current;
-    const source = now.groups[current.groupId];
-    const plan = planDrop(
-      chosen,
-      {
-        groupId: current.groupId,
-        index: source?.tabIds.indexOf(current.tabId) ?? 0,
-        groupLength: source?.tabIds.length ?? 0,
-      },
-      chosen === null ? 0 : (now.groups[chosen.groupId]?.tabIds.length ?? 0),
-    );
-    const label = groupLabel(
-      now,
-      plan.kind === "none" ? current.groupId : plan.groupId,
-    );
+    const plan = planFor(chosen);
+    const targetGroupId = plan.kind === "none" ? current.groupId : plan.groupId;
+    const sameGroup = targetGroupId === current.groupId;
+    const length = now.groups[targetGroupId]?.tabIds.length ?? 0;
     if (plan.kind === "move")
       actions.moveTab(current.tabId, plan.groupId, plan.index);
     else if (plan.kind === "split")
       actions.splitWithTab(current.tabId, plan.groupId, plan.edge);
-    finish(current, dropOutcomeMessage(plan, current.title, label));
+    finish(
+      current,
+      dropOutcomeMessage(plan, current.title, {
+        groupLabel: groupLabel(now, targetGroupId),
+        sameGroup,
+        // A tab arriving from another group makes that strip one longer.
+        stripLength: sameGroup ? length : length + 1,
+      }),
+    );
   };
 
   // Escape cancels (WSP-03), and a drag survives neither a scroll nor a
@@ -332,13 +379,29 @@ export function useTabDrag(
     zones.current = measureZones(latest.current, listElements.current);
     const next = resolveDropTarget(point.current, zones.current);
     target.current = next;
+    const plan = planFor(next);
     setDrag({
       tabId: current.tabId,
       title: current.title,
       target: next,
+      refused: plan.kind === "none",
       zones: zones.current,
     });
-    actions.announce(dragPickUpMessage(current.title));
+    // The pick-up and the target it is already over, in ONE message: two
+    // would overwrite each other in the live region, which is why the first
+    // target after a pick-up was never heard (G5).
+    actions.announce(
+      dragPickUpMessage(
+        current.title,
+        // Only an ACTIONABLE first target is worth naming here. A pick-up
+        // is by definition over the place the tab already is, and
+        // "Already here." as the first thing a drag says is noise; the
+        // plain wording tells the user what to do with the tab instead.
+        next === null || plan.kind === "none"
+          ? null
+          : targetAnnouncement(next, plan),
+      ),
+    );
   };
 
   const autoScrollStrip = () => {
@@ -426,6 +489,19 @@ export function useTabDrag(
         releaseCapture(current);
         tracking.current = null;
         return;
+      }
+      // A release resolves its OWN coordinates when they differ from the
+      // last move. Chrome always delivers a `pointermove` at the release
+      // point first, so this changes nothing for a real pointer — but a
+      // synthetic release, which is what an assistive or automation tool
+      // produces, otherwise commits the move to a target the pointer has
+      // since left, silently and with nothing the user can do about it.
+      if (
+        event.clientX !== point.current.x ||
+        event.clientY !== point.current.y
+      ) {
+        point.current = { x: event.clientX, y: event.clientY };
+        setTarget(resolveDropTarget(point.current, liveZones()));
       }
       commit(current);
     },

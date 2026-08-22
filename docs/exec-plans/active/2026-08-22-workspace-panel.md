@@ -1570,6 +1570,72 @@ case asserting either would pass in both directions.
    the drop zones mount and the drop commits, plus a jsdom case asserting
    where the capture is taken and that a plain click gets it back.
 
+4. **A drop that would be refused highlighted and announced as if it would
+   work (G4).** In the panel's default shape — one group, one tab, which is
+   also the state after every migration — picking that tab up and moving to
+   any edge band highlighted it in the accent colour and announced "Split
+   Panel tab group to the right."; the release then answered "Nothing moved."
+   and changed nothing. The keyboard route has had a real reason for exactly
+   this case since D8 (`SPLIT_NEEDS_TWO_TABS`); the drag never said it.
+
+   Fixed by resolving the plan on **every target change** rather than only on
+   the release: `planDrop` now carries a reason on its `none` case, the drag
+   holds a `refused` flag beside the target, a refused band is drawn in the
+   muted token with a solid border instead of the accent wash, and the live
+   region says the reason. The reason string is imported, not reworded — it
+   and `groupAccessibleName` moved into a new `panelAnnouncements.ts` so the
+   pointer route and the keyboard route say the same sentence about the same
+   thing.
+
+   Pinned by `tabDrag.test.ts` (the reason travels with the refusal),
+   `useTabDrag.test.tsx` (a refused band is drawn refused and named before
+   the release), and an e2e case in the default panel, which is the shape it
+   was reported in.
+
+5. **Four gaps in the drag narration (G5).** All four are closed:
+   - leaving every target used to announce nothing, so the live region went
+     on reading "Drop into … position 4 of 4." while a release there would do
+     nothing. `setTarget` now announces every change, including the change to
+     no target at all;
+   - the first target after a pick-up was never announced, because
+     `startDrag` assigned `target.current` directly. The pick-up and its
+     first target are now **one** message rather than two, because two
+     overwrite each other in a live region before it has read the first — and
+     an "already here" first target is left unsaid, since a pick-up is by
+     definition over the place the tab already is;
+   - every successful chord was silent — only refusals spoke — so the route a
+     screen-reader user actually has narrated nothing while the pointer route
+     narrated everything. `panel-move-tab`, `panel-split`, and
+     `panel-close-tab` now announce what they did, sharing the drag's
+     wordings; a chord that changed nothing still says nothing;
+   - an in-strip reorder announced "Moved Changes into Panel tab group." — no
+     position, and "into" a group it never left. A move now names the
+     position and the strip, and says "into" only when the tab actually
+     changed groups.
+
+   Pinned in `tabDrag.test.ts`, `panelCommands.test.ts`, and
+   `useTabDrag.test.tsx`.
+
+6. **Discoverability of the drop targets (G7, accepted from the pass's
+   subjective section).** With the ghost visible again (G2), the remaining
+   gap was that all five regions were fully transparent until the pointer was
+   inside one. Each band now carries a faint dashed hairline in
+   `--hairline-2` for as long as the drag lasts — quiet on purpose, over a
+   running terminal — and the band under the pointer is still plainly
+   different. Pinned by an e2e case that reads the computed border colour of
+   all five bands in **both** colour schemes and asserts none is transparent
+   and the highlighted one differs.
+
+**The robustness note about `commit()` — considered, and acted on.** The
+reviewer could not reproduce the misfire with real input because Chrome
+always delivers a `pointermove` at the release point first, and this pass did
+not reproduce it either. It is still resolved from `pointerup`'s own
+coordinates when they differ from the last move, because the cost is one
+comparison and the failure mode it removes — committing a move to a target
+the pointer has left — is silent and unrecoverable by the user. A synthetic
+release far from the last move is exactly what an assistive or automation
+tool produces, so "no real pointer does this" is not the whole population.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.

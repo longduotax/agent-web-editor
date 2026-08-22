@@ -1,13 +1,22 @@
 import { leafIds } from "../layout/binaryTree.js";
 import type { PanelCommand } from "../workspace/keybindings.js";
 import {
+  closedTabMessage,
+  groupAccessibleName,
+  movedTabMessage,
+  splitOutcomeMessage,
+  SPLIT_NEEDS_TWO_TABS,
+} from "./panelAnnouncements.js";
+import {
   activateTab,
   closeTab,
   moveTab,
   setPanelOpen,
   splitGroupWithTab,
 } from "./panelModel.js";
-import type { PanelState } from "./panelModel.js";
+import type { GroupId, PanelState } from "./panelModel.js";
+import { tabTitle } from "./panelTabs.js";
+import type { TabId } from "./panelTabs.js";
 
 // The keyboard half of WSP-10: every panel command is a pure state
 // transform, so the chords and the drag gestures drive exactly the same
@@ -40,23 +49,9 @@ export interface PanelCommandResult {
   announcement: string | null;
 }
 
-/**
- * Why a split chord can refuse.
- *
- * The model will not split a group holding a single tab: the tab would leave
- * its group empty and the "new" half would hold exactly what the old one
- * showed. That is the default state of a fresh panel and the state after
- * every migration, so all four split chords were a silent no-op in the most
- * common case there is (D8).
- *
- * It is NOT fixed by opening a copy of the tab in the new group, VS Code
- * style. `openTab` dedupes on `sameTarget`, so two tabs addressing the same
- * thing are unrepresentable by construction — a copy cannot exist, and
- * proposing one again will not make it exist. What the chord owes the user
- * instead is to say why nothing happened, which is this.
- */
-export const SPLIT_NEEDS_TWO_TABS =
-  "Nothing to split — this group has one tab.";
+// Why a split chord can refuse, and the words it refuses in, both live in
+// `panelAnnouncements.ts` — the drag says the same sentence when it is over
+// the edge band of a group holding one tab (G4).
 
 function unchanged(state: PanelState): PanelCommandResult {
   return { state, announcement: null };
@@ -64,6 +59,37 @@ function unchanged(state: PanelState): PanelCommandResult {
 
 function applied(state: PanelState): PanelCommandResult {
   return { state, announcement: null };
+}
+
+/**
+ * A command that DID something, and says so (G5).
+ *
+ * Every successful chord used to be silent: only a refusal reached the live
+ * region, so a screen-reader user driving the panel from the keyboard — the
+ * route WSP-10 exists to guarantee — heard about the operations that did not
+ * happen and nothing about the ones that did. The pointer route narrated all
+ * of it. An unchanged state still says nothing, because nothing happened.
+ */
+function announced(
+  before: PanelState,
+  after: PanelState,
+  message: string,
+): PanelCommandResult {
+  return {
+    state: after,
+    announcement: after === before ? null : message,
+  };
+}
+
+/** A group's own accessible name, so an announcement names one of two. */
+function labelOf(state: PanelState, groupId: GroupId): string {
+  const order = leafIds(state.root);
+  return groupAccessibleName(order.indexOf(groupId) + 1, order.length);
+}
+
+function titleOf(state: PanelState, tabId: TabId): string {
+  const tab = state.tabs[tabId];
+  return tab === undefined ? "tab" : tabTitle(tab);
 }
 
 function activeTabOf(state: PanelState): {
@@ -113,9 +139,13 @@ export function applyPanelCommand(
     }
     case "panel-close-tab": {
       const active = activeTabOf(state);
-      return active === null
-        ? unchanged(state)
-        : applied(closeTab(state, active.tabId));
+      if (active === null) return unchanged(state);
+      const title = titleOf(state, active.tabId);
+      return announced(
+        state,
+        closeTab(state, active.tabId),
+        closedTabMessage(title),
+      );
     }
     case "panel-move-tab": {
       const active = activeTabOf(state);
@@ -129,8 +159,18 @@ export function applyPanelCommand(
       // one. The index is already the post-removal index `moveTab` wants:
       // stepping one place either way moves the tab past exactly one
       // neighbour whichever side it leaves from.
+      const title = titleOf(state, active.tabId);
       if (at >= 0 && within >= 0 && within < strip.length)
-        return applied(moveTab(state, active.tabId, active.groupId, within));
+        return announced(
+          state,
+          moveTab(state, active.tabId, active.groupId, within),
+          movedTabMessage(title, {
+            groupLabel: labelOf(state, active.groupId),
+            sameGroup: true,
+            index: within,
+            stripLength: strip.length,
+          }),
+        );
       // Off the end of the strip, so the tab leaves the group — entering the
       // next one from the side it left this one, which is the position a
       // user can predict. An index carried over from another strip would
@@ -139,13 +179,17 @@ export function applyPanelCommand(
       const target = neighbour(groups, active.groupId, command.direction);
       if (target === null || target === active.groupId) return unchanged(state);
       const length = state.groups[target]?.tabIds.length ?? 0;
-      return applied(
-        moveTab(
-          state,
-          active.tabId,
-          target,
-          command.direction === "next" ? 0 : length,
-        ),
+      const index = command.direction === "next" ? 0 : length;
+      return announced(
+        state,
+        moveTab(state, active.tabId, target, index),
+        movedTabMessage(title, {
+          groupLabel: labelOf(state, target),
+          sameGroup: false,
+          index,
+          // The tab being moved in makes that strip one longer.
+          stripLength: length + 1,
+        }),
       );
     }
     case "panel-split": {
@@ -155,13 +199,19 @@ export function applyPanelCommand(
       const strip = state.groups[active.groupId]?.tabIds ?? [];
       if (strip.length < 2)
         return { state, announcement: SPLIT_NEEDS_TWO_TABS };
-      return applied(
+      return announced(
+        state,
         splitGroupWithTab(
           state,
           active.tabId,
           active.groupId,
           command.edge,
           makeId,
+        ),
+        splitOutcomeMessage(
+          titleOf(state, active.tabId),
+          labelOf(state, active.groupId),
+          command.edge,
         ),
       );
     }

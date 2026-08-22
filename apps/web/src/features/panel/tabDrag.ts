@@ -1,3 +1,10 @@
+import {
+  dropRefusalMessage,
+  movedTabMessage,
+  splitOutcomeMessage,
+  EDGE_WORDS,
+  type DropRefusal,
+} from "./panelAnnouncements.js";
 import type { GroupId, PanelEdge } from "./panelModel.js";
 import type { TabId } from "./panelTabs.js";
 
@@ -226,7 +233,14 @@ export function moveIndexFor(
 export type DropPlan =
   | { kind: "move"; groupId: GroupId; index: number }
   | { kind: "split"; groupId: GroupId; edge: PanelEdge }
-  | { kind: "none" };
+  /**
+   * Nothing — and WHY nothing, because the drag now has to know that before
+   * it highlights the target rather than after it has been released on it
+   * (G4). A refused target is drawn as refused and says its reason; it used
+   * to highlight and announce exactly as an actionable one does, and then
+   * answer the release with "Nothing moved."
+   */
+  | { kind: "none"; reason: DropRefusal };
 
 /**
  * Turns a target into a model call, or into nothing at all.
@@ -243,19 +257,19 @@ export function planDrop(
   source: { groupId: GroupId; index: number; groupLength: number },
   targetGroupLength: number,
 ): DropPlan {
-  if (target === null) return { kind: "none" };
+  if (target === null) return { kind: "none", reason: "no-target" };
   const ownGroup = target.groupId === source.groupId;
   switch (target.kind) {
     case "centre":
       // WSP-03 names this one explicitly: a tab dropped on the centre of the
       // group it is already in has arrived where it already is.
       return ownGroup
-        ? { kind: "none" }
+        ? { kind: "none", reason: "already-there" }
         : { kind: "move", groupId: target.groupId, index: targetGroupLength };
     case "strip": {
       const index = moveIndexFor(target.index, ownGroup ? source.index : null);
       return ownGroup && index === source.index
-        ? { kind: "none" }
+        ? { kind: "none", reason: "already-there" }
         : { kind: "move", groupId: target.groupId, index };
     }
     case "edge":
@@ -263,7 +277,7 @@ export function planDrop(
       // would leave the old half empty and the new half would hold exactly
       // what the old one showed.
       return ownGroup && source.groupLength === 1
-        ? { kind: "none" }
+        ? { kind: "none", reason: "split-needs-two-tabs" }
         : { kind: "split", groupId: target.groupId, edge: target.edge };
   }
 }
@@ -283,18 +297,38 @@ export function sameDropTarget(
 // unless it is narrated, so the pick-up, every change of target, and the
 // outcome each go to the panel's one live region.
 
-const EDGE_WORDS: Record<PanelEdge, string> = {
-  left: "to the left",
-  right: "to the right",
-  top: "above",
-  bottom: "below",
-};
-
 export const DRAG_CANCELLED_MESSAGE = "Drag cancelled. Nothing moved.";
 export const DRAG_UNCHANGED_MESSAGE = "Nothing moved.";
 
-export function dragPickUpMessage(title: string): string {
-  return `Dragging ${title}. Move it over a tab group, or press Escape to cancel.`;
+/**
+ * The pick-up, and what the pointer is already over.
+ *
+ * They are one sentence because they are one moment. Announcing the pick-up
+ * and then the first target as two messages means the second overwrites the
+ * first before a live region has read it, which is why the first target
+ * after a pick-up was never announced at all (G5): `startDrag` assigned the
+ * target directly and never spoke it, and a drag straight out of the panel
+ * produced two messages in total, the pick-up and "Nothing moved."
+ */
+export function dragPickUpMessage(
+  title: string,
+  target: string | null,
+): string {
+  return target === null
+    ? `Dragging ${title}. Move it over a tab group, or press Escape to cancel.`
+    : `Dragging ${title}. ${target} Press Escape to cancel.`;
+}
+
+/** What the live region says about the target the pointer is over. */
+export function dropAnnouncement(
+  plan: DropPlan,
+  target: DropTarget | null,
+  label: DropTargetLabel,
+): string {
+  if (plan.kind === "none") return dropRefusalMessage(plan.reason);
+  return target === null
+    ? DRAG_UNCHANGED_MESSAGE
+    : dropTargetMessage(target, label);
 }
 
 export interface DropTargetLabel {
@@ -323,13 +357,18 @@ export function dropTargetMessage(
 export function dropOutcomeMessage(
   plan: DropPlan,
   title: string,
-  groupLabel: string,
+  label: { groupLabel: string; sameGroup: boolean; stripLength: number },
 ): string {
   switch (plan.kind) {
     case "move":
-      return `Moved ${title} into ${groupLabel}.`;
+      return movedTabMessage(title, {
+        groupLabel: label.groupLabel,
+        sameGroup: label.sameGroup,
+        index: plan.index,
+        stripLength: label.stripLength,
+      });
     case "split":
-      return `Split ${groupLabel} ${EDGE_WORDS[plan.edge]} with ${title}.`;
+      return splitOutcomeMessage(title, label.groupLabel, plan.edge);
     case "none":
       return DRAG_UNCHANGED_MESSAGE;
   }

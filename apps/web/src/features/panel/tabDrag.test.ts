@@ -5,6 +5,7 @@ import {
   DRAG_CANCELLED_MESSAGE,
   DRAG_UNCHANGED_MESSAGE,
   dragPickUpMessage,
+  dropAnnouncement,
   dropOutcomeMessage,
   dropTargetMessage,
   edgeBands,
@@ -19,6 +20,11 @@ import {
   type GroupZone,
   type StripZone,
 } from "./tabDrag.js";
+import {
+  DROP_ALREADY_THERE_MESSAGE,
+  DROP_NO_TARGET_MESSAGE,
+  SPLIT_NEEDS_TWO_TABS,
+} from "./panelAnnouncements.js";
 import {
   PANEL_MIN_GROUP_HEIGHT,
   PANEL_MIN_GROUP_WIDTH,
@@ -269,14 +275,17 @@ describe("planDrop", () => {
   const source = { groupId: "group-1", index: 1, groupLength: 3 };
 
   it("does nothing when the drag ended outside every target", () => {
-    expect(planDrop(null, source, 3)).toEqual({ kind: "none" });
+    expect(planDrop(null, source, 3)).toEqual({
+      kind: "none",
+      reason: "no-target",
+    });
   });
 
   // WSP-03: "Dragging a tab onto its own group's centre is a no-op that does
   // not disturb the layout."
   it("does nothing on its own group's centre", () => {
     expect(planDrop({ kind: "centre", groupId: "group-1" }, source, 3)).toEqual(
-      { kind: "none" },
+      { kind: "none", reason: "already-there" },
     );
   });
 
@@ -289,11 +298,11 @@ describe("planDrop", () => {
   it("does nothing when a strip drop lands where the tab already is", () => {
     expect(
       planDrop({ kind: "strip", groupId: "group-1", index: 1 }, source, 3),
-    ).toEqual({ kind: "none" });
+    ).toEqual({ kind: "none", reason: "already-there" });
     // Either side of the tab is the same position once the tab has left.
     expect(
       planDrop({ kind: "strip", groupId: "group-1", index: 2 }, source, 3),
-    ).toEqual({ kind: "none" });
+    ).toEqual({ kind: "none", reason: "already-there" });
   });
 
   it("reorders within its own strip", () => {
@@ -327,7 +336,9 @@ describe("planDrop", () => {
         { groupId: "group-1", index: 0, groupLength: 1 },
         1,
       ),
-    ).toEqual({ kind: "none" });
+      // G4: the reason travels with the refusal, because the drag has to
+      // draw and say it BEFORE the release rather than after it.
+    ).toEqual({ kind: "none", reason: "split-needs-two-tabs" });
   });
 });
 
@@ -360,8 +371,21 @@ describe("sameDropTarget", () => {
 // target as it changes, and the outcome.
 describe("announcements", () => {
   it("names the tab on pick-up and says how to abandon the drag", () => {
-    expect(dragPickUpMessage("Changes")).toContain("Changes");
-    expect(dragPickUpMessage("Changes")).toContain("Escape");
+    expect(dragPickUpMessage("Changes", null)).toContain("Changes");
+    expect(dragPickUpMessage("Changes", null)).toContain("Escape");
+  });
+
+  // G5: the first target after a pick-up was never announced, because the
+  // pick-up and the target were two messages and the second overwrote the
+  // first before a live region had read it. They are one message now.
+  it("carries the first target in the pick-up message", () => {
+    const message = dragPickUpMessage(
+      "Changes",
+      "Drop into Panel tab group 2 of 2.",
+    );
+    expect(message).toBe(
+      "Dragging Changes. Drop into Panel tab group 2 of 2. Press Escape to cancel.",
+    );
   });
 
   it("names the group and the position for a strip target", () => {
@@ -400,23 +424,73 @@ describe("announcements", () => {
     ).toBe("Split Panel tab group above.");
   });
 
-  it("says what the drop did", () => {
+  // G4 and G5, the two halves of the same defect: a target that would be
+  // refused must say WHY rather than describe the action it will not take,
+  // and leaving every target must say something rather than leave the live
+  // region reading the last target the pointer happened to cross.
+  it("says why, for a target that would be refused", () => {
+    const label = { groupLabel: "Panel tab group", stripLength: 1 };
     expect(
-      dropOutcomeMessage(
-        { kind: "move", groupId: "g", index: 0 },
-        "Changes",
-        "Panel tab group 1 of 2",
+      dropAnnouncement(
+        { kind: "none", reason: "split-needs-two-tabs" },
+        { kind: "edge", groupId: "g", edge: "right" },
+        label,
       ),
-    ).toBe("Moved Changes into Panel tab group 1 of 2.");
+      // The chord's reason string, reused rather than reworded.
+    ).toBe(SPLIT_NEEDS_TWO_TABS);
+    expect(
+      dropAnnouncement(
+        { kind: "none", reason: "already-there" },
+        { kind: "centre", groupId: "g" },
+        label,
+      ),
+    ).toBe(DROP_ALREADY_THERE_MESSAGE);
+    expect(
+      dropAnnouncement({ kind: "none", reason: "no-target" }, null, label),
+    ).toBe(DROP_NO_TARGET_MESSAGE);
+  });
+
+  it("describes the action for a target that would work", () => {
+    expect(
+      dropAnnouncement(
+        { kind: "move", groupId: "g", index: 1 },
+        { kind: "centre", groupId: "g" },
+        { groupLabel: "Panel tab group 2 of 2", stripLength: 2 },
+      ),
+    ).toBe("Drop into Panel tab group 2 of 2.");
+  });
+
+  it("says what the drop did, and where the tab landed", () => {
+    expect(
+      dropOutcomeMessage({ kind: "move", groupId: "g", index: 2 }, "Changes", {
+        groupLabel: "Panel tab group 1 of 2",
+        sameGroup: false,
+        stripLength: 3,
+      }),
+    ).toBe("Moved Changes into Panel tab group 1 of 2, position 3 of 3.");
+    // G5: a reorder within one strip used to be announced as "Moved Changes
+    // into Panel tab group." — no position, and "into" a group it never
+    // left.
+    expect(
+      dropOutcomeMessage({ kind: "move", groupId: "g", index: 1 }, "Changes", {
+        groupLabel: "Panel tab group",
+        sameGroup: true,
+        stripLength: 2,
+      }),
+    ).toBe("Moved Changes to position 2 of 2 in Panel tab group.");
     expect(
       dropOutcomeMessage(
         { kind: "split", groupId: "g", edge: "bottom" },
         "Changes",
-        "Panel tab group",
+        { groupLabel: "Panel tab group", sameGroup: false, stripLength: 1 },
       ),
     ).toBe("Split Panel tab group below with Changes.");
     expect(
-      dropOutcomeMessage({ kind: "none" }, "Changes", "Panel tab group"),
+      dropOutcomeMessage({ kind: "none", reason: "no-target" }, "Changes", {
+        groupLabel: "Panel tab group",
+        sameGroup: true,
+        stripLength: 2,
+      }),
     ).toBe(DRAG_UNCHANGED_MESSAGE);
   });
 

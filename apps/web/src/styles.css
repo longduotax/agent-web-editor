@@ -1840,10 +1840,17 @@ a:focus-visible {
   left: 0;
   pointer-events: none;
 }
+/* Every band carries a faint outline for as long as the drag lasts (G7).
+   Before this the five targets were fully transparent until the pointer was
+   inside one, so the only way to learn where they were was to sweep the
+   pointer around and watch for a highlight. It is deliberately quiet — a
+   hairline in the same token the panel's own seams use, not a wash of
+   colour — because the surrounding surface is calm and five glowing
+   rectangles over a running terminal would not be. */
 .panel-drop-edge,
 .panel-drop-centre {
   position: absolute;
-  border: 1px dashed transparent;
+  border: 1px dashed var(--hairline-2);
   border-radius: 0.3rem;
 }
 .panel-drop-top,
@@ -1869,6 +1876,22 @@ a:focus-visible {
 .panel-drop-centre.active {
   border-color: var(--blue);
   background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+/* A target the drop would REFUSE looks nothing like one that would work
+   (G4). It is still highlighted — the user is pointing at it and deserves an
+   answer — but in the muted token rather than the accent, with a solid
+   border rather than the dashed at-rest one, and the live region says the
+   reason at the same moment. Both colours are tokens, so this reads in
+   either theme. */
+.panel-drop-edge.refused,
+.panel-drop-centre.refused,
+.panel-drop-caret.refused {
+  border-color: var(--muted);
+  border-style: solid;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.panel-drop-caret.refused {
+  background: var(--muted);
 }
 /* The insertion point inside a strip. Absolutely positioned inside the
    strip's own scroller, so it scrolls with the tabs it sits between. */

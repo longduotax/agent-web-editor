@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 
+import { groupAccessibleName } from "./panelAnnouncements.js";
 import { groupBodiesElementId } from "./PanelBodies.js";
 import type { GroupId, TabGroup } from "./panelModel.js";
 import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
@@ -34,19 +35,6 @@ export interface TabGroupViewProps {
   /** How many groups the panel holds, so a lone group needs no number. */
   groupCount: number;
   onClosePanel?: (() => void) | undefined;
-}
-
-/**
- * A split panel would otherwise expose two landmarks both called "Panel tab
- * group" and two tablists both called "Panel tabs", which a screen-reader
- * user cannot tell apart (WSP-10). Numbering them in reading order is stable
- * under tab switching — an active tab's title is not — and a single group
- * keeps the plain name, because there is nothing to distinguish it from.
- */
-export function groupAccessibleName(index: number, groupCount: number): string {
-  return groupCount > 1
-    ? `Panel tab group ${String(index)} of ${String(groupCount)}`
-    : "Panel tab group";
 }
 
 export function TabGroupView(props: TabGroupViewProps): JSX.Element {
@@ -97,6 +85,7 @@ export function TabGroupView(props: TabGroupViewProps): JSX.Element {
           groupId={group.id}
           zone={drag.zoneFor(group.id)}
           target={drag.drag.target}
+          refused={drag.drag.refused}
         />
       )}
     </section>

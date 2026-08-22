@@ -28,6 +28,7 @@ export function TabDropZones({
   groupId,
   zone,
   target,
+  refused,
 }: {
   groupId: GroupId;
   /**
@@ -36,11 +37,20 @@ export function TabDropZones({
    */
   zone: GroupZone | undefined;
   target: DropTarget | null;
+  /**
+   * Whether a release on `target` would be refused (G4). A refused target
+   * is drawn as refused rather than as the action it will not take: the
+   * commonest case is the edge bands of a group holding one tab, which is
+   * the default panel, and they used to highlight in the same blue as a
+   * split that would actually happen.
+   */
+  refused: boolean;
 }): JSX.Element | null {
   if (zone === undefined) return null;
   const body = contentRect(zone);
   const bands = edgeBands(body);
   const active = target !== null && target.groupId === groupId ? target : null;
+  const state = refused ? "refused" : "active";
   return (
     <div
       className="panel-drop-zones"
@@ -53,14 +63,14 @@ export function TabDropZones({
         <div
           key={edge}
           className={`panel-drop-edge panel-drop-${edge} ${
-            active?.kind === "edge" && active.edge === edge ? "active" : ""
+            active?.kind === "edge" && active.edge === edge ? state : ""
           }`}
           style={edgeStyle(edge, bands)}
         />
       ))}
       <div
         className={`panel-drop-centre ${
-          active?.kind === "centre" ? "active" : ""
+          active?.kind === "centre" ? state : ""
         }`}
         style={{
           top: bands.y,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { applyPanelCommand, SPLIT_NEEDS_TWO_TABS } from "./panelCommands.js";
+import { applyPanelCommand } from "./panelCommands.js";
+import { SPLIT_NEEDS_TWO_TABS } from "./panelAnnouncements.js";
 import {
   createEmptyPanel,
   openTab,
@@ -111,14 +112,53 @@ describe("applyPanelCommand", () => {
     expect(result.announcement).toBe(SPLIT_NEEDS_TWO_TABS);
   });
 
-  it("announces nothing when a split does what it says", () => {
+  // G5. A chord that WORKS says so too. Every successful chord used to be
+  // silent — only refusals reached the live region — so a keyboard user, who
+  // is the whole reason WSP-10 requires these chords, heard about the things
+  // that did not happen and nothing about the things that did. The pointer
+  // route narrated all of it.
+  it("says what a split did", () => {
     const makeId = ids();
     const result = applyPanelCommand(
       panelWith(2, makeId),
       { type: "panel-split", edge: "right" },
       makeId,
     );
-    expect(result.announcement).toBeNull();
+    expect(result.state).not.toBe(null);
+    expect(result.announcement).toBe(
+      "Split Panel tab group to the right with dir-1.",
+    );
+  });
+
+  it("says where a reordered tab landed, and in which strip", () => {
+    const makeId = ids();
+    const state = panelWith(3, makeId);
+    // The active tab is the last in the strip, so "previous" walks it one
+    // place along rather than out of the group.
+    const result = applyPanelCommand(
+      state,
+      { type: "panel-move-tab", direction: "previous" },
+      makeId,
+    );
+    expect(result.state).not.toBe(state);
+    // "into" a group it never left, with no position at all, is what this
+    // used to say when the drag did it and what it said nothing about when
+    // a chord did.
+    expect(result.announcement).toBe(
+      "Moved dir-2 to position 2 of 3 in Panel tab group.",
+    );
+  });
+
+  it("says which tab it closed", () => {
+    const makeId = ids();
+    const state = panelWith(2, makeId);
+    const result = applyPanelCommand(
+      state,
+      { type: "panel-close-tab" },
+      makeId,
+    );
+    expect(result.state).not.toBe(state);
+    expect(result.announcement).toBe("Closed dir-1.");
   });
 
   it("moves the active tab into the next group and wraps", () => {

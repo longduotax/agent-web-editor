@@ -427,7 +427,7 @@ describe("dragging a panel tab", () => {
       "true",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Moved Changes into Panel tab group 2 of 2.",
+      "Moved Changes into Panel tab group 2 of 2, position 2 of 2.",
     );
   });
 
@@ -455,6 +455,66 @@ describe("dragging a panel tab", () => {
     );
   });
 
+  // G4. The commonest drop target in the product is the edge band of a group
+  // holding one tab — the default panel, and the state after every migration
+  // — and it used to highlight in the same blue as a split that would
+  // actually happen and announce "Split Panel tab group to the right.",
+  // answering the release with "Nothing moved."
+  it("draws and names a refused target as refused, before the release", () => {
+    const store = stubStorage();
+    seedTwoGroups(store);
+    renderPanel();
+
+    // The right group holds exactly one tab, so it cannot be split with it.
+    const file = screen.getByRole("tab", { name: "main.ts" });
+    beginDrag(file, { x: LAYOUT.rightGroupX + 20, y: 20 });
+    const ownEdge = {
+      x: LAYOUT.rightGroupX + LAYOUT.groupWidth - 5,
+      y: 300,
+    };
+    movePointer(file, ownEdge);
+
+    expect(
+      document.querySelectorAll(".panel-drop-zones .refused"),
+    ).toHaveLength(1);
+    expect(document.querySelectorAll(".panel-drop-zones .active")).toHaveLength(
+      0,
+    );
+    // The chord's reason string, not a second wording of it.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Nothing to split — this group has one tab.",
+    );
+
+    release(file, ownEdge);
+    expect(tabsOf(1)).toEqual(["main.ts×"]);
+    expect(screen.getAllByRole("tablist")).toHaveLength(2);
+    expect(screen.getByRole("status")).toHaveTextContent("Nothing moved.");
+  });
+
+  // G5. Moving off the last target used to announce nothing at all, leaving
+  // the live region still reading "Drop into … position 4 of 4." while a
+  // release there would have done nothing.
+  it("announces leaving every target as well as entering one", () => {
+    const store = stubStorage();
+    seedTwoGroups(store);
+    renderPanel();
+
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    beginDrag(changes);
+    movePointer(changes, RIGHT_CENTRE);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Drop into Panel tab group 2 of 2.",
+    );
+
+    // Out over the chat surface, which is left of the panel.
+    movePointer(changes, { x: 200, y: 300 });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No drop target here. Releasing now leaves everything where it is.",
+    );
+
+    release(changes, { x: 200, y: 300 });
+  });
+
   it("reorders within its own strip", () => {
     const store = stubStorage();
     seedTwoGroups(store);
@@ -474,6 +534,31 @@ describe("dragging a panel tab", () => {
     release(changes, afterFiles);
 
     expect(tabsOf(0)).toEqual(["Files×", "Changes×"]);
+    // G5: not "Moved Changes into Panel tab group 1 of 2." — a reorder does
+    // not go INTO a group it never left, and where it landed is the whole
+    // point of the gesture.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Moved Changes to position 2 of 2 in Panel tab group 1 of 2.",
+    );
+  });
+
+  // Not a defect anyone reproduced with a real pointer — Chrome delivers a
+  // move at the release point first — but a release whose coordinates differ
+  // from the last move used to commit to wherever the last move had been,
+  // silently. A synthetic release is exactly what an automation or assistive
+  // tool produces.
+  it("resolves the target from the release when it differs from the last move", () => {
+    const store = stubStorage();
+    seedTwoGroups(store);
+    renderPanel();
+
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    beginDrag(changes);
+    movePointer(changes, OWN_CENTRE);
+    release(changes, RIGHT_CENTRE);
+
+    expect(tabsOf(0)).toEqual(["Files×"]);
+    expect(tabsOf(1)).toEqual(["main.ts×", "Changes×"]);
   });
 
   // WSP-03 names this case explicitly.

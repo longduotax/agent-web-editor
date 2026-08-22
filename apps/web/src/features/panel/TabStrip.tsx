@@ -152,7 +152,7 @@ export function TabStrip(props: TabStripProps): JSX.Element {
           dropZone?.strip !== undefined &&
           dropZone.strip !== null && (
             <div
-              className="panel-drop-caret"
+              className={`panel-drop-caret ${drag.drag?.refused === true ? "refused" : ""}`}
               aria-hidden="true"
               style={{ left: stripCaretOffset(dropZone.strip, dropIndex) }}
             />
