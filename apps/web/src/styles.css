@@ -2175,11 +2175,21 @@ a:focus-visible {
 .file-preview > * {
   flex: none;
 }
+/* Whichever of the two the tab is showing, it is the ONE thing that grows
+   and the one thing that scrolls, bounded to the tab's own height. That is
+   what keeps a long line's scrollbar on screen instead of a thousand pixels
+   below it (F2), and it is also the element `PanelBodies` records the offset
+   of, so a switch or a drag comes back to the same place (G1). */
 .file-preview > pre,
+.file-preview > .file-markdown,
 .diff-view > .diff-body {
   min-height: 0;
   flex: 1;
   overflow: auto;
+}
+.file-preview > .file-markdown {
+  padding: 0.9rem;
+  font-size: 0.86rem;
 }
 /* The diff's sections scroll together, in one box, so the two panes of a
    staged/unstaged diff cannot slide out of alignment with each other. */
@@ -2271,12 +2281,40 @@ a:focus-visible {
 .diff-view h4 {
   margin: 0.7rem;
 }
+/* The file's own text and the diff's, which fill the tab. A fenced code
+   block INSIDE a previewed markdown file is not this — it is a box in a
+   document — so this names the direct child rather than every `pre`. */
 .diff-view pre,
-.file-preview pre {
+.file-preview > pre {
   margin: 0;
   border: 0;
   border-radius: 0;
   white-space: pre;
+}
+/* Highlighted tokens carry only a colour and a weight; the monospace metrics
+   are the `pre`'s, so a coloured token can never sit differently from the
+   plain text beside it. */
+.file-preview > pre .file-token {
+  font: inherit;
+}
+/* A read that produced no file: an explicit, labelled state with a way out
+   (WSP-10), rather than the raw refusal the boundary answered with. */
+.file-refusal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.file-refusal p {
+  margin: 0;
+}
+.file-refusal button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-2);
+  background: var(--surface-3);
+  font-size: 0.75rem;
 }
 /* The terminal is a fixed-size viewport that scrolls its own buffer, so it
    must never grow the box it is given (D13). xterm keeps a stale, oversized

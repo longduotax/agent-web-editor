@@ -379,91 +379,6 @@ describe("FilesTab", () => {
   });
 });
 
-describe("FileTab", () => {
-  const tab = {
-    id: "t",
-    type: "file",
-    context,
-    path: "src/main.ts",
-    view: "preview",
-  } as const;
-
-  it("renders the file's text with copy actions", async () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
-      content: "const answer = 42;",
-      binary: false,
-      truncated: false,
-    });
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByText("const answer = 42;")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Copy path" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Copy contents" })).toBeVisible();
-  });
-
-  it("labels a binary file instead of painting bytes", async () => {
-    api.getFile.mockResolvedValue({
-      path: "logo.png",
-      language: null,
-      content: "",
-      binary: true,
-      truncated: false,
-    });
-    renderBody(
-      <FileTab
-        tab={{ ...tab, path: "logo.png" }}
-        visible
-        actions={actionsSpy()}
-      />,
-    );
-
-    expect(
-      await screen.findByText("Binary file preview is unavailable."),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Copy contents" }),
-    ).toBeDisabled();
-  });
-
-  it("says when the server truncated the file", async () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
-      content: "const answer = 42;",
-      binary: false,
-      truncated: true,
-    });
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByText(/truncated/)).toBeVisible();
-  });
-
-  it("offers a retry when the read fails", async () => {
-    api.getFile.mockRejectedValue(new Error("file was not found"));
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "file was not found",
-    );
-    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
-  });
-
-  it("issues no request while it is hidden", () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: null,
-      content: "",
-      binary: false,
-      truncated: false,
-    });
-    renderBody(<FileTab tab={tab} visible={false} actions={actionsSpy()} />);
-
-    expect(api.getFile).not.toHaveBeenCalled();
-  });
-});
-
 describe("DiffTab", () => {
   const tab = {
     id: "t",
@@ -586,9 +501,12 @@ describe("tab bodies are accessible", () => {
       ],
       truncated: false,
     });
+    // `notes.txt` rather than a source file: this case is about the ported
+    // bodies together, and a file with no grammar reaches none of the File
+    // tab's lazy highlighting. `FileTab.test.tsx` covers that on its own.
     api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
+      path: "notes.txt",
+      language: null,
       content: "const answer = 42;",
       binary: false,
       truncated: false,
@@ -617,7 +535,7 @@ describe("tab bodies are accessible", () => {
             id: "c",
             type: "file",
             context,
-            path: "src/main.ts",
+            path: "notes.txt",
             view: "preview",
           }}
           visible
