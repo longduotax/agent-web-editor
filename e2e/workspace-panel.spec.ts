@@ -114,6 +114,48 @@ test.beforeAll(async () => {
     `[\n${wideLine}\n${'  {"note":"short"},\n'.repeat(200)}]\n`,
     "utf8",
   );
+  // The working tree that produced the finding milestone 4 exists for: a
+  // project README beside two hundred dependency copies of the same name,
+  // with an ignore rule that says which is which.
+  await writeFile(join(projectPath, ".gitignore"), "node_modules\n", "utf8");
+  // Not a working repository — nothing here reads Git — but a real `.git`
+  // directory, so "`.git` is excluded in both modes" is a claim this suite
+  // can actually falsify.
+  await mkdir(join(projectPath, ".git"));
+  await writeFile(
+    join(projectPath, ".git", "HEAD"),
+    "ref: refs/heads/main\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "README.md"),
+    "# The project's own README\n",
+    "utf8",
+  );
+  await mkdir(join(projectPath, "src", "features"), { recursive: true });
+  await writeFile(
+    join(projectPath, "src", "main.ts"),
+    "export const main = 1;\n",
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "src", "features", "panel.ts"),
+    "export const panel = 1;\n",
+    "utf8",
+  );
+  for (let index = 0; index < 200; index += 1) {
+    const dependency = join(
+      projectPath,
+      "node_modules",
+      `dep-${String(index)}`,
+    );
+    await mkdir(dependency, { recursive: true });
+    await writeFile(
+      join(dependency, "README.md"),
+      `# dependency ${String(index)}\n`,
+      "utf8",
+    );
+  }
   const port = await availablePort();
   const config = parseConfig({
     argv: ["--port", String(port)],
@@ -640,12 +682,178 @@ test.describe("on a device with no hover", () => {
 
 // F2. Reported as "file content is clipped at the panel's right edge with no
 // visible horizontal scroll", twice mis-diagnosed as a `min-width: 0` gap.
+/**
+ * A row of the file tree, and the line inside it that takes the click.
+ *
+ * An expanded directory's `treeitem` contains its children too, so clicking
+ * the middle of that element would land on whichever child is there. The row
+ * as the user sees it is its own line.
+ */
+function treeRow(page: Page, name: string) {
+  return page.getByRole("treeitem", { name });
+}
+
+async function clickTreeRow(page: Page, name: string) {
+  await treeRow(page, name).locator(".file-tree-line").first().click();
+}
+
+// Milestone 4: the file tree, the ignore rules, and the flat search
+// (WSP-05 as revised by specification version 2, acceptance 11 to 13).
+//
+// End to end because the failure that produced the requirement was invisible
+// to jsdom: the tab looked correct in every unit test while, against a real
+// repository, every one of its two hundred rendered rows was a dependency's.
+// A stubbed listing cannot reproduce that; a real working tree can.
+
+test("panel files: the tree expands in place and hides ignored files until asked", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+
+  // A tree of the root, one level deep: `src` is there and its contents are
+  // not, because nothing has asked for them yet.
+  const src = page.getByRole("treeitem", { name: "src" });
+  await expect(src).toBeVisible();
+  await expect(src).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toHaveCount(0);
+
+  // The ignore rule is honoured by default, and the tab says so rather than
+  // under-reporting quietly.
+  await expect(
+    page.getByRole("treeitem", { name: "node_modules" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "Files matched by this workspace's ignore rules are hidden.",
+    ),
+  ).toBeVisible();
+
+  await clickTreeRow(page, "src");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
+  await expect(src).toHaveAttribute("aria-expanded", "true");
+  // Its own name, and the full workspace-relative path on the tooltip.
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toHaveAttribute(
+    "title",
+    "src/main.ts",
+  );
+
+  await clickTreeRow(page, "src");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toHaveCount(0);
+  await expect(src).toHaveAttribute("aria-expanded", "false");
+
+  // The explicit opt-in reveals what the rule hid — and nothing reveals
+  // `.git`, which is not an ignore rule.
+  await page.getByRole("checkbox", { name: "Show ignored files" }).check();
+  await expect(
+    page.getByRole("treeitem", { name: "node_modules" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: ".git", exact: true }),
+  ).toHaveCount(0);
+  // ...while the ignore file itself is an ordinary listed file.
+  await expect(
+    page.getByRole("treeitem", { name: ".gitignore", exact: true }),
+  ).toBeVisible();
+});
+
+test("panel files search: the project's own README, not two hundred dependency copies", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
+
+  await page
+    .getByRole("textbox", { name: "Search project files" })
+    .fill("README.md");
+
+  // Exactly one match, and it is the project's own. Before the ignore rules
+  // this search returned two hundred rows, every one of them under
+  // `node_modules`, and the project's README was on none of them.
+  const matches = page.locator(".file-list li");
+  await expect(matches).toHaveCount(1);
+  await expect(
+    matches.getByRole("button", { name: "README.md" }),
+  ).toBeVisible();
+  await expect(page.getByText("node_modules")).toHaveCount(0);
+  // A search is flat, not a tree of sparse matches.
+  await expect(page.getByRole("tree")).toHaveCount(0);
+
+  // Clearing it returns the tree at exactly the expansion it had.
+  await page.getByRole("textbox", { name: "Search project files" }).fill("");
+  await expect(page.getByRole("tree")).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: "src" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+});
+
+test("panel files: the expansion and the ignored opt-in survive a reload", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "features");
+  await expect(page.getByRole("treeitem", { name: "panel.ts" })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Show ignored files" }).check();
+  await expect(
+    page.getByRole("treeitem", { name: "node_modules" }),
+  ).toBeVisible();
+
+  await page.reload();
+
+  // Two levels deep, exactly as it was left (WSP-04, acceptance 11).
+  await expect(page.getByRole("treeitem", { name: "panel.ts" })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: "src" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.getByRole("treeitem", { name: "features" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByRole("checkbox", { name: "Show ignored files" }),
+  ).toBeChecked();
+});
+
+// The tree is operable without a pointer (WSP-10): arrow keys move by row,
+// open a directory, and close it again.
+test("panel files: the keyboard walks, opens, and closes tree rows", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  const src = page.getByRole("treeitem", { name: "src" });
+  await expect(src).toBeVisible();
+
+  await src.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "features" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("treeitem", { name: "main.ts" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  // Activating a file opens a File tab, which takes the group; the tree is
+  // still there, exactly as it was, behind its own tab.
+  await expect(page.getByRole("tab", { name: "main.ts" })).toBeVisible();
+  await page.getByRole("tab", { name: "Files" }).click();
+
+  await src.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(src).toHaveAttribute("aria-expanded", "false");
+});
+
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
   page,
 }) => {
   await openProjectWithThread(page);
   await openPanelTab(page, "Files");
-  await page.getByRole("button", { name: "wide.json" }).click();
+  await page.getByRole("treeitem", { name: "wide.json" }).click();
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
@@ -735,7 +943,7 @@ test("panel file tab: returning to a tab restores the scroll offset of the eleme
 }) => {
   await openProjectWithThread(page);
   await openPanelTab(page, "Files");
-  await page.getByRole("button", { name: "wide.json" }).click();
+  await page.getByRole("treeitem", { name: "wide.json" }).click();
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
@@ -1212,7 +1420,7 @@ test("panel drag: a tab dropped on another group's centre moves into it", async 
   await openProjectWithThread(page);
   await widenPanel(page);
   await openPanelTab(page, "Files");
-  await page.getByRole("button", { name: "notes.txt" }).click();
+  await page.getByRole("treeitem", { name: "notes.txt" }).click();
   await expect(page.getByRole("tab")).toHaveCount(3);
 
   // Split, so the drag has a second group to aim at: the active tab
@@ -1581,7 +1789,7 @@ test("panel drag: a dragged tab keeps the scroll offset of the element that scro
   await openProjectWithThread(page);
   await widenPanel(page);
   await openPanelTab(page, "Files");
-  await page.getByRole("button", { name: "wide.json" }).click();
+  await page.getByRole("treeitem", { name: "wide.json" }).click();
   await expect(page.getByRole("tab")).toHaveCount(3);
 
   // Two groups, the File tab alone in the second one, so dropping it back

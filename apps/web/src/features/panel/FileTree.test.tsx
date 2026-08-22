@@ -134,6 +134,24 @@ function rowNames(): string[] {
     .map((text) => text.trim());
 }
 
+/**
+ * The pointer target of a row.
+ *
+ * An expanded directory's `treeitem` also contains its children, so a click
+ * on the middle of that element would land on whichever child is there. The
+ * row as the user sees it is its own line, and that is what carries the
+ * click.
+ */
+async function clickRow(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string | RegExp,
+): Promise<void> {
+  const row = await screen.findByRole("treeitem", { name });
+  const line = row.querySelector(".file-tree-line");
+  if (line === null) throw new Error("a row with no line");
+  await user.click(line);
+}
+
 describe("FileTree", () => {
   it("shows one level of the tree, each row named for itself", async () => {
     stubTree();
@@ -163,7 +181,7 @@ describe("FileTree", () => {
       <FilesTab tab={filesTab()} visible actions={actions} />,
     );
 
-    await user.click(await screen.findByRole("treeitem", { name: "src" }));
+    await clickRow(user, "src");
 
     expect(actions.updateTab).toHaveBeenCalledWith("t", { expanded: ["src"] });
     // The panel owns the expansion, so the tab comes back with it applied.
@@ -249,7 +267,7 @@ describe("FileTree", () => {
     expect(screen.getByRole("treeitem", { name: "README.md" })).toBeVisible();
 
     stubTree();
-    await user.click(failed);
+    await clickRow(user, /Could not list src/);
     expect(
       await screen.findByRole("treeitem", { name: "main.ts" }),
     ).toBeVisible();
@@ -261,9 +279,7 @@ describe("FileTree", () => {
     const actions = actionsSpy();
     renderBody(<FilesTab tab={filesTab()} visible actions={actions} />);
 
-    await user.click(
-      await screen.findByRole("treeitem", { name: "README.md" }),
-    );
+    await clickRow(user, "README.md");
 
     expect(actions.openTab).toHaveBeenCalledWith({
       type: "file",
