@@ -212,18 +212,18 @@ the failing test, watch it fail, implement, watch it pass, commit.
       including its length caps. This task is pure functions and should carry the
       densest test coverage in the plan.
 
-- [ ] **Task 5 — `CodexAgentRuntime.discover` and `create`.** `discover` pages
+- [x] **Task 5 — `CodexAgentRuntime.discover` and `create`.** `discover` pages
       `thread/list` filtered by `cwd` (skipping malformed entries into
       `diagnostics`); `create` issues `thread/start` with the execution root as
       `cwd`, `approvalPolicy: "never"` (AGB-07), and the configured `sandbox`
       (AGB-06), then `thread/name/set` when a title is supplied.
 
-- [ ] **Task 6 — `CodexOpenSession` open, snapshot, subscribe.**
+- [x] **Task 6 — `CodexOpenSession` open, snapshot, subscribe.**
       `thread/resume` to attach, `thread/read` for the snapshot, notification stream
       mapped to `RuntimeEvent` and fanned out to subscribers, `dispose` unsubscribing
       via `thread/unsubscribe` without killing the shared process.
 
-- [ ] **Task 7 — `prompt`, `recoverPrompt`, `steer`, `stop`.** `turn/start`
+- [x] **Task 7 — `prompt`, `recoverPrompt`, `steer`, `stop`.** `turn/start`
       carrying `dispatch.id` as `clientUserMessageId`; acceptance resolves on the
       `turn/start` response, settlement on `turn/completed` (`completed`), `error`
       (`failed`), or interrupt (`interrupted`); events buffered until acceptance is
@@ -350,6 +350,9 @@ checkboxes above for the current position.
 - 2026-08-22: Task 4 complete. Pure protocol schemas and mapping with 21
   tests; every mapped value is asserted against `TranscriptItemSchema`
   itself rather than merely resembling it.
+- 2026-08-22: Tasks 5, 6, and 7 complete. `CodexAgentRuntime` and
+  `CodexOpenSession` implement the full `AgentRuntime` surface against a
+  scripted app-server, 19 tests. 54 adapter tests green.
 
 ## Discoveries and blockers
 
