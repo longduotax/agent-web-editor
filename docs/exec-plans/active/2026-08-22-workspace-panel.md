@@ -1447,8 +1447,23 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       against a real working tree. The deferral in
       [Inspector and terminal boundaries](../../design/inspector-and-terminal.md)
       is retired and that bullet rewritten, as this milestone required.
-- [ ] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
-      fixed
+- [x] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
+      fixed. Shipped 2026-08-23: `fileLanguage.ts` (a closed language union
+      chosen from the extension, never from the response's `language` field),
+      `markdownLinks.ts` (a repository link resolved under the read boundary's
+      own path rules), `syntaxHighlight.ts` (Shiki behind a dynamic import,
+      themed from `--code-*` CSS variables, one grammar module per language),
+      `FilePreviewMarkdown.tsx` (the preview's own renderer, not the
+      transcript's), and a rewritten `FileTab.tsx` carrying every state the
+      read boundary can produce. 69 new unit cases and four new end-to-end
+      cases; the three existing `wide.json` cases now settle the highlighting
+      before they measure and still pass, so G1 holds with highlighted content
+      in the `pre`. The long-line overflow item is **not** re-fixed here: F2
+      already fixed it, the existing case still measures the scrollbar on
+      screen at both widths, and the markdown preview joins the `pre` as the
+      other bounded scrolling region rather than adding a second one.
+      **Its standing hands-on UI pass is still owed** and is performed by a
+      separate agent.
 - [ ] Milestone 6 — Diff tab, structured unified diff
 - [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
@@ -2158,12 +2173,145 @@ instruction to confirm a finding before it becomes work earned its place
 again — and so did its converse, that a finding whose mechanism is wrong is
 still a finding, because the symptom was real every time.
 
+**2026-08-23 — what milestone 5 found while building the File tab.** None of
+these came from a hands-on pass; the pass for this milestone is still owed.
+Each is recorded because it changed a decision.
+
+1. **A theme cannot be handed to Shiki as CSS variables — except that it
+   can.** The expectation, from vscode-textmate's history, was that a theme's
+   `foreground` had to parse as a hex colour and that anything else would be
+   dropped, which would have meant sentinel colours and a reverse map from
+   sentinel to variable. Measured before building on it: `@shikijs/vscode-textmate`
+   10.0.2 carries a theme colour through tokenization as an opaque string, so
+   `var(--code-keyword)` arrives intact on the token and reaches the DOM as an
+   inline `color:`, where the cascade resolves it. That is what makes a theme
+   switch re-map a highlighted file with **no re-highlight, no listener, and no
+   reload** — pinned end to end by switching `prefers-color-scheme` and
+   re-reading the same node's computed colour. Recorded because the sentinel
+   design was one commit away from being written, and because the property it
+   depends on is a library behaviour rather than a documented contract: if a
+   future Shiki drops non-hex colours, the symptom is uncoloured text and the
+   fix is the sentinel map.
+2. **react-markdown's own URL sanitiser refuses `data:`, which settled the
+   image question.** The plan said the image renderer should refuse "any
+   non-`data:` remote URL", i.e. that an inline `data:` image would be shown. It
+   is not: `defaultUrlTransform` empties a `data:` `src` before the renderer
+   sees it, and re-enabling it would have meant passing a custom `urlTransform`
+   for arbitrary working-tree content. **Decided the other way instead: no
+   image element is rendered at all**, and every reference — remote, inline, or
+   relative — becomes a labelled placeholder naming what would have been there.
+   A file preview then has exactly one element class it cannot be made to
+   fetch, and the reader is told what is missing rather than shown a gap.
+3. **A `pre` that is highlighted is still the same `pre`, and that is what the
+   scroll cases depend on.** Swapping plain text for ~8,000 token spans
+   replaces the children of the element `PanelBodies` records the offset of,
+   not the element itself, so G1's mechanism is untouched. The three existing
+   `wide.json` cases nevertheless now wait for the tokens before they measure:
+   they passed either way, but whichever content they happened to catch was a
+   race, and a measurement of content the user is no longer looking at is not
+   the measurement the case claims to make.
+4. **`.file-preview pre` had to become `.file-preview > pre`.** The rule that
+   strips a preview `pre`'s margin, border and radius matched a fenced code
+   block **inside** a previewed markdown document too, which is a box in a
+   document rather than the file filling the tab. The same applied to the
+   header-button rule, which would have restyled a document's in-repository
+   links, since those are buttons. Both are direct-child selectors now.
+
+**2026-08-23 — milestone 5 against this repository, measured rather than
+described.** Driven through a real browser against this working tree, with the
+project registered the way a user registers one. First paint is the number
+that matters: WSP-05 requires highlighting never to block it.
+
+| File                                                   | Size                              | Plain text on screen   | Highlighted | Tokens |
+| ------------------------------------------------------ | --------------------------------- | ---------------------- | ----------- | ------ |
+| `apps/web/src/styles.css`                              | 2,736 lines                       | 218 ms after the click | +81 ms      | 7,851  |
+| `e2e/workspace-panel.spec.ts`                          | 2,376 lines, the heaviest grammar | 72 ms                  | +1,029 ms   | 9,343  |
+| `docs/exec-plans/active/2026-08-22-workspace-panel.md` | 2,376 lines, rendered             | 261 ms                 | n/a         | n/a    |
+
+The TypeScript case is the interesting one: its grammar chunk is 181 kB and
+tokenizing 2,000 lines of it takes about a second, during which the file is
+fully readable and scrollable as plain monospace text. That is the whole shape
+of the requirement, and it is why the upgrade is a swap of the `pre`'s children
+rather than a gate on rendering it.
+
+The rest of what that pass measured: both large files were bounded to 2,000
+lines with the notice naming the true count (2,736 and 2,376); the `pre`'s
+bottom edge and the visible bottom of the tab body were the same pixel (720),
+so the horizontal scrollbar is on screen while 243 px of content extend past
+the right edge; the page's own horizontal overflow was 0 in every case; and the
+exec plan's preview rendered 1,832 elements, **zero** image elements, and 27
+in-repository links — every one of this plan's own relative document links,
+turned into a control that opens that file in its own File tab.
+
 - No blockers. Milestone 4's gate is **satisfied** as of 2026-08-23; it was
   never blocked, only waiting on a normal lifecycle step. Its standing
   hands-on UI pass is no longer owed either: it was performed, and the seven
-  defects it found are fixed above.
+  defects it found are fixed above. **Milestone 5's standing hands-on UI pass
+  IS owed** as of 2026-08-23: the milestone is implemented, its suites are
+  green, and its numbers above come from driving the real repository — but that
+  is a scripted measurement of what someone already thought to measure, which
+  is exactly what the standing pass exists not to be. A separate agent performs
+  it.
 
 ## Decision and revision log
+
+- 2026-08-23: **A previewed markdown file gets its own renderer, not the
+  transcript's.** `components/Markdown.tsx` renders assistant messages: content
+  this application produced in this session, whose links are addresses. A File
+  tab renders arbitrary bytes out of the working tree, including files the user
+  did not write, whose links and images are **repository paths**. Reusing the
+  transcript's renderer would have been safe and wrong: it sends every `href`
+  to `window.open` as a URL, so `../design/notes.md` would resolve against the
+  workspace's own origin and navigate the workspace to a page that does not
+  exist. So `FilePreviewMarkdown` shares the plugin set and the
+  no-raw-HTML rule — that part must not drift — and answers links in three
+  ways: an in-repository path opens another File tab (WSP-05's own rule for
+  activating a file, applied to a link), an `http`/`https`/`mailto` address
+  goes to a real browser tab with `rel="noreferrer noopener"` and says where it
+  goes **in its accessible name**, and everything else — `javascript:`,
+  `data:`, `file:`, a fragment the preview gives no ids for, a path that leaves
+  the workspace — is inert text rather than a link that silently does nothing.
+  Rejected: rendering an inert case as a live anchor carrying its original
+  `href`, which is the one thing the classifier exists to prevent.
+
+- 2026-08-23: **No image element is rendered in a file preview, of any kind.**
+  The plan allowed an inline `data:` image; react-markdown's own sanitiser
+  refuses one, and re-enabling it for untrusted content buys a rare case at the
+  price of the single element class that can carry bytes. Every reference
+  becomes a labelled placeholder naming the resolved target instead, so a
+  document whose diagram is missing says what was there — a blank space reads
+  as a rendering fault, and this one is a decision.
+
+- 2026-08-23: **The highlighting theme names CSS variables rather than
+  colours.** WSP-05 requires highlighting "derived from the active theme's
+  tokens". A bundled Shiki theme carries hex colours chosen against its own
+  background and would ignore `styles.css` entirely; resolving the tokens in
+  JavaScript at highlight time would work but would need a `matchMedia`
+  listener and a re-highlight on every theme change, because this application
+  has three theme blocks and one of them is a media query. Naming
+  `var(--code-*)` in the theme puts the resolution in the cascade, where a
+  theme switch is free. The `--code-*` tokens are aliases of the existing
+  palette except for two hues it has no member for, which are redefined in both
+  dark blocks like every other literal in that file.
+
+- 2026-08-23: **Twenty-one grammars, one dynamic import each, selected by
+  extension through a closed union.** The language id becomes a module
+  specifier, so it may never be a value that arrived over the wire: the
+  file-preview response's `language` falls back to the bare extension for
+  anything the server does not recognise, and it is not used for this at all.
+  `languageForPath` maps an extension to one member of `CodeLanguage` or to
+  `null`, and the grammar table is a `Record` over that union, so a language
+  with no grammar cannot compile. Measured: the entry chunk contains no Shiki,
+  the highlighter is a 148 kB chunk of its own, and each grammar is a chunk of
+  its own from 2.8 kB (JSON) to 797 kB (C++) — none of which is requested until
+  a file of that language is opened.
+
+- 2026-08-23: **Markdown is deliberately absent from the grammar table.** A
+  markdown file's default view is the rendered preview, and its source view
+  exists to show the raw characters; highlighting it would load the markdown
+  grammar, which embeds a dozen others, for the one view a reader switches to
+  in order to stop seeing rendering. It is also what makes "the chunk is not
+  requested until a non-markdown file is opened" a testable claim.
 
 - 2026-08-23: **Tab body hosts are positioned over their group's rectangle, not
   relocated into it.** Decided by the user, from the two options milestone 9's
