@@ -11,7 +11,11 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiClientError, getFile } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { FilePreviewMarkdown } from "./FilePreviewMarkdown.js";
-import { isMarkdownPath, languageForPath } from "./fileLanguage.js";
+import {
+  HIGHLIGHT_MAX_CHARACTERS,
+  isMarkdownPath,
+  languageForPath,
+} from "./fileLanguage.js";
 import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 import type { HighlightedLine } from "./syntaxHighlight.js";
@@ -38,6 +42,24 @@ import type { HighlightedLine } from "./syntaxHighlight.js";
  * to paint and to highlight.
  */
 export const FILE_PREVIEW_LINE_LIMIT = 2000;
+
+/**
+ * How many characters are painted at once.
+ *
+ * The line bound above is not enough on its own, and a minified bundle is
+ * why (J5). One measured file was 4.7 MB, server-truncated to 2 MiB:
+ * **2,097,096 characters in one `pre`**, because 2 MiB of it is only 293
+ * lines and the 2,000-line budget therefore never engaged. Its longest line
+ * was 878,586 characters and the `pre`'s `scrollWidth` was 6,594,300px. Lines
+ * are a proxy for size and this is the size itself, so both are bounded.
+ *
+ * 512 KiB is past any file a person reads and small enough that the DOM node
+ * is an ordinary one. It is deliberately LARGER than
+ * `HIGHLIGHT_MAX_CHARACTERS`: painting a character is cheap and tokenizing it
+ * is not, so the tab can show more than it can colour — and says so when it
+ * does.
+ */
+export const FILE_PREVIEW_CHARACTER_LIMIT = 512 * 1024;
 
 export const FileTab = memo(function FileTab({
   tab,
@@ -80,8 +102,15 @@ export const FileTab = memo(function FileTab({
   } | null>(null);
   const language = rendered ? null : languageForPath(tab.path);
   const text = shown.text;
+  // A file the highlighter would only decline, decided here rather than two
+  // dynamic imports later (J5). Knowing it up front is what lets the tab both
+  // skip fetching the chunk and TELL the reader why nothing is coloured —
+  // the highlighter's own `null` arrives too late to be either.
+  const highlightTooLarge =
+    language !== null && text.length > HIGHLIGHT_MAX_CHARACTERS;
   useEffect(() => {
     if (!visible || language === null || text === "") return;
+    if (text.length > HIGHLIGHT_MAX_CHARACTERS) return;
     if (highlighted?.text === text) return;
     // A signal rather than a captured flag: the tokens arrive after two
     // awaits, and by then this effect may have been replaced by one for a
@@ -223,10 +252,13 @@ export const FileTab = memo(function FileTab({
           whole file.
         </p>
       )}
-      {shown.hidden > 0 && (
+      {shown.cut && (
         <p className="panel-state">
           {boundedNotice(shown, file?.truncated === true)}
         </p>
+      )}
+      {highlightTooLarge && (
+        <p className="panel-state">{declinedHighlightNotice()}</p>
       )}
       {file?.binary === true && (
         <div className="empty">
@@ -296,8 +328,18 @@ function HeaderPath({ path }: { path: string }): JSX.Element {
 /** The rendered portion of a file, and what it left out. */
 interface BoundedText {
   text: string;
+  /** Lines in everything that reached the browser. */
   total: number;
-  hidden: number;
+  /**
+   * Whether anything was left out at all.
+   *
+   * Not a count of hidden lines, because a bundle is one line and cutting it
+   * in half hides none of them while hiding almost all of the file. "Is this
+   * the whole of what arrived?" is the question the notice turns on.
+   */
+  cut: boolean;
+  /** Whether the character bound, rather than the line bound, made the cut. */
+  byCharacters: boolean;
 }
 
 /**
@@ -311,21 +353,51 @@ interface BoundedText {
  * view is honest only if it is honest about what it is bounded from.
  */
 function boundedNotice(shown: BoundedText, truncated: boolean): string {
+  const copy = truncated
+    ? "Copy contents takes those 2 MiB."
+    : "Copy contents takes the whole file.";
+  if (shown.byCharacters) {
+    // Lines are the wrong unit for a file whose length is not in its line
+    // count, and quoting one here would be as misleading as the count J7
+    // fixed: "the first 2,000 of 293 lines" says nothing about a bundle.
+    const source = truncated ? "the 2 MiB that were read" : "this file";
+    return `Showing the first ${String(FILE_PREVIEW_CHARACTER_LIMIT / 1024)} KiB of ${source}. ${copy}`;
+  }
   const first = `Showing the first ${String(FILE_PREVIEW_LINE_LIMIT)}`;
   return truncated
-    ? `${first} of the ${String(shown.total)} lines in the 2 MiB that were read. Copy contents takes those 2 MiB.`
-    : `${first} of ${String(shown.total)} lines. Copy contents takes the whole file.`;
+    ? `${first} of the ${String(shown.total)} lines in the 2 MiB that were read. ${copy}`
+    : `${first} of ${String(shown.total)} lines. ${copy}`;
+}
+
+/** Why nothing is coloured, when the reason is a bound rather than nothing. */
+function declinedHighlightNotice(): string {
+  return `Syntax highlighting is off for this file: what is shown is larger than the ${String(HIGHLIGHT_MAX_CHARACTERS / 1024)} KiB the highlighter will colour. The text below is the file's own, unchanged.`;
 }
 
 function boundedLines(content: string): BoundedText {
-  if (content === "") return { text: "", total: 0, hidden: 0 };
+  if (content === "")
+    return { text: "", total: 0, cut: false, byCharacters: false };
   const lines = content.split("\n");
-  if (lines.length <= FILE_PREVIEW_LINE_LIMIT)
-    return { text: content, total: lines.length, hidden: 0 };
+  const total = lines.length;
+  const byLines =
+    total <= FILE_PREVIEW_LINE_LIMIT
+      ? content
+      : lines.slice(0, FILE_PREVIEW_LINE_LIMIT).join("\n");
+  // The character bound is applied to what the line bound left, so the two
+  // compose rather than competing: whichever bites first is the one that
+  // decided, and it is the one the notice names.
+  if (byLines.length <= FILE_PREVIEW_CHARACTER_LIMIT)
+    return {
+      text: byLines,
+      total,
+      cut: byLines !== content,
+      byCharacters: false,
+    };
   return {
-    text: lines.slice(0, FILE_PREVIEW_LINE_LIMIT).join("\n"),
-    total: lines.length,
-    hidden: lines.length - FILE_PREVIEW_LINE_LIMIT,
+    text: byLines.slice(0, FILE_PREVIEW_CHARACTER_LIMIT),
+    total,
+    cut: true,
+    byCharacters: true,
   };
 }
 

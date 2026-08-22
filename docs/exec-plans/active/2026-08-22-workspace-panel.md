@@ -2399,6 +2399,51 @@ tree or in a search result count". Both now say "Showing 200 entries. The
 workspace stopped listing at its own limit before the end, so this is not all
 of them." when the flag is set, and keep the counted sentence when it is not.
 
+**J5 — a huge single-line file was bounded by the wrong unit.** A 4.7 MB
+bundle, server-truncated to 2 MiB, put **2,097,096 characters into one `pre`**:
+the 2,000-line budget never engaged, because 2 MiB of that file is only 293
+lines. Longest line 878,586 characters, `pre.scrollWidth` 6,594,300px.
+Highlighting was correctly declined by the 256 KiB bound — no hang, no error —
+but the reader was told nothing about the decline or about the line, and
+silence reads as broken.
+
+Lines are a proxy for size; the fix is to bound the size itself.
+`FILE_PREVIEW_CHARACTER_LIMIT` is 512 KiB, applied to what the line bound
+leaves, so whichever bites first is the one the notice names — and the notice
+switches unit with it, because "the first 2,000 of 293 lines" says nothing
+about a bundle. The highlighter's bound moved to `fileLanguage.ts`, which the
+tab may import statically, so the tab now knows **before** the dynamic import
+that the answer would be no: it skips fetching the chunk entirely and says why
+nothing is coloured. `boundedLines` also stopped counting hidden LINES as its
+trigger — cutting a one-line bundle in half hides no lines while hiding almost
+all of the file — and now records whether anything was cut at all.
+
+Re-measured in headless Chromium against a 3 MB one-line fixture, truncated by
+the server to the same 2 MiB:
+
+| measurement                                                  | before        | after            |
+| ------------------------------------------------------------ | ------------- | ---------------- |
+| characters in the `pre`                                      | 2,097,152     | 524,288          |
+| `pre.scrollWidth`                                            | 15,757,146px  | 3,939,306px      |
+| switching **onto** the huge tab                              | 110/114/116ms | 28.5/29.8/28.9ms |
+| switching between three other tabs, huge tab closed          | 15/13/10/17ms | 14/14/14/13ms    |
+| switching between three other tabs, huge tab open and hidden | 14/13/13/16ms | 14/10/10/10ms    |
+
+**The reported hidden-tab cost did not reproduce here, and that is worth
+recording rather than glossing.** The report measured 319/545/147ms with the
+huge tab mounted and hidden against 122/357/132ms with it closed — roughly
+150–200ms of tax on every tab switch anywhere in the panel. In this
+environment a hidden body costs nothing measurable either way, before or after
+the fix, because `.panel-tabpanel[hidden]` is `display: none` and a body with
+no box takes no part in layout. The report's own baseline is an order of
+magnitude above the one measured here (122–357ms against 10–17ms), so the two
+runs are not the same machine under the same load, and the honest conclusion
+is that **the hidden-body claim is unconfirmed** rather than refuted. What is
+confirmed, and what the fix is justified by on its own, is the cost of the tab
+itself: 110ms to activate, down to 29ms, and a DOM node a quarter the size.
+WSP-09's bounded-render requirement is about what is rendered, not about what
+it happens to cost on one machine.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

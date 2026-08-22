@@ -23,7 +23,12 @@ const highlighter = vi.hoisted(() => ({ highlightCode: vi.fn() }));
 vi.mock("./syntaxHighlight.js", () => highlighter);
 
 import { ApiClientError } from "../../api/client.js";
-import { FILE_PREVIEW_LINE_LIMIT, FileTab } from "./FileTab.js";
+import {
+  FILE_PREVIEW_CHARACTER_LIMIT,
+  FILE_PREVIEW_LINE_LIMIT,
+  FileTab,
+} from "./FileTab.js";
+import { HIGHLIGHT_MAX_CHARACTERS } from "./fileLanguage.js";
 import type { PanelActions } from "./usePanelState.js";
 import type { TabContext } from "./panelTabs.js";
 
@@ -402,6 +407,92 @@ describe("FileTab: every state it can be in", () => {
       screen.getByText(/Copy contents takes the whole file/),
     ).toBeVisible();
     expect(container.querySelector("pre")).not.toHaveTextContent("last line");
+  });
+
+  it("bounds the characters too, for a file whose length is not in its line count", async () => {
+    // J5's shape: a bundle whose whole content is ONE line. The 2,000-line
+    // budget never engages — 2 MiB of it is 293 lines — so the tab painted
+    // every character the server handed over: 2,097,096 of them in one
+    // `pre`, longest line 878,586, `scrollWidth` 6,594,300px.
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "dist/bundle.min.js",
+        content: `const bundle="${"payload".repeat(100_000)}";`,
+        truncated: true,
+      }),
+    );
+    const { container } = renderTab({ path: "dist/bundle.min.js" });
+
+    await waitFor(() => {
+      expect(container.querySelector("pre")?.textContent.length).toBe(
+        FILE_PREVIEW_CHARACTER_LIMIT,
+      );
+    });
+    expect(
+      screen.getByText(
+        new RegExp(
+          `Showing the first ${String(FILE_PREVIEW_CHARACTER_LIMIT / 1024)} KiB of the 2 MiB that were read`,
+        ),
+      ),
+    ).toBeVisible();
+  });
+
+  it("names this file rather than the read when nothing was truncated", async () => {
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "dist/bundle.min.js",
+        content: `const bundle="${"payload".repeat(100_000)}";`,
+      }),
+    );
+    renderTab({ path: "dist/bundle.min.js" });
+
+    expect(
+      await screen.findByText(
+        new RegExp(
+          `Showing the first ${String(FILE_PREVIEW_CHARACTER_LIMIT / 1024)} KiB of this file\\. Copy contents takes the whole file`,
+        ),
+      ),
+    ).toBeVisible();
+  });
+
+  it("says when highlighting was declined for size rather than going quiet", async () => {
+    // Silence reads as broken: the file is a known language, nothing is
+    // coloured, and the reader is told nothing about why. The reason is a
+    // bound, and a bound is something that can be said out loud.
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "dist/bundle.min.js",
+        content: `const bundle="${"payload".repeat(100_000)}";`,
+      }),
+    );
+    renderTab({ path: "dist/bundle.min.js" });
+
+    expect(
+      await screen.findByText(
+        new RegExp(
+          `larger than the ${String(HIGHLIGHT_MAX_CHARACTERS / 1024)} KiB`,
+        ),
+      ),
+    ).toBeVisible();
+    // And the highlighter chunk is never fetched for a file it would only
+    // decline: the bound is known here, not two dynamic imports later.
+    expect(highlighter.highlightCode).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about highlighting for a file it has no grammar for", async () => {
+    // Not a decline: nothing was refused, there is simply no grammar. A
+    // notice here would be noise on every plain-text file.
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "notes.txt",
+        language: null,
+        content: "word ".repeat(200_000),
+      }),
+    );
+    renderTab({ path: "notes.txt" });
+
+    expect(await screen.findByText(/Showing the first/)).toBeVisible();
+    expect(screen.queryByText(/Syntax highlighting is off/)).toBeNull();
   });
 
   it("describes a truncated read as the portion it is, not as the file (J7)", async () => {

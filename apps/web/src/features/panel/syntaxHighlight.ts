@@ -1,6 +1,7 @@
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 
+import { HIGHLIGHT_MAX_CHARACTERS } from "./fileLanguage.js";
 import type { CodeLanguage } from "./fileLanguage.js";
 
 // The File tab's syntax highlighting (WSP-05).
@@ -9,19 +10,13 @@ import type { CodeLanguage } from "./fileLanguage.js";
 // dynamic `import()` in `FileTab`, which is what puts Shiki and its grammars
 // in their own chunk instead of in the entry bundle — a static import of even
 // one constant from here would pull the whole of it back into first paint.
-// That is why the character bound below lives here rather than beside the
-// tab's other render budget, and why the tab's fallback is "keep the plain
-// text" rather than anything this module has to be asked about first.
+// That is why the tab's fallback is "keep the plain text" rather than
+// anything this module has to be asked about first, and why the character
+// bound this file ENFORCES is declared in `fileLanguage.ts`: the tab has to
+// know it without loading any of this, both to avoid asking for a file it
+// would only decline and to say that it declined (J5).
 
-/**
- * How much text is tokenized at once.
- *
- * A bound rather than a promise about speed: the tab has already painted the
- * file as plain monospace text by the time this runs, so declining a file
- * costs the reader nothing but colour. 256 KiB is well past any hand-written
- * source file and well short of the 2 MiB the server will hand over.
- */
-export const HIGHLIGHT_MAX_CHARACTERS = 256 * 1024;
+export { HIGHLIGHT_MAX_CHARACTERS } from "./fileLanguage.js";
 
 export interface CodeToken {
   text: string;

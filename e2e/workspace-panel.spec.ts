@@ -1119,6 +1119,52 @@ test("panel file tab: a long path ellipsises to its file name at every panel wid
   }
 });
 
+test("panel file tab: a one-line bundle is bounded by characters and says what it left out", async ({
+  page,
+}) => {
+  // J5. The line budget is a proxy for size, and a minified bundle is where
+  // the proxy fails: 2 MiB of this file is 293 lines, so the 2,000-line cap
+  // never engaged and the tab painted 2,097,096 characters into one `pre`
+  // with a `scrollWidth` of 6,594,300px. Measured in a real browser because
+  // `scrollWidth` is a layout answer and jsdom has no layout.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "bundle.min.js");
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const painted = await page.evaluate(() => {
+    const pre = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-preview pre',
+    );
+    return {
+      characters: (pre?.textContent ?? "").length,
+      scrollWidth: pre === null ? 0 : pre.scrollWidth,
+      notices: [
+        ...document.querySelectorAll(
+          '[role="tabpanel"]:not([hidden]) .panel-state',
+        ),
+      ].map((element) => element.textContent ?? ""),
+    };
+  });
+
+  expect(painted.characters).toBe(512 * 1024);
+  // It is still a very wide line — that is what the file is — but a bounded
+  // one: 3.9M px against the 15.7M px this same fixture produced before.
+  expect(painted.scrollWidth).toBeLessThan(4_500_000);
+  // Three true sentences, in the same style: what the server read, what this
+  // tab painted of it, and why none of it is coloured. Silence about the
+  // last of those reads as broken.
+  expect(painted.notices.join(" ")).toContain("Only its first 2 MiB were read");
+  expect(painted.notices.join(" ")).toContain(
+    "Showing the first 512 KiB of the 2 MiB that were read",
+  );
+  expect(painted.notices.join(" ")).toContain(
+    "Syntax highlighting is off for this file",
+  );
+});
+
 test("panel file tab: a copy that works and a copy that fails both say so", async ({
   page,
   context,

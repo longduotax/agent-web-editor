@@ -12,6 +12,24 @@
 // a fallback path, it is the base case).
 
 /**
+ * How much text the highlighter will tokenize at once.
+ *
+ * It lives HERE, beside the language decision, rather than in
+ * `syntaxHighlight.ts` where it is enforced, and that placement is
+ * load-bearing: nothing may import that module statically — a static import
+ * of even one constant would pull Shiki and its grammars back into first
+ * paint — and both the tab and the highlighter need this number. The tab
+ * needs it to decide whether to ask at all, and to tell the reader when the
+ * answer is no (J5): a file that is simply never coloured, with nothing said,
+ * reads as broken rather than as bounded.
+ *
+ * 256 KiB is well past any hand-written source file, and deliberately
+ * tighter than `FILE_PREVIEW_CHARACTER_LIMIT`: tokenizing a character costs
+ * far more than painting one.
+ */
+export const HIGHLIGHT_MAX_CHARACTERS = 256 * 1024;
+
+/**
  * The grammars the File tab can load. Deliberately a short list: every entry
  * is a module the highlighter chunk may pull in, and a language nobody opens
  * is a grammar nobody should pay to have listed.
