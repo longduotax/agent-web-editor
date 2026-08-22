@@ -333,6 +333,47 @@ describe("FileTree", () => {
     expect(attempts).toBe(3);
   }, 15_000);
 
+  // H6. A directory that was expanded, persisted, and then deleted. The
+  // server used to answer 500 for it; it now answers a typed 404, and a
+  // client error is not worth repeating twice before saying so.
+  it("shows the error row at once for a directory that is no longer there", async () => {
+    let attempts = 0;
+    api.getFiles.mockImplementation(
+      (_project: ProjectId, _thread: ThreadId, options: Listing = {}) => {
+        if (options.path === "src") {
+          attempts += 1;
+          return Promise.reject(
+            new ApiClientError(
+              404,
+              "path_not_found",
+              "The requested path was not found.",
+            ),
+          );
+        }
+        return Promise.resolve({
+          entries: (TREE[options.path ?? ""] ?? []).map((entry) => ({
+            ...entry,
+            size: null,
+          })),
+          truncated: false,
+          ignoredHidden: false,
+        });
+      },
+    );
+    renderBodyWithRetryPolicy(
+      <FilesTab
+        tab={filesTab({ expanded: ["src"] })}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    await screen.findByRole("treeitem", { name: /Could not list src/ });
+    expect(attempts).toBe(1);
+    // The rest of the tree is untouched, and the row is still a retry.
+    expect(screen.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+  });
+
   it("opens a File tab for an activated file and does not expand it", async () => {
     const user = userEvent.setup();
     stubTree();

@@ -924,6 +924,29 @@ test("panel files: a failing listing reaches its error row, and the row retries"
   await expect(page.getByRole("treeitem", { name: "deploy.sh" })).toBeVisible();
 });
 
+// H6. A path that is not there answered 500 `internal_error`. The realistic
+// trigger is a directory the tab is still showing because its parent listing
+// was read before the directory was deleted.
+test("panel files: expanding a directory that has been deleted shows its error row", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("treeitem", { name: "gone" })).toBeVisible();
+
+  await rm(join(projectPath, "gone"), { recursive: true, force: true });
+  await clickTreeRow(page, "gone");
+
+  await expect(
+    page.getByRole("treeitem", { name: /Could not list gone/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: /Listing gone/ }),
+  ).toHaveCount(0);
+  // The rest of the tree is untouched.
+  await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+});
+
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
   page,
 }) => {
