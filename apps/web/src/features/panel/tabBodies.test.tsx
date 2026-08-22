@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import type { GitFileStatus, ProjectId, ThreadId } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
   getDiff: vi.fn(),
@@ -28,6 +28,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 
 import { ApiClientError } from "../../api/client.js";
 import { ChangesTab } from "./ChangesTab.js";
+import { CHANGES_RENDER_LIMIT } from "./ChangesTab.js";
 import { DIFF_LINE_LIMIT } from "./parseUnifiedDiff.js";
 import { DiffTab } from "./DiffTab.js";
 import { FilesTab } from "./FilesTab.js";
@@ -49,6 +50,17 @@ const context: TabContext = {
   scopeKey: projectId,
   label: "Example project",
 };
+
+/** One `GitFileStatus`, with the fields this suite does not care about. */
+function statusOf(path: string, kind: GitFileStatus["kind"]): GitFileStatus {
+  return {
+    path,
+    originalPath: null,
+    indexStatus: " ",
+    worktreeStatus: "M",
+    kind,
+  };
+}
 
 function actionsSpy(): PanelActions {
   return {
@@ -178,6 +190,75 @@ describe("ChangesTab", () => {
       path: "src/main.ts",
       collapsedHunks: [],
     });
+  });
+
+  it("carries the change kind in a letter and a word, not in a colour", async () => {
+    // WSP-06. The letters are Git's own: taking the first letter of the
+    // kind's name gave "C" to both "copied" and "conflicted", which is a
+    // distinction carried by colour alone in everything but name. The word
+    // is what a screen reader reads, because "M" is a letter and not a
+    // sentence.
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [
+        statusOf("src/copied.ts", "copied"),
+        statusOf("src/conflicted.ts", "conflicted"),
+        statusOf("src/new.ts", "untracked"),
+      ],
+    });
+    const { container } = renderBody(
+      <ChangesTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByRole("button", { name: /copied\.ts/ });
+
+    expect(
+      [...container.querySelectorAll(".change-kind")].map(
+        (mark) => mark.textContent,
+      ),
+    ).toEqual(["C", "U", "?"]);
+    // Tolerant of the separator, not of the words: whether the name
+    // computation keeps the space between two inline spans is the accessible
+    // name implementation's business, and what matters here is that the kind
+    // is IN the name at all.
+    expect(
+      screen.getByRole("button", {
+        name: /^Conflicted:\s*src\/conflicted\.ts$/,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /^Untracked:\s*src\/new\.ts$/ }),
+    ).toBeVisible();
+  });
+
+  it("paints a bounded portion of a very long list and says what it left out", async () => {
+    // WSP-09 names status lists alongside file listings and diffs.
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: Array.from({ length: CHANGES_RENDER_LIMIT + 3 }, (_, index) =>
+        statusOf(`src/file-${String(index)}.ts`, "modified"),
+      ),
+    });
+    const { container } = renderBody(
+      <ChangesTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByRole("button", { name: /file-0\.ts/ });
+
+    expect(container.querySelectorAll(".file-list li")).toHaveLength(
+      CHANGES_RENDER_LIMIT,
+    );
+    expect(
+      screen.getByText(
+        `Showing the first ${String(CHANGES_RENDER_LIMIT)} of ${String(CHANGES_RENDER_LIMIT + 3)} changed files.`,
+      ),
+    ).toBeVisible();
+    // The summary still counts every change, not the painted portion.
+    expect(
+      screen.getByText(
+        new RegExp(`${String(CHANGES_RENDER_LIMIT + 3)} modified`),
+      ),
+    ).toBeVisible();
   });
 
   it("issues no request while it is hidden", () => {
