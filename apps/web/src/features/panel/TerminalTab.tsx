@@ -1,0 +1,25 @@
+import { memo, type JSX } from "react";
+
+import { TerminalView } from "../TerminalView.js";
+import { UnboundNotice } from "./tabBody.js";
+import type { TabBodyProps } from "./tabBody.js";
+
+// A shell in this tab's execution scope (WSP-07). The unsandboxed-shell
+// warning lives inside TerminalView, so it appears once per terminal tab
+// rather than once per panel.
+//
+// The view stays mounted while the tab is hidden: its socket, its process
+// and its scrollback are the tab's state, and tearing them down on a tab
+// switch would kill the shell the user is running (WSP-09). Multi-terminal
+// scopes, the persisted working directory and re-attach-with-replay are
+// milestone 6; this is the shipped terminal, wrapped.
+
+export const TerminalTab = memo(function TerminalTab({
+  tab,
+}: TabBodyProps<"terminal">): JSX.Element {
+  const context = tab.context;
+  if (context === null) return <UnboundNotice />;
+  return (
+    <TerminalView projectId={context.projectId} threadId={context.threadId} />
+  );
+});
