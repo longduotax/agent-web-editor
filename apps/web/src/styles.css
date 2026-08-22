@@ -1998,6 +1998,72 @@ a:focus-visible {
 .file-list button.active {
   background: var(--surface-3);
 }
+/* The file tree (WSP-05 v2). Rows are `treeitem`s rather than buttons: a
+   tree owns its own rows, and a real button inside one would be a nested
+   interactive control — the same rule the tab strip follows. */
+.file-tree,
+.file-tree-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.file-tree {
+  padding: 0.35rem;
+}
+.file-tree-row {
+  border-radius: 0.3rem;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.file-tree-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+}
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree-twisty {
+  width: 0.7rem;
+  flex: none;
+  color: var(--muted);
+  text-align: center;
+}
+.file-tree-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.file-tree-row > .file-tree-line:hover {
+  background: var(--surface-3);
+  border-radius: 0.3rem;
+}
+/* Not a row the user chooses: a loading, empty, capped, or failed listing. */
+.file-tree-state {
+  color: var(--muted);
+  cursor: default;
+}
+.file-ignored {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 0.6rem 0.4rem;
+}
+.file-ignored label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.file-ignored .panel-state {
+  padding: 0;
+  font-size: 0.72rem;
+}
 .change-kind {
   display: inline-grid;
   width: 1.15rem;

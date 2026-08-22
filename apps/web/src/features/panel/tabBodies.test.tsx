@@ -213,24 +213,44 @@ describe("FilesTab", () => {
     showIgnored: false,
   };
 
+  // The tree's own behaviour is covered in FileTree.test.tsx; what is here
+  // is the tab around it — the debounced, bounded, flat search mode WSP-09
+  // pins, which the tree deliberately does not change.
+  function listing(entries: { path: string; kind: "file" | "directory" }[]) {
+    return {
+      entries: entries.map((entry) => ({
+        ...entry,
+        name: entry.path.split("/").pop() ?? entry.path,
+        size: entry.kind === "file" ? 1 : null,
+      })),
+      truncated: false,
+      ignoredHidden: false,
+    };
+  }
+
   it("debounces the search and keeps the previous list visible", async () => {
     const user = userEvent.setup();
-    api.getFiles.mockResolvedValue({
-      entries: [
-        { path: "src/main.ts", name: "main.ts", kind: "file", size: 1 },
-      ],
-      truncated: false,
-    });
-    renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
+    api.getFiles.mockResolvedValue(
+      listing([{ path: "src/main.ts", kind: "file" }]),
+    );
+    renderBody(
+      <FilesTab
+        tab={{ ...tab, search: "mai" }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
 
     await screen.findByText("src/main.ts");
     expect(api.getFiles).toHaveBeenCalledTimes(1);
 
     await user.type(
       screen.getByRole("textbox", { name: "Search project files" }),
-      "mai",
+      "n",
     );
+    // One keystroke, still one request in flight-or-done...
     expect(api.getFiles).toHaveBeenCalledTimes(1);
+    // ...and the list never blanks to its loading state mid-typing.
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
     expect(screen.getByText("src/main.ts")).toBeInTheDocument();
 
@@ -238,20 +258,22 @@ describe("FilesTab", () => {
       expect(api.getFiles).toHaveBeenCalledTimes(2);
     });
     expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
-      search: "mai",
+      search: "main",
+      depth: "full",
+      showIgnored: false,
     });
+    // keepPreviousData: the settled request does not blank the still-valid
+    // list it is replacing (WSP-09).
+    expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
   });
 
   // D7. The tab needs a selection to do anything, so WSP-10 requires a
   // no-selection state; the port dropped the inspector's, while the Changes
   // tab kept its analogue.
   it("says what a selection would do while nothing is selected", async () => {
-    api.getFiles.mockResolvedValue({
-      entries: [
-        { path: "src/main.ts", name: "main.ts", kind: "file", size: 1 },
-      ],
-      truncated: false,
-    });
+    api.getFiles.mockResolvedValue(
+      listing([{ path: "src/main.ts", kind: "file" }]),
+    );
     renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
 
     expect(
@@ -260,7 +282,7 @@ describe("FilesTab", () => {
   });
 
   it("offers no no-selection line when there is nothing to select", async () => {
-    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getFiles.mockResolvedValue(listing([]));
     renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
 
     await screen.findByText("No files in this workspace.");
@@ -270,16 +292,21 @@ describe("FilesTab", () => {
   });
 
   it("caps the rendered rows and says how many there really are", async () => {
-    api.getFiles.mockResolvedValue({
-      entries: Array.from({ length: 250 }, (_, index) => ({
-        path: `src/file-${String(index)}.ts`,
-        name: `file-${String(index)}.ts`,
-        kind: "file" as const,
-        size: 1,
-      })),
-      truncated: false,
-    });
-    renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
+    api.getFiles.mockResolvedValue(
+      listing(
+        Array.from({ length: 250 }, (_, index) => ({
+          path: `src/file-${String(index)}.ts`,
+          kind: "file" as const,
+        })),
+      ),
+    );
+    renderBody(
+      <FilesTab
+        tab={{ ...tab, search: "file" }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
 
     expect(
       await screen.findByText(
@@ -290,7 +317,7 @@ describe("FilesTab", () => {
   });
 
   it("names the search its result belongs to in the empty state", async () => {
-    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getFiles.mockResolvedValue(listing([]));
     renderBody(
       <FilesTab
         tab={{ ...tab, search: "nothing" }}
@@ -304,17 +331,18 @@ describe("FilesTab", () => {
 
   // WSP-05: activating a file opens a File tab, so the list the user is
   // browsing survives.
-  it("opens a File tab for the activated file", async () => {
+  it("opens a File tab for the activated match", async () => {
     const user = userEvent.setup();
-    api.getFiles.mockResolvedValue({
-      entries: [
-        { path: "src/main.ts", name: "main.ts", kind: "file", size: 1 },
-        { path: "src", name: "src", kind: "directory", size: null },
-      ],
-      truncated: false,
-    });
+    api.getFiles.mockResolvedValue(
+      listing([
+        { path: "src/main.ts", kind: "file" },
+        { path: "src", kind: "directory" },
+      ]),
+    );
     const actions = actionsSpy();
-    renderBody(<FilesTab tab={tab} visible actions={actions} />);
+    renderBody(
+      <FilesTab tab={{ ...tab, search: "src" }} visible actions={actions} />,
+    );
 
     await user.click(await screen.findByRole("button", { name: /main\.ts/ }));
 
@@ -329,7 +357,7 @@ describe("FilesTab", () => {
 
   it("persists the settled search onto its own tab", async () => {
     const user = userEvent.setup();
-    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getFiles.mockResolvedValue(listing([]));
     const actions = actionsSpy();
     renderBody(<FilesTab tab={tab} visible actions={actions} />);
 
@@ -344,7 +372,7 @@ describe("FilesTab", () => {
   });
 
   it("issues no request while it is hidden", () => {
-    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    api.getFiles.mockResolvedValue(listing([]));
     renderBody(<FilesTab tab={tab} visible={false} actions={actionsSpy()} />);
 
     expect(api.getFiles).not.toHaveBeenCalled();

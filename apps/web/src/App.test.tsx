@@ -1650,9 +1650,19 @@ describe("panel Files tab search", () => {
       capabilities: { prompt: true, steer: true, stop: true },
       diagnostics: [],
     } satisfies ThreadSnapshot);
+    // The tree lists one level at a time; the search asks for the whole
+    // subtree. Both answer from this stub.
     api.getFiles.mockResolvedValue({
-      entries: [{ path: "src/main.ts", kind: "file" as const }],
+      entries: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          kind: "file" as const,
+          size: 1,
+        },
+      ],
       truncated: false,
+      ignoredHidden: false,
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -1670,8 +1680,14 @@ describe("panel Files tab search", () => {
     const search = await screen.findByRole("textbox", {
       name: "Search project files",
     });
-    await screen.findByText("src/main.ts");
+    // The tab opens on the tree: one row, showing its own name.
+    await screen.findByRole("treeitem", { name: "main.ts" });
     expect(api.getFiles).toHaveBeenCalledTimes(1);
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
+      path: "",
+      depth: "1",
+      showIgnored: false,
+    });
 
     await user.type(search, "mai");
     // Three keystrokes, still one request in flight-or-done: nothing fires
@@ -1679,14 +1695,26 @@ describe("panel Files tab search", () => {
     expect(api.getFiles).toHaveBeenCalledTimes(1);
     // ...and the panel never blanks to its loading state mid-typing.
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
-    expect(screen.getByText("src/main.ts")).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
 
     await waitFor(() => {
       expect(api.getFiles).toHaveBeenCalledTimes(2);
     });
+    // A settled search is flat, full paths, and asks for the whole subtree.
     expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
       search: "mai",
+      depth: "full",
+      showIgnored: false,
     });
+    expect(await screen.findByText("src/main.ts")).toBeVisible();
+    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
+
+    // Typing on: the settled result stays on screen while the next one runs.
+    await user.type(search, "n");
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(3);
+    });
+    expect(screen.getByText("src/main.ts")).toBeVisible();
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
   });
 });
