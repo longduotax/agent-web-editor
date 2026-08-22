@@ -615,6 +615,70 @@ describe("dragging a panel tab", () => {
     expect(files).toHaveAttribute("aria-selected", "false");
   });
 
+  // H7. A second `pointerdown` arriving mid-drag replaced `tracking.current`
+  // with a fresh, non-dragging record; the `pointerup` that followed took
+  // the "never became a drag" early return and nulled tracking without ever
+  // clearing `drag`. The ghost, both groups' drop zones, and the source
+  // tab's 0.45 opacity therefore stayed on screen with no gesture behind
+  // them, and `cancel()` — which begins by reading `tracking.current` —
+  // early-returned for ever, so Escape could not clear it either. Only a
+  // reload could.
+  describe("a drag cannot outlive the gesture that owns it", () => {
+    function dragState() {
+      return {
+        zones: document.querySelectorAll(".panel-drop-zones").length,
+        ghost: document.querySelector(".panel-drag-ghost") !== null,
+        dimmed:
+          document.querySelector(".panel-tab.dragging") !== null ||
+          document.querySelector("[data-dragging]") !== null,
+      };
+    }
+
+    it("clears when a second press interrupts it and the pointer is released", () => {
+      const store = stubStorage();
+      seedTwoGroups(store);
+      renderPanel();
+      const files = screen.getByRole("tab", { name: "Files" });
+
+      beginDrag(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+      movePointer(files, RIGHT_CENTRE);
+      expect(dragState().zones).toBe(2);
+      expect(dragState().ghost).toBe(true);
+
+      // The second press the harness could deliver and a real pointer can
+      // too — a lost `pointerup`, a re-press, an assistive tool.
+      press(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+      release(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+
+      expect(dragState()).toEqual({ zones: 0, ghost: false, dimmed: false });
+      // Nothing moved, because the interrupted drag was cancelled rather
+      // than committed to wherever the pointer happened to be.
+      expect(tabsOf(0)).toEqual(["Changes×", "Files×"]);
+      expect(tabsOf(1)).toEqual(["main.ts×"]);
+    });
+
+    it("recovers from a stuck state on Escape, whatever it is tracking", () => {
+      const store = stubStorage();
+      seedTwoGroups(store);
+      renderPanel();
+      const files = screen.getByRole("tab", { name: "Files" });
+
+      beginDrag(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+      movePointer(files, RIGHT_CENTRE);
+      // A second press replaces the tracking record; its release used to
+      // leave the drag state behind with nothing tracking it.
+      press(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+      release(files, { x: LAYOUT.leftGroupX + 80, y: 20 });
+
+      // Escape is the stated recovery and must work from any state, not
+      // only from one whose gesture is still being tracked.
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      expect(dragState()).toEqual({ zones: 0, ghost: false, dimmed: false });
+      expect(tabsOf(0)).toEqual(["Changes×", "Files×"]);
+    });
+  });
+
   it("leaves the layout alone when the drag is released outside every target", () => {
     const store = stubStorage();
     seedTwoGroups(store);

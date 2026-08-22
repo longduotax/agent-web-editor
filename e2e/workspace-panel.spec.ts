@@ -1716,6 +1716,52 @@ test("panel drag: Escape leaves the layout exactly as it was", async ({
   await expect(page.getByRole("status")).toContainText("Drag cancelled");
 });
 
+// H7. A second `pointerdown` mid-drag replaced the tracking record with a
+// non-dragging one; its release took the "never became a drag" early return
+// and left the ghost, both groups' drop zones, and the source tab at 0.45
+// opacity on screen with no gesture behind them — and Escape, which cancels
+// through the same tracking record, could not clear them either. Driven with
+// a real pointer here, because whether Chrome delivers that second press at
+// all was the one thing the hands-on pass could not establish.
+test("panel drag: an interrupted gesture leaves no drag behind, and Escape recovers", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  const before = await page.evaluate(panelLayout);
+  const only = await pointsOfGroup(page, 0);
+  await dragTabOver(page, "Changes", only.right);
+  expect((await page.evaluate(panelLayout)).dropZones).toBe(1);
+
+  // The interruption: a second press, then the release that follows it.
+  await page.mouse.down();
+  await page.mouse.up();
+
+  const stranded = await page.evaluate(() => {
+    const tab = document.querySelector(".panel-tab.dragging");
+    return {
+      zones: [...document.querySelectorAll(".panel-drop-zones")].length,
+      ghost: document.querySelector(".panel-drag-ghost") !== null,
+      dimmed: tab === null ? null : getComputedStyle(tab).opacity,
+    };
+  });
+  expect(stranded).toEqual({ zones: 0, ghost: false, dimmed: null });
+  expect(await page.evaluate(panelLayout)).toEqual({
+    ...before,
+    dropZones: 0,
+  });
+
+  // And Escape recovers from any state rather than only from one whose
+  // gesture is still being tracked.
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(panelLayout)).toEqual({
+    ...before,
+    dropZones: 0,
+  });
+});
+
 test("panel drag: releasing outside every drop target changes nothing", async ({
   page,
 }) => {
