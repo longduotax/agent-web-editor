@@ -1626,6 +1626,28 @@ case asserting either would pass in both directions.
    all five bands in **both** colour schemes and asserts none is transparent
    and the highlighted one differs.
 
+7. **The per-tab close affordance was a 9 x 16px target (G6).** Reproduced
+   exactly, by hit-testing outward from the glyph's centre: 9px of hittable
+   width against the strip's own close button at 30 x 30. Its behaviour was
+   never at fault — inert while the tab is inactive, arms no drag, a plain
+   click closes the tab — so nothing about it changed except what a pointer
+   can land on: a pseudo-element hit box, so the glyph keeps its size and the
+   strip keeps the header token's height. Measured after: **25 x 30**.
+
+   Two things came out of building it that are worth recording, because the
+   first version was wrong and a test caught it. The hit box may reach right
+   only as far as the tab's own padding — a close control overhanging the
+   next tab closes the wrong tab — so the width has to come from the left,
+   and a first attempt at 12px of left reach put the CENTRE of a 53px "Files"
+   tab inside its own close control. Clicking that tab to switch to it closed
+   it, which the keyboard end-to-end case failed on immediately. So the tab
+   now has a `min-width` of 3.5rem as well: it is the only way to state "the
+   hit area can never reach a tab's middle" in CSS, since the shortest
+   possible title would otherwise make a 36px tab. The right-hand padding
+   grew by 0.15rem to buy the last of the width. The strip's height is
+   unchanged and is asserted against the `--header-h` token rather than
+   against a number.
+
 **The robustness note about `commit()` — considered, and acted on.** The
 reviewer could not reproduce the misfire with real input because Chrome
 always delivers a `pointermove` at the release point first, and this pass did

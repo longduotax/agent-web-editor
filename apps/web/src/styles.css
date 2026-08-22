@@ -1482,7 +1482,12 @@ a:focus-visible {
 .panel-tab {
   display: flex;
   max-width: 12rem;
-  min-width: 0;
+  /* A floor, so the close affordance's hit area (below) can never reach the
+     middle of a tab. A one-character file name would otherwise make a 36px
+     tab whose centre is inside its own close control, and clicking a tab to
+     switch to it would close it instead. 3.5rem leaves ~3px of clearance at
+     the narrowest tab the strip can produce. */
+  min-width: 3.5rem;
   /* Never shrinks: the strip scrolls instead. */
   flex: 0 0 auto;
   /* A touch that pans horizontally scrolls the strip — the only way a touch
@@ -1492,7 +1497,9 @@ a:focus-visible {
   touch-action: pan-x;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.8rem 0.4rem;
+  /* Asymmetric: the extra 0.15rem on the right is hit area for the close
+     affordance, which extends into exactly this padding and no further. */
+  padding: 0.8rem 0.55rem 0.8rem 0.4rem;
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
@@ -1529,11 +1536,28 @@ a:focus-visible {
    was an invisible close button, and a tap meant to switch tabs closed one
    instead (D3). */
 .panel-tab-close {
+  position: relative;
   flex: none;
   color: var(--muted);
   visibility: hidden;
   pointer-events: none;
   font-size: 0.9rem;
+}
+/* The glyph is 9 x 16px, against 30 x 30 for the strip's own close button
+   (G6). Its behaviour was never the problem — it is inert while the tab is
+   inactive, it arms no drag, and a plain click closes the tab — it was just
+   too small to hit. So the HIT AREA grows and nothing else does: a
+   pseudo-element rather than padding, so the glyph keeps its size, the tab
+   keeps its height. It reaches exactly as far right as the tab's own
+   padding and no further, because a close control overhanging the next tab
+   would close the wrong one, and the tab has a `min-width` so it can never
+   reach a tab's middle either. Measured after: 25 x 30. It inherits
+   `visibility` and `pointer-events` from the span, so an inactive tab's
+   right edge is still not a hidden close button (D3). */
+.panel-tab-close::after {
+  position: absolute;
+  inset: -0.45rem -0.55rem;
+  content: "";
 }
 .panel-tab.active .panel-tab-close {
   visibility: visible;

@@ -161,6 +161,7 @@ interface ProbeElement {
 }
 declare const document: {
   head: { appendChild(node: unknown): void };
+  documentElement: ProbeElement;
   createElement(tag: string): { textContent: string };
   querySelector(selector: string): ProbeElement | null;
   querySelectorAll(selector: string): Iterable<ProbeElement>;
@@ -168,6 +169,8 @@ declare const document: {
 };
 declare function getComputedStyle(element: ProbeElement): {
   display: string;
+  fontSize: string;
+  getPropertyValue(property: string): string;
   borderTopColor: string;
   backgroundColor: string;
   boxShadow: string;
@@ -522,6 +525,88 @@ test("the docked edge is elevated in both themes, and still resizes", async ({
     .poll(async () => (await page.evaluate(panelEdge)).opacity)
     .toBe("0");
   expect((await page.evaluate(panelEdge)).railShadow).toBe("none");
+});
+
+// G6. The per-tab close affordance measured [9, 16] CSS px — about 7 x 12
+// device px at the reporter's display scale — against the strip's own close
+// button at [30, 30]. Its behaviour was and is correct: `pointer-events:
+// none` while the tab is inactive, no drag armed from a press on it, a plain
+// click closes the tab. It was simply too small to hit.
+//
+// Measured by hit-testing outward from the glyph's centre rather than by
+// reading a rectangle, because the hit area is a pseudo-element: the glyph
+// keeps its size and the strip keeps its height, and only what the pointer
+// can land on changes.
+function closeAffordanceHitBox() {
+  const tab = document.querySelector(".panel-tab.active");
+  const close = document.querySelector(".panel-tab.active .panel-tab-close");
+  if (tab === null || close === null) return null;
+  const tabRect = tab.getBoundingClientRect();
+  const rect = close.getBoundingClientRect();
+  const cx = Math.round(rect.x + rect.width / 2);
+  const cy = Math.round(rect.y + rect.height / 2);
+  const hits = (x: number, y: number) => {
+    const element = document.elementFromPoint(x, y);
+    return element?.className.includes("panel-tab-close") === true;
+  };
+  const reach = (dx: number, dy: number) => {
+    let steps = 0;
+    while (steps < 80 && hits(cx + dx * (steps + 1), cy + dy * (steps + 1)))
+      steps += 1;
+    return steps;
+  };
+  const right = reach(1, 0);
+  return {
+    glyphWidth: Math.round(rect.width),
+    glyphHeight: Math.round(rect.height),
+    hitWidth: reach(-1, 0) + right + 1,
+    hitHeight: reach(0, -1) + reach(0, 1) + 1,
+    // How far the hit area reaches past the tab's own right edge: anything
+    // over zero would put a close control on top of the next tab.
+    pastTabRight: Math.max(0, cx + right - (tabRect.x + tabRect.width)),
+    tabHeight: Math.round(tabRect.height),
+    stripHeight: Math.round(
+      document.querySelector(".panel-tabstrip")?.getBoundingClientRect()
+        .height ?? 0,
+    ),
+    // What the strip's height is SUPPOSED to be: the header token, which is
+    // what "without changing the strip's height" means.
+    headerHeight:
+      parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--header-h",
+        ),
+      ) * parseFloat(getComputedStyle(document.documentElement).fontSize),
+  };
+}
+
+test("panel tab: the close affordance is big enough to hit", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  // Hover the active tab, which is how a pointer reaches the affordance.
+  await page.getByRole("tab", { name: "Files" }).hover();
+  const box = await page.evaluate(closeAffordanceHitBox);
+  expect(box).not.toBeNull();
+  if (box === null) return;
+
+  // The glyph itself is unchanged — around 9 x 16 CSS px, as reported.
+  expect(box.glyphWidth).toBeLessThanOrEqual(12);
+  expect(box.glyphHeight).toBeLessThanOrEqual(18);
+  // What the pointer can land on is not.
+  expect(box.hitWidth).toBeGreaterThanOrEqual(24);
+  expect(box.hitHeight).toBeGreaterThanOrEqual(24);
+  // And it grew inside the tab it belongs to: no taller than the tab, and
+  // never over the next one.
+  expect(box.hitHeight).toBeLessThanOrEqual(box.tabHeight);
+  expect(box.pastTabRight).toBe(0);
+  // The strip is still exactly the header token's height: growing the hit
+  // area with a pseudo-element rather than with padding is what keeps it
+  // there.
+  expect(Math.abs(box.stripHeight - box.headerHeight)).toBeLessThanOrEqual(1);
 });
 
 test.describe("on a device with no hover", () => {
