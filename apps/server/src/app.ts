@@ -372,9 +372,14 @@ export async function buildServer(
       body.prompt,
       body.workspace,
       body.idempotencyKey,
+      body.runtime,
     );
   });
 
+  server.get(
+    "/api/agent-backends",
+    async () => await workspace.agentBackends(),
+  );
   server.get("/api/projects/:projectId/sessions", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     return await workspace.discoverSessions(params.projectId);
@@ -388,6 +393,7 @@ export async function buildServer(
         body.runtimeSessionId,
         body.title,
         body.idempotencyKey,
+        body.runtime,
       ),
     };
   });

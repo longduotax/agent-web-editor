@@ -157,6 +157,25 @@ export class CodexAgentRuntime implements AgentRuntime {
     return new CodexOpenSession(this.client, sessionId);
   }
 
+  /**
+   * Reports whether Codex can actually run here. Used to show the backend
+   * disabled with a reason rather than letting chat creation fail (AGB-03).
+   */
+  public async probe(): Promise<{ available: boolean; reason?: string }> {
+    try {
+      await this.client.ready();
+      return { available: true };
+    } catch (error) {
+      return {
+        available: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Codex is not available on this machine.",
+      };
+    }
+  }
+
   /** Releases the shared app-server process. */
   public close(): Promise<void> {
     return this.client.dispose();

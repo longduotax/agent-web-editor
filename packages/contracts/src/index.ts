@@ -312,6 +312,21 @@ export const SessionDescriptorSchema = z.object({
   runtime: RuntimeKindSchema,
 });
 export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>;
+
+// The browser needs both halves to render the composer's backend choice: which
+// backend a new chat gets by default (AGB-02), and which are usable on this
+// machine so an unusable one can be shown disabled with its reason (AGB-03).
+export const AgentBackendSchema = z.object({
+  kind: RuntimeKindSchema,
+  available: z.boolean(),
+  reason: z.string().max(300).nullable(),
+});
+export const AgentBackendsResponseSchema = z.object({
+  defaultRuntime: RuntimeKindSchema,
+  backends: z.array(AgentBackendSchema),
+});
+export type AgentBackend = z.infer<typeof AgentBackendSchema>;
+export type AgentBackendsResponse = z.infer<typeof AgentBackendsResponseSchema>;
 export const SessionsResponseSchema = z.object({
   sessions: z.array(SessionDescriptorSchema),
   diagnostics: z.array(z.string()),

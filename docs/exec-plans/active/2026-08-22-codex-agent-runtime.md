@@ -240,7 +240,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       keeping the existing single-`runtime` seam working. The machine default must be **readable by the browser** — extend the existing workspace/settings response with `defaultRuntime` and the per-backend availability the composer needs for AGB-03. `WorkspaceService` takes a
       resolver and picks the adapter from `thread.runtime` at all eight call sites.
 
-- [ ] **Task 9 — Routes and creation flow carry the backend.** Requests resolve
+- [x] **Task 9 — Routes and creation flow carry the backend.** Requests resolve
       an omitted `runtime` to the configured default; the creation operation records
       it before any session is created, so recovery reopens on the right backend;
       `ThreadSummary` DTOs report it; session discovery reports per-backend
@@ -357,6 +357,10 @@ checkboxes above for the current position.
   recorded backend to its adapter; `parseConfig` gains
   `PI_WEB_DEFAULT_RUNTIME` (default `codex`), `PI_WEB_CODEX_SANDBOX`
   (default `workspace-write`), and `PI_WEB_CODEX_BIN`. 428 unit tests green.
+- 2026-08-22: Task 9 complete. Routes carry `runtime`; new
+  `GET /api/agent-backends` reports the machine default plus per-backend
+  availability, probed through an optional `probe()` the Codex adapter
+  implements and in-process adapters do not need. 433 unit tests green.
 
 ## Discoveries and blockers
 

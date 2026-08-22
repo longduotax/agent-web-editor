@@ -26,6 +26,7 @@ import {
   type Run,
   type RuntimeKind,
   type ThreadId,
+  type AgentBackendsResponse,
   type SessionDescriptor,
   type ThreadSnapshot,
   type ThreadSummary,
@@ -888,6 +889,13 @@ export class WorkspaceService {
           (descriptor.preview.slice(0, 80) || "Imported thread"),
       ),
     );
+  }
+
+  public async agentBackends(): Promise<AgentBackendsResponse> {
+    return {
+      defaultRuntime: this.adapters.defaultKind,
+      backends: await this.adapters.availability(),
+    };
   }
 
   public async discoverSessions(projectId: ProjectId) {
