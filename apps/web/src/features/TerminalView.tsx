@@ -139,7 +139,16 @@ export function TerminalView({
       // exchange works again, so whatever went wrong last is over (F1).
       setNotice(null);
       if (parsed.data.type === "ready") {
+        const previous = terminalId.current;
         terminalId.current = parsed.data.terminalId;
+        // A `ready` naming a DIFFERENT terminal than the one on screen is a
+        // restart: the server disposed that shell and spawned another. The
+        // dead shell's screen used to stay exactly where it was, with the
+        // new prompt appended under it, which is why restarting looked like
+        // it did nothing at all. `reset` is the only frame that cleared,
+        // and a restart never sends one.
+        if (previous !== null && previous !== parsed.data.terminalId)
+          terminal.clear();
         setAttached(true);
         setStatus("Terminal running");
       } else if (parsed.data.type === "output")

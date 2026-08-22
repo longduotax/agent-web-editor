@@ -770,3 +770,119 @@ test("panel groups: a split at the minimum width scrolls rather than shrinking",
   expect(negotiated?.columns ?? 0).toBeGreaterThanOrEqual(24);
   expect(negotiated?.rows ?? 0).toBeGreaterThanOrEqual(2);
 });
+
+// Unconfirmed report 1: "no scrollback replay after reload". The server
+// keeps a 1MiB replay ring and sends it as an `output` frame right after
+// `ready`; whether it arrives, and whether the client writes it, is what
+// this settles. The reporter's window was intermittently occluded, which
+// stalls requestAnimationFrame and therefore xterm's painting.
+test("panel terminal: a reload re-attaches with the scrollback replayed", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.locator(".terminal-surface").click();
+  await page.keyboard.type("echo replay-marker-9137");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".xterm-rows")).toContainText(
+    "replay-marker-9137",
+    {
+      timeout: 15_000,
+    },
+  );
+
+  await page.reload();
+
+  // The tab comes back from the device-local record, re-attaches to the
+  // same still-running process (WSP-07), and shows what was there.
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.locator(".xterm-rows")).toContainText(
+    "replay-marker-9137",
+    {
+      timeout: 15_000,
+    },
+  );
+});
+
+// Unconfirmed report 2: "restart appears to do nothing". The server does
+// restart — it disposes the owner, spawns a new shell and sends a fresh
+// `ready` — but nothing told the view to stop showing the dead shell's
+// screen, so from the user's side the button did nothing visible.
+test("panel terminal: restart clears the dead shell's screen", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.locator(".terminal-surface").click();
+  await page.keyboard.type("echo restart-marker-4471");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".xterm-rows")).toContainText(
+    "restart-marker-4471",
+    { timeout: 15_000 },
+  );
+
+  await page.getByRole("button", { name: "Restart" }).click();
+
+  await expect(page.locator(".xterm-rows")).not.toContainText(
+    "restart-marker-4471",
+    { timeout: 15_000 },
+  );
+});
+
+// Unconfirmed report 3: at the panel's minimum width a strip of three tabs
+// overflows, and `scrollbar-width: none` means a mouse-only user sees no
+// affordance for the rest. Keyboard and trackpad were confirmed to work.
+// This measures the remaining case — a plain wheel over the strip — because
+// the verdict turns on whether the strip is genuinely unreachable or merely
+// undecorated. Measured: Chromium does NOT translate a vertical wheel for a
+// horizontal-only scroller, so it was unreachable, and the strip now takes
+// whichever axis the pointer moved.
+function stripScroll() {
+  const strip = document.querySelector('[role="tablist"]');
+  return strip === null
+    ? { overflow: -1, scrollLeft: -1 }
+    : {
+        overflow: strip.scrollWidth - strip.clientWidth,
+        scrollLeft: strip.scrollLeft,
+      };
+}
+
+test("panel tab strip: an overflowing strip scrolls under a plain wheel", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await openPanelTab(page, "Terminal");
+  await page.getByRole("separator", { name: "Resize workspace panel" }).focus();
+  await page.keyboard.press("Home");
+  await expect(page.getByRole("tab")).toHaveCount(3);
+
+  expect((await page.evaluate(stripScroll)).overflow).toBeGreaterThan(0);
+
+  // Back to the first tab, so there is somewhere to scroll TO.
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await expect
+    .poll(async () => (await page.evaluate(stripScroll)).scrollLeft)
+    .toBe(0);
+
+  const box = await page.getByRole("tablist").boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 200);
+
+  // The tabs a strip cannot fit are reachable with an ordinary mouse.
+  await expect
+    .poll(async () => (await page.evaluate(stripScroll)).scrollLeft)
+    .toBeGreaterThan(0);
+});

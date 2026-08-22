@@ -306,6 +306,42 @@ describe("TerminalView", () => {
     expect(screen.getByText("Terminal disconnected")).toBeInTheDocument();
   });
 
+  // A restart replaces the process, and the server says so by sending a
+  // `ready` with a new terminal id. It sends no `reset`, which was the only
+  // frame that cleared the view — so the dead shell's screen stayed on
+  // display and restarting looked like it had done nothing.
+  it("clears the dead shell's screen when a restart brings a new terminal", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    const terminal = terminals.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    if (terminal === undefined) throw new Error("Terminal was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+    // Re-attaching to the SAME terminal keeps its screen: that is the
+    // reload-with-replay path, where clearing would throw the replay away.
+    act(() => {
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+    expect(terminal.cleared).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    act(() => {
+      socket.message({
+        version: 1,
+        type: "ready",
+        projectId,
+        terminalId: "20000000-0000-4000-8000-000000000002",
+      });
+    });
+
+    expect(terminal.cleared).toBe(1);
+    expect(screen.getByText("Terminal running")).toBeInTheDocument();
+  });
+
   it("recovers from termination by attaching a fresh terminal", () => {
     stubEnvironment();
     render(<TerminalView projectId={projectId} threadId={threadId} />);

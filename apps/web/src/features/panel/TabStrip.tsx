@@ -109,6 +109,22 @@ export function TabStrip(props: TabStripProps): JSX.Element {
         }
         aria-orientation="horizontal"
         onKeyDown={moveFocus}
+        // At the panel's minimum width a third tab is off the end of the
+        // strip. The keyboard reaches it (arrow keys above) and a trackpad
+        // reaches it (a horizontal gesture sends deltaX), but a plain wheel
+        // mouse did not: measured in Chromium, a vertical wheel over a
+        // horizontal-only scroller moves nothing at all. So the strip takes
+        // whichever axis the pointer actually moved.
+        onWheel={(event) => {
+          const strip = event.currentTarget;
+          if (strip.scrollWidth <= strip.clientWidth) return;
+          const delta =
+            Math.abs(event.deltaX) > Math.abs(event.deltaY)
+              ? event.deltaX
+              : event.deltaY;
+          if (delta === 0) return;
+          strip.scrollLeft += delta;
+        }}
       >
         {group.tabIds.map((tabId) => {
           const tab = tabs[tabId];
