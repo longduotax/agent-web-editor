@@ -22,6 +22,13 @@ const PROJECT = "11111111-1111-4111-8111-111111111111" as ProjectId;
 const THREAD = "aaaaaaaa-1111-4111-8111-111111111111" as ThreadId;
 const TERMINAL = "cccccccc-3333-4333-8333-333333333333" as TerminalId;
 
+const STORED_CONTEXT = {
+  projectId: PROJECT,
+  threadId: THREAD,
+  scopeKey: "worktree-1",
+  label: "feature",
+};
+
 function ids(): () => string {
   let n = 0;
   return () => `id-${String(++n)}`;
@@ -263,8 +270,11 @@ describe("readPanelState", () => {
   });
 
   it("discards a record of an unknown version and clears it", () => {
+    // Perfect in every other respect, so the version is the only reason it
+    // is refused: a record that also fails six other fields would pass this
+    // test with the version check deleted.
     const { removed } = stubStorage({
-      [PANEL_STORAGE_KEY]: JSON.stringify({ version: 99, root: null }),
+      [PANEL_STORAGE_KEY]: storedPanel({ version: 3 }),
     });
     expectDefaultPanel(readPanelState(ids()));
     expect(removed).toContain(PANEL_STORAGE_KEY);
@@ -426,6 +436,89 @@ describe("readPanelState", () => {
     expect(Object.keys(state.groups)).toHaveLength(9);
   });
 
+  // Each of these parses cleanly against the v2 schema and is refused by the
+  // integrity pass instead. `panelStateProblems` is tested directly for all
+  // of them, but that proves the rule exists, not that the reader runs it:
+  // deleting the `panelStateProblems` call in `readPanelState` left every
+  // one of those tests green.
+  it.each([
+    [
+      "a tab listed in two groups",
+      {
+        root: {
+          type: "split",
+          id: "s1",
+          axis: "row",
+          children: [
+            { type: "group", id: "g1" },
+            { type: "group", id: "g2" },
+          ],
+          sizes: [0.5, 0.5],
+        },
+        groups: {
+          g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" },
+          g2: { id: "g2", tabIds: ["t1"], activeTabId: "t1" },
+        },
+      },
+    ],
+    [
+      "a group that is not in the tree",
+      {
+        groups: {
+          g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" },
+          ghost: { id: "ghost", tabIds: [], activeTabId: null },
+        },
+      },
+    ],
+    [
+      "a group referencing a tab that does not exist",
+      {
+        groups: { g1: { id: "g1", tabIds: ["t1", "gone"], activeTabId: "t1" } },
+      },
+    ],
+    [
+      "a tab keyed under an id that is not its own",
+      { tabs: { t1: { id: "t2", type: "changes", context: null } } },
+    ],
+    [
+      "a tab that belongs to no group",
+      {
+        tabs: {
+          t1: { id: "t1", type: "changes", context: null },
+          t2: { id: "t2", type: "files", context: null, search: "" },
+        },
+      },
+    ],
+    [
+      "two tabs addressing the same thing",
+      {
+        groups: { g1: { id: "g1", tabIds: ["t1", "t2"], activeTabId: "t1" } },
+        tabs: {
+          t1: {
+            id: "t1",
+            type: "file",
+            context: STORED_CONTEXT,
+            path: "a.ts",
+            view: "preview",
+          },
+          t2: {
+            id: "t2",
+            type: "file",
+            context: STORED_CONTEXT,
+            path: "a.ts",
+            view: "source",
+          },
+        },
+      },
+    ],
+  ])("discards a record with %s, and clears it", (_case, overrides) => {
+    const { removed } = stubStorage({
+      [PANEL_STORAGE_KEY]: storedPanel(overrides),
+    });
+    expectDefaultPanel(readPanelState(ids()));
+    expect(removed).toContain(PANEL_STORAGE_KEY);
+  });
+
   it("discards a record that is open with no groups at all", () => {
     const { removed } = stubStorage({
       [PANEL_STORAGE_KEY]: JSON.stringify({
@@ -484,16 +577,28 @@ describe("migration from the v1 inspector preference", () => {
     expect(tab.context).toBeNull();
   });
 
+  // Deliberately not the default panel's own width and open state: a
+  // migration asserted against `{changes, 400, closed}` is indistinguishable
+  // from the reset fallback, and would pass unchanged if this function
+  // returned null for every record.
   it("migrates a changes tab", () => {
     stubStorage({
       [INSPECTOR_MIGRATION_KEY]: JSON.stringify({
         version: 1,
-        open: false,
+        open: true,
         activeTab: "changes",
-        width: 400,
+        width: 512,
       }),
     });
-    expectDefaultPanel(readPanelState(ids()));
+
+    const state = readPanelState(ids());
+
+    expect(panelStateProblems(state)).toEqual([]);
+    expect(onlyGroup(state).tabIds).toHaveLength(1);
+    expect(onlyTab(state).type).toBe("changes");
+    expect(onlyTab(state).context).toBeNull();
+    expect(state.width).toBe(512);
+    expect(state.open).toBe(true);
   });
 
   it("migrates a terminal tab without claiming a process", () => {
