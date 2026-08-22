@@ -48,7 +48,10 @@ selected-thread center.
   - Focus the panel: `Enter`
   - Next / previous tab in the focused group: `PageDown` / `PageUp`
   - Close the focused group's active tab: `Backspace`
-  - Move that tab to the next / previous group: `End` / `Home`
+  - Move that tab right / left: `End` / `Home`. One place along its own tab
+    strip, and into the adjacent group once it is already at that end, so
+    both reordering and moving between groups are reachable without a second
+    pair of keys this group has none of.
   - Split the focused group and put the active tab in the new half:
     `Arrow` (right, left, down, up). A group holding a single tab cannot be
     split — the tab would leave it empty — and the chord says so rather than
@@ -68,6 +71,14 @@ selected-thread center.
   reading a different worktree than the focused pane shows a worktree chip.
   Tab bodies are mounted once per tab and moved between groups, so splitting
   or collapsing a group keeps a running terminal and every scroll position.
+  Tabs are also rearranged by **dragging**: while a tab is held, every
+  visible group shows five drop targets — its strip, which moves the tab in
+  at the drop index, its centre, which moves it in and activates it, and its
+  four edges, which split it on the matching axis. The drag is pointer-driven
+  (pointer capture, a movement threshold, a lightweight ghost), it is
+  narrated in the panel's live region, and `Escape`, a release outside every
+  target, and a drop on the tab's own group centre all leave the layout
+  untouched.
   The focused thread's worktree mode and branch appear once, on its own pane
   header's quiet detail line; the changes summary appears once, in a Changes
   tab. Neither the panel nor its reopen control ever overlaps pane content —

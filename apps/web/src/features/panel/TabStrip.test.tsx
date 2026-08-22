@@ -237,6 +237,52 @@ describe("TabStrip", () => {
     expect(changes).toHaveFocus();
   });
 
+  // Finding 5 of the 2026-08-22 hands-on pass, confirmed rather than fixed:
+  // there is one announced close control, not one per tab, because a tablist
+  // may own nothing but tabs. What has to hold is that ANY tab can be closed
+  // in one obvious step without a pointer — the arrow keys carry the
+  // selection AND the control's name, so this is that walk, keyboard only.
+  it("closes a tab that is not the active one, without a pointer", async () => {
+    const user = userEvent.setup();
+    const closed = vi.fn();
+
+    function LiveStrip(): JSX.Element {
+      const [activeTabId, setActiveTabId] = useState<TabId>("tab-1");
+      const actions: PanelActions = {
+        ...actionsSpy(),
+        activateTab: (tabId) => {
+          setActiveTabId(tabId);
+        },
+        closeTab: closed,
+      };
+      return (
+        <TabStrip
+          group={{ ...group, activeTabId }}
+          tabs={tabs}
+          actions={actions}
+          drag={idleDrag()}
+          focused
+          focusedContext={here}
+          index={1}
+          groupCount={1}
+        />
+      );
+    }
+
+    render(<LiveStrip />);
+    screen.getByRole("tab", { name: "Changes" }).focus();
+
+    await user.keyboard("{ArrowRight}");
+    await user.tab();
+
+    // The one control, now naming the tab the user just selected.
+    expect(
+      screen.getByRole("button", { name: "Close Files tab" }),
+    ).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(closed).toHaveBeenCalledWith("tab-2");
+  });
+
   it("activates a tab on click", async () => {
     const user = userEvent.setup();
     const actions = renderStrip();

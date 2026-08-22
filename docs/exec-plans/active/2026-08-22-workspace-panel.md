@@ -559,18 +559,23 @@ keyboard, reload, and confirm the layout returns.
 mounted only while a drag is in progress: per visible group, one strip zone with
 per-index insertion points, one centre zone, and four edge zones sized to a
 minimum of 15% of the group's short side and at least 32 px so they can be hit
-without precision. Each zone highlights individually on pointer entry. Dropping
+without precision — capped, as built, at 35% of their own axis so a short
+group still has a centre, and measured against the group MINUS its strip, so
+the top edge is a full band below the strip rather than whatever the strip did
+not cover. Each zone highlights individually on pointer entry. Dropping
 on the drag's own group centre returns the same state object by reference.
 `Escape`, a release outside every zone, and a `pointercancel` all restore the
 pre-drag state object by reference — not a rebuilt equal one, so a referential
 assertion is a valid test of "leaves the layout exactly as it was".
 
-The keyboard route is a move mode: a bound key on a focused tab enters it,
-arrows choose a target zone, `Enter` commits, `Escape` cancels, and each
-transition is announced through a polite live region naming the target group and
-edge. Every drag action therefore has a keyboard equivalent and every one of
-them is a row in `panelKeybindings.ts`, which is also what the Settings page
-renders (WSP-10).
+The keyboard route is the chord set rather than a move mode — see the decision
+log entry of 2026-08-22, which records why the mode this plan first proposed
+was not built. Every drag action has a chord, and every chord is a row in
+`features/workspace/keybindings.ts`, which is also what the Settings page
+renders, so an inert binding cannot be advertised (WSP-10). The one action
+that had no chord — reordering within a strip — is now what `End` and `Home`
+do: they walk the tab one place along its strip and into the adjacent group
+once it is at that end.
 
 **Naming and the close control** (findings 3, 4, and 5 of the 2026-08-22
 hands-on pass). Findings 3 and 4 — panel tabs and file rows exposing no
@@ -584,8 +589,14 @@ Discoveries and in the governing specification's
 [Findings against version 1](../../product-specs/workspace-panel.md#findings-against-version-1).
 No markup change is owed. What remains from that group is one open item:
 
-- [ ] **Confirm that every tab is closable from the keyboard and from assistive
-      technology.** The pass found exactly one announced "Close X tab" control,
+- [x] **Confirm that every tab is closable from the keyboard and from assistive
+      technology.** Confirmed, and the design is unchanged: arrow keys carry
+      the selection along the strip and the single close control's accessible
+      name follows it, so any tab is closed by arrowing to it and then either
+      `Tab` + `Enter` or the close chord. `TabStrip.test.tsx` now walks that
+      sequence with the keyboard only, so the decision is pinned by a test
+      rather than by this paragraph. Original wording follows.
+      The pass found exactly one announced "Close X tab" control,
       for the active tab. That is a deliberate decision recorded in
       `TabStrip.tsx` — a tablist may own only tabs, and a real button nested
       inside a tab is a nested interactive — so this is a **design decision to
@@ -1418,12 +1429,93 @@ guessed. Three of the six defects here (F2, F3, F4) are pure layout, invisible
 to a green jsdom suite by construction, and all three are now measured in the
 end-to-end spec at the sizes that reproduce them.
 
+**2026-08-22 — what milestone 3 found while building the drag.**
+
+1. **A chorded arrow was handled twice (D14).** The tab strip's tablist took
+   every `ArrowLeft`/`ArrowRight` as its own, including one carrying
+   `Shift`+primary+`Alt` — which is exactly how the four split chords are
+   spelled. The panel leaves keyboard focus on a tab after every structural
+   chord (F5), so a split chord landed on the strip first, moved the selection
+   one tab along, and only then split — with whichever tab the arrow had just
+   reached rather than the one the user was looking at. Found end to end, not
+   by a test: a drag case set up two groups with a chord and got the two tabs
+   the other way round. A tablist's arrow keys are the unmodified ones, and
+   the strip now ignores a chorded arrow.
+2. **The edge bands needed a floor AND a ceiling.** 15% of a group's short
+   side is 36px at the 240px group floor and 24px at the 160px height floor,
+   which is a band a pointer has to be aimed at, so each band is at least
+   32px. Four bands and a centre share one box, so each is also capped at 35%
+   of its own axis — without that, two 32px bands meet in a short group and
+   the centre, the target that means "move into this group", has no area.
+   And the **strip is taken off the top before the edges divide what is
+   left**: the strip is ~40px tall and the top band is at least 32px, so
+   priority alone would have left the top edge with the few pixels the strip
+   did not cover, or with none.
+3. **The panel's chord group has one key left, and reordering needed two.**
+   That group holds Alt, which composes alternate characters on macOS, so it
+   is restricted to keys whose `event.key` is layout-independent: the four
+   arrows, `Home`, `End`, `PageUp`, `PageDown`, `Backspace`, `Delete`,
+   `Enter`, and `Space`. Eleven were bound; only `Delete` was free. `Insert`
+   is absent from Mac keyboards and `Tab` and `Escape` belong to the
+   operating system in this combination. So the two existing move chords
+   became **"Move panel tab left / right"** — one place along the strip, and
+   into the adjacent group once the tab is at that end, entering from the
+   side it left. That is a superset of what they did, and it closes WSP-10's
+   missing strip-reorder route without inventing a key somebody cannot press.
+   See the decision log.
+4. **The close-control question (finding 5) is confirmed, not changed.**
+   Arrow keys carry the selection along the strip and the single close
+   control's accessible name follows it, so closing any tab without a pointer
+   is: arrow to it, then `Tab` and `Enter`, or the close chord. That walk is
+   now a keyboard-only test in `TabStrip.test.tsx`, so the design is pinned
+   rather than merely argued.
+5. **A test file was silently excluded from `tsc` and `eslint` by its own
+   name.** `TabDrag.test.tsx` sat beside `tabDrag.test.ts`; on a
+   case-insensitive filesystem TypeScript's include-glob expansion treats two
+   files differing only in extension as one and keeps the `.ts`, so the
+   `.tsx` was dropped from the program entirely. `vitest` ran it, `tsc`
+   never saw it and `eslint` reported only "not found by the project
+   service". Renamed to `useTabDrag.test.tsx`. The durable lesson: on this
+   repository a `Foo.test.tsx` beside a `foo.test.ts` is type-checked by
+   nothing, and the symptom is an eslint parsing error rather than anything
+   that mentions the collision.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.
+- Milestone 3's **standing hands-on UI pass is still owed.** Its automated
+  half is complete — the geometry as pure arithmetic, the drag's wiring
+  against a stubbed layout, and nine end-to-end cases that measure the real
+  one — but a pass reports what a scripted spec never thought to assert, and
+  that has not been done for this milestone.
 
 ## Decision and revision log
 
+- 2026-08-22: **The drag's keyboard equivalent is the chord set, not a move
+  mode.** Milestone 3 as written proposed a mode — a key on a focused tab
+  enters it, arrows choose a target zone, `Enter` commits — and that is not
+  what was built. What WSP-10 requires is that every action available by drag
+  has a keyboard route, and every one of them already had a chord except
+  reordering within a strip, which the move chords now cover (below). A move
+  mode would add a second, modal way to reach the same six operations, would
+  need its own arrow bindings on a surface whose arrows are already the split
+  chords, and would have to explain itself to a screen reader in a state the
+  rest of the panel does not have. The plainer answer is that the drag is a
+  pointer affordance and the chords are the keyboard one, both driving the
+  same pure operations in `panelCommands.ts` and `tabDrag.ts` so they cannot
+  drift.
+- 2026-08-22: **`panel-move-tab` walks a tab left or right through the panel
+  rather than jumping to the next group.** `End` and `Home` are unchanged as
+  keys and their commands are unchanged in shape; what changed is that the
+  chord now moves the tab one place along its own strip first and only
+  crosses into the adjacent group once the tab is at that end of it, entering
+  from the side it left. The advertised labels changed with the behaviour
+  ("Move panel tab right" / "left"), so the Settings list still says exactly
+  what the handler does. The alternative — two new bindings — was rejected on
+  the key arithmetic recorded in Discoveries: the panel's chord group has
+  exactly one layout-independent key left and reordering needs two, so a
+  second pair would have had to use `Insert`, which Mac keyboards do not
+  have, or `Tab`/`Escape`, which the operating system takes.
 - 2026-08-22: **The workspace panel's docked outer edge carries a soft shadow
   as well as its hairline.** Requested by the user on 2026-08-22 against a
   reference screenshot of a desktop tool panel, and called out for **light
