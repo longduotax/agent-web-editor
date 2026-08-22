@@ -134,10 +134,14 @@ interface ProbeElement {
   clientHeight: number;
   scrollWidth: number;
   scrollHeight: number;
+  className: string;
+  getBoundingClientRect(): { x: number; y: number; height: number };
 }
 declare const document: {
+  head: { appendChild(node: unknown): void };
+  createElement(tag: string): { textContent: string };
   querySelector(selector: string): ProbeElement | null;
-  elementFromPoint(x: number, y: number): { className: string } | null;
+  elementFromPoint(x: number, y: number): ProbeElement | null;
 };
 declare function getComputedStyle(element: ProbeElement): {
   boxShadow: string;
@@ -230,6 +234,14 @@ function terminalGeometry() {
   };
 }
 
+/** Same helper the transcript-measure spec uses, for the same reason. */
+function forceClassicScrollbars(): void {
+  const style = document.createElement("style");
+  style.textContent =
+    "*::-webkit-scrollbar { width: 15px; height: 15px; } *::-webkit-scrollbar-thumb { background: #888; }";
+  document.head.appendChild(style);
+}
+
 type TerminalGeometry = ReturnType<typeof terminalGeometry>;
 
 /** Five samples a quarter-second apart: enough for a loop to show itself. */
@@ -257,6 +269,13 @@ test("panel terminal: contained at every width, and in a split group", async ({
     "printf '%s\\n' '#699  valai  agent/avm-v4-8156-followup-pr  +9,639 -570'",
   );
   await page.keyboard.press("Enter");
+
+  // Force scrollbars that CONSUME layout space, which is the reporter's
+  // machine (macOS "always show scroll bars") and NOT what headless Chromium
+  // does by default. Under overlay scrollbars an overflowing tab body costs
+  // nothing visible, which is exactly why this defect reached a user through
+  // a green suite.
+  await page.evaluate(forceClassicScrollbars);
 
   const atDefaultWidth = await settledGeometry(page);
   for (const sample of atDefaultWidth) {
@@ -354,21 +373,26 @@ test("the docked edge is elevated in both themes, and still resizes", async ({
 
   // The separator still owns this edge: a box-shadow is decorative and is
   // never hit-tested, but the resize affordance sits on the very pixels the
-  // shadow is drawn over, so ask the browser what is actually there.
-  const separator = page.getByRole("separator", {
-    name: "Resize workspace panel",
-  });
-  const box = await separator.boundingBox();
-  expect(box).not.toBeNull();
-  if (box === null) return;
-  const hit = await page.evaluate(
-    ([x, y]) => {
-      const element = document.elementFromPoint(x ?? 0, y ?? 0);
-      return element === null ? "" : element.className;
-    },
-    [box.x + box.width / 2, box.y + box.height / 2],
-  );
-  expect(hit).toContain("panel-resizer");
+  // shadow is drawn over, so ask the browser what is actually there. Rect
+  // and hit test happen in ONE evaluation, and it is polled, because the
+  // panel slides in over 180ms — measuring the strip mid-transition and
+  // probing after it settles samples a point the strip has since left.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const strip = document.querySelector(".panel-resizer");
+        if (strip === null) return "no-resizer";
+        const rect = strip.getBoundingClientRect();
+        // Two pixels into the strip: outside the panel's border box, and
+        // squarely in the band the shadow is painted over.
+        const element = document.elementFromPoint(
+          rect.x + 2,
+          rect.y + rect.height / 2,
+        );
+        return element === null ? "nothing" : element.className;
+      }),
+    )
+    .toContain("panel-resizer");
 
   // Dark gets its own value rather than inheriting a shadow tuned for white.
   await page.emulateMedia({ colorScheme: "dark" });
