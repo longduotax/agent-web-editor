@@ -880,6 +880,10 @@ test("panel files: the keyboard walks, opens, and closes tree rows", async ({
   // Activating a file opens a File tab, which takes the group; the tree is
   // still there, exactly as it was, behind its own tab.
   await expect(page.getByRole("tab", { name: "main.ts" })).toBeVisible();
+  // H4. The row that opened it is inside the Files body the new tab has just
+  // hidden, so focus used to land on `<body>` and the keyboard user had to
+  // re-issue the focus-panel chord for every file they opened.
+  await expect(page.getByRole("tab", { name: "main.ts" })).toBeFocused();
   await page.getByRole("tab", { name: "Files" }).click();
 
   await src.focus();

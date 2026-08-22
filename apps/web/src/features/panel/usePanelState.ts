@@ -164,7 +164,17 @@ export function usePanelState(): PanelController {
   const actions = useMemo<PanelActions>(
     () => ({
       openTab: (tab, options) => {
-        transform((current) => openTab(current, tab, makeId, options));
+        setSession((current) => {
+          const panel = openTab(current.panel, tab, makeId, options);
+          if (panel === current.panel) return current;
+          // Opening a tab hides whatever body was showing, and the control
+          // that asked for it is usually inside that body: a file row, a
+          // change row, or the new-tab menu. Without this the keyboard is
+          // left on an element inside a `hidden` body, which the browser
+          // answers by dropping focus to `<body>` — F5's defect, one path
+          // further along (H4).
+          return { ...current, panel, focusRequest: current.focusRequest + 1 };
+        });
       },
       closeTab: (tabId) => {
         transform((current) => closeTab(current, tabId));
@@ -236,6 +246,14 @@ export function usePanelState(): PanelController {
       const command = asPanelCommand(resolved);
       if (command === null) return;
       event.preventDefault();
+      // Read here, before anything changes: this is the one moment that
+      // knows where the keyboard was when the chord was issued. Switching
+      // tabs destroys nothing, so it owes the keyboard a new home only when
+      // the keyboard was inside the body it is about to hide — and never
+      // when the chord came from elsewhere on the page, which would make an
+      // ordinary tab switch steal focus into the panel (H4).
+      const focusInBody =
+        document.activeElement?.closest(".panel-tabpanel") != null;
       setSession((current) => {
         const result = applyPanelCommand(current.panel, command, makeId);
         const changed = result.state !== current.panel;
@@ -244,7 +262,9 @@ export function usePanelState(): PanelController {
         // whatever the user was on is still there (F5).
         const focusRequest =
           command.type === "panel-focus" ||
-          (changed && FOCUS_MOVING_COMMANDS.has(command.type))
+          (changed &&
+            (FOCUS_MOVING_COMMANDS.has(command.type) ||
+              (command.type === "panel-tab" && focusInBody)))
             ? current.focusRequest + 1
             : current.focusRequest;
         if (result.announcement === null)

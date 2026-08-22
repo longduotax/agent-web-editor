@@ -556,6 +556,122 @@ describe("WorkspacePanel does only the visible tab's work", () => {
       api.getFiles.mockResolvedValue({ entries: [], truncated: false });
     }
 
+    // H4. F5 was fixed for the structural chords only, and activation is the
+    // same defect: `End` then `Enter` on a file row opened the File tab
+    // correctly and left `document.activeElement.tagName === "BODY"`, because
+    // the row it was on is inside the Files body the new tab has just
+    // hidden. A keyboard user re-issued the focus chord for every file.
+    it("moves focus to the tab it opened from a file row", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      api.getStatus.mockResolvedValue({
+        available: true,
+        message: null,
+        files: [],
+      });
+      api.getFiles.mockResolvedValue({
+        entries: [
+          { path: "notes.txt", name: "notes.txt", kind: "file", size: 4 },
+        ],
+        truncated: false,
+        ignoredHidden: false,
+      });
+      api.getFile.mockResolvedValue({
+        path: "notes.txt",
+        language: null,
+        content: "hi\n",
+        binary: false,
+        truncated: false,
+      });
+      renderPanel();
+      await openBoth(user);
+
+      const row = await screen.findByRole("treeitem", { name: "notes.txt" });
+      row.focus();
+      expect(row).toHaveFocus();
+      await user.keyboard("{Enter}");
+
+      const opened = await screen.findByRole("tab", { name: "notes.txt" });
+      await waitFor(() => {
+        expect(opened).toHaveFocus();
+      });
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    // The other path that hides a body the keyboard is inside: the chord
+    // that switches tabs. It is deliberately not a structural chord — it
+    // destroys nothing — so it moves focus only when focus was in the body
+    // it just hid, and never steals it from elsewhere on the page.
+    it("moves focus out of a body the tab chord has just hidden", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      api.getStatus.mockResolvedValue({
+        available: true,
+        message: null,
+        files: [],
+      });
+      api.getFiles.mockResolvedValue({
+        entries: [
+          { path: "notes.txt", name: "notes.txt", kind: "file", size: 4 },
+        ],
+        truncated: false,
+        ignoredHidden: false,
+      });
+      renderPanel();
+      await openBoth(user);
+      const row = await screen.findByRole("treeitem", { name: "notes.txt" });
+      row.focus();
+      expect(row).toHaveFocus();
+
+      panelChord("PageDown");
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Changes" })).toHaveFocus();
+      });
+    });
+
+    it("leaves focus alone when the tab chord is issued from outside a tab body", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+      const closeControl = screen.getByRole("button", {
+        name: "Close workspace panel",
+      });
+      closeControl.focus();
+
+      panelChord("PageDown");
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: "Changes" })).toHaveAttribute(
+          "aria-selected",
+          "true",
+        );
+      });
+      expect(closeControl).toHaveFocus();
+    });
+
+    // Closing the panel makes it inert, which is the same hazard one level
+    // up: the control that closes it is inside it.
+    it("moves focus to the rail when the panel closes under it", async () => {
+      const user = userEvent.setup();
+      stubStorage();
+      stubApis();
+      renderPanel();
+      await openBoth(user);
+
+      await user.click(
+        screen.getByRole("button", { name: "Close workspace panel" }),
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Open workspace panel" }),
+        ).toHaveFocus();
+      });
+    });
+
     // The focus chord itself, which used to be handled inside a tab strip.
     // It still lands where it always did; what changed is that the panel
     // decides, because a strip mounted by a split cannot.
