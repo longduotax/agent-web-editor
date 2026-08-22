@@ -1931,6 +1931,15 @@ a:focus-visible {
   flex: 1;
   color: var(--muted);
 }
+/* A refused command or an unreadable frame: said here, where it can be
+   cleared, rather than written into the scrollback where it cannot (F1). */
+.terminal-toolbar .terminal-notice {
+  flex: 2;
+  overflow: hidden;
+  color: var(--fail);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .terminal-toolbar button {
   border: 1px solid var(--border);
   border-radius: 0.3rem;

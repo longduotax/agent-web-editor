@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  clampTerminalSize,
   TerminalServerFrameSchema,
   type ProjectId,
   type TerminalId,
@@ -81,7 +82,20 @@ export function TerminalView({
   // Mirrors terminalId for rendering. Reading the ref during render made the
   // "Start terminal" button's visibility depend on an unrelated re-render.
   const [attached, setAttached] = useState(false);
+  // The terminal's lifecycle, which only a lifecycle event changes: starting,
+  // running, exited, disconnected. A refused command is NOT one of these.
   const [status, setStatus] = useState("Starting terminal…");
+  /**
+   * The last thing that went wrong that the shell survived — a command the
+   * server refused, a frame that would not parse — or null.
+   *
+   * Separate from `status` because it is transient and `status` is not (F1).
+   * A protocol rejection used to be written into `status`, where nothing ever
+   * cleared it: the toolbar read "Terminal error" for the rest of the session
+   * while the shell ran normally, and only a reload got rid of it. This
+   * clears itself on the next frame that proves the connection works.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const element = container.current;
@@ -113,14 +127,17 @@ export function TerminalView({
       try {
         value = JSON.parse(String(event.data));
       } catch {
-        setStatus("Terminal protocol error");
+        setNotice("A terminal frame could not be read.");
         return;
       }
       const parsed = TerminalServerFrameSchema.safeParse(value);
       if (!parsed.success) {
-        setStatus("Terminal protocol error");
+        setNotice("A terminal frame could not be read.");
         return;
       }
+      // Any frame the server sends and this client understands is proof the
+      // exchange works again, so whatever went wrong last is over (F1).
+      setNotice(null);
       if (parsed.data.type === "ready") {
         terminalId.current = parsed.data.terminalId;
         setAttached(true);
@@ -138,8 +155,10 @@ export function TerminalView({
         terminal.clear();
         setStatus(parsed.data.reason);
       } else {
-        terminal.writeln(`\r\n[${parsed.data.message}]`);
-        setStatus("Terminal error");
+        // Deliberately NOT written into the terminal buffer: a protocol
+        // error is not program output, and in the scrollback it is
+        // indistinguishable from one and outlives the problem (F1).
+        setNotice(parsed.data.message);
       }
     });
     ws.addEventListener("close", () => {
@@ -164,18 +183,25 @@ export function TerminalView({
     const fitToContainer = () => {
       fit.fit();
       const currentTerminalId = terminalId.current;
-      if (ws.readyState === WebSocket.OPEN && currentTerminalId !== null)
-        ws.send(
-          JSON.stringify({
-            version: 1,
-            type: "resize",
-            projectId,
-            threadId,
-            terminalId: currentTerminalId,
-            columns: terminal.cols,
-            rows: terminal.rows,
-          }),
-        );
+      if (ws.readyState !== WebSocket.OPEN || currentTerminalId === null)
+        return;
+      // The fit addon proposes whatever the box allows, and a group shrunk
+      // to its floor allows `rows: 1` — which the contract refuses, so the
+      // server answered with an error the user saw in their shell (F1). The
+      // bounds come from the contract itself: duplicating the numbers here
+      // would let the two drift apart silently.
+      const { columns, rows } = clampTerminalSize(terminal.cols, terminal.rows);
+      ws.send(
+        JSON.stringify({
+          version: 1,
+          type: "resize",
+          projectId,
+          threadId,
+          terminalId: currentTerminalId,
+          columns,
+          rows,
+        }),
+      );
     };
     refit.current = fitToContainer;
     const resize = new ResizeObserver(() => {
@@ -232,6 +258,11 @@ export function TerminalView({
     <div className="terminal-panel">
       <div className="terminal-toolbar">
         <span>{status}</span>
+        {notice !== null && (
+          <span className="terminal-notice" aria-live="polite">
+            {notice}
+          </span>
+        )}
         {!attached && <button onClick={attach}>Start terminal</button>}
         <button
           onClick={() => {

@@ -5,6 +5,10 @@ import { isAbsolute } from "node:path";
 import * as nodePty from "node-pty";
 import {
   ProjectIdSchema,
+  TERMINAL_MAX_COLUMNS,
+  TERMINAL_MAX_ROWS,
+  TERMINAL_MIN_COLUMNS,
+  TERMINAL_MIN_ROWS,
   TerminalIdSchema,
   TerminalServerFrameSchema,
   type ProjectId,
@@ -381,11 +385,11 @@ export class ProjectTerminalManager {
   ): void {
     if (
       !Number.isInteger(columns) ||
-      columns < 2 ||
-      columns > 500 ||
+      columns < TERMINAL_MIN_COLUMNS ||
+      columns > TERMINAL_MAX_COLUMNS ||
       !Number.isInteger(rows) ||
-      rows < 2 ||
-      rows > 200
+      rows < TERMINAL_MIN_ROWS ||
+      rows > TERMINAL_MAX_ROWS
     )
       throw new Error("terminal_dimensions_invalid");
     const owner = this.activeOwner(rawScopeId, rawProjectId, rawTerminalId);
