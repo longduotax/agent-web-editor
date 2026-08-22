@@ -343,6 +343,22 @@ describe("readPanelState", () => {
     expect(Object.keys(state.groups)).toHaveLength(9);
   });
 
+  it("discards a record that is open with no groups at all", () => {
+    const { removed } = stubStorage({
+      [PANEL_STORAGE_KEY]: JSON.stringify({
+        version: PANEL_STATE_VERSION,
+        root: null,
+        groups: {},
+        tabs: {},
+        focusedGroupId: null,
+        width: 400,
+        open: true,
+      }),
+    });
+    expectDefaultPanel(readPanelState(ids()));
+    expect(removed).toContain(PANEL_STORAGE_KEY);
+  });
+
   it("discards a record whose group activates a tab it does not hold", () => {
     const { removed } = stubStorage({
       [PANEL_STORAGE_KEY]: JSON.stringify({

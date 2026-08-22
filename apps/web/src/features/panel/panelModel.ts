@@ -541,6 +541,13 @@ export function panelStateProblems(state: PanelState): string[] {
   if (state.focusedGroupId !== null && !(state.focusedGroupId in state.groups))
     problems.push(`focus points at unknown group ${state.focusedGroupId}`);
 
+  // WSP-01: when the last tab of the last group closes, the panel closes and
+  // leaves only its reopen control. An open panel with no tree is that state
+  // minus the closing — an empty column beside the chat surface with nothing
+  // in it and no way to fill it.
+  if (state.root === null && state.open)
+    problems.push("panel is open with no groups");
+
   return problems;
 }
 

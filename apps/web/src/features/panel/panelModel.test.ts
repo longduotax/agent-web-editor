@@ -871,6 +871,23 @@ describe("panelStateProblems", () => {
     expect(panelStateProblems(state)).toEqual([]);
   });
 
+  // WSP-01: when the last tab of the last group closes, the panel closes and
+  // leaves only its reopen control. An open panel with no groups is the
+  // state that describes, minus the closing — it renders an empty column
+  // beside the chat surface with nothing in it and no way to fill it.
+  it("rejects an open panel with no groups", () => {
+    const empty: PanelState = {
+      root: null,
+      groups: {},
+      tabs: {},
+      focusedGroupId: null,
+      width: PANEL_DEFAULT_WIDTH,
+      open: true,
+    };
+    expect(panelStateProblems(empty)).not.toEqual([]);
+    expect(panelStateProblems({ ...empty, open: false })).toEqual([]);
+  });
+
   it("rejects a tab that belongs to no group at all", () => {
     const { state, tabA } = twoGroups();
     const tab = state.tabs[tabA];
