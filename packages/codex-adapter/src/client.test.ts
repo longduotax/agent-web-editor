@@ -10,7 +10,11 @@ class FakeTransport implements CodexTransport {
   public closed = false;
   private lineListener: ((line: string) => void) | undefined;
   private exitListener:
-    | ((info: { code: number | null; signal: string | null }) => void)
+    | ((info: {
+        code: number | null;
+        signal: string | null;
+        error?: Error;
+      }) => void)
     | undefined;
 
   public constructor(private readonly autoHandshake = true) {}
@@ -32,7 +36,11 @@ class FakeTransport implements CodexTransport {
     this.lineListener = listener;
   }
   public onExit(
-    listener: (info: { code: number | null; signal: string | null }) => void,
+    listener: (info: {
+      code: number | null;
+      signal: string | null;
+      error?: Error;
+    }) => void,
   ): void {
     this.exitListener = listener;
   }
@@ -47,6 +55,10 @@ class FakeTransport implements CodexTransport {
   }
   public exit(code: number | null = 1): void {
     this.exitListener?.({ code, signal: null });
+  }
+  /** A spawn that never produced a process, as a missing binary does. */
+  public failToStart(error: Error): void {
+    this.exitListener?.({ code: null, signal: null, error });
   }
   /** Resolve the pending request with `id` as the app-server would. */
   public reply(id: number, result: unknown): void {
@@ -232,6 +244,20 @@ describe("CodexClient process supervision", () => {
       expect(second.sent.length).toBeGreaterThan(0);
     });
     expect(handed).toBe(2);
+    await codex.dispose();
+  });
+
+  it("names a missing Codex installation and the remedy", async () => {
+    const transport = new FakeTransport();
+    const codex = client(transport);
+    await codex.ready();
+    const drops: string[] = [];
+    codex.onDisconnect((reason) => {
+      drops.push(reason);
+    });
+    transport.failToStart(new Error("spawn codex ENOENT"));
+    expect(drops[0]).toContain("Codex could not be started");
+    expect(drops[0]).toContain("PI_WEB_CODEX_BIN");
     await codex.dispose();
   });
 

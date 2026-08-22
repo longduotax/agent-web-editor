@@ -212,7 +212,12 @@ class CodexOpenSession implements OpenRuntimeSession {
   }
 
   public async snapshot(): Promise<RuntimeSnapshot> {
-    const raw = await this.client.request("thread/read", { threadId: this.id });
+    // `includeTurns` defaults to false, which returns thread metadata with no
+    // items at all. Without it every reopened chat renders as empty.
+    const raw = await this.client.request("thread/read", {
+      threadId: this.id,
+      includeTurns: true,
+    });
     const parsed = threadReadSchema.safeParse(raw);
     if (!parsed.success)
       throw new RuntimeFailure(
@@ -288,7 +293,10 @@ class CodexOpenSession implements OpenRuntimeSession {
     text: string,
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery> {
-    const raw = await this.client.request("thread/read", { threadId: this.id });
+    const raw = await this.client.request("thread/read", {
+      threadId: this.id,
+      includeTurns: true,
+    });
     const envelope = threadReadSchema.safeParse(raw);
     if (!envelope.success) return { outcome: "not_accepted" };
     const thread = turnsSchema.safeParse(envelope.data.thread);

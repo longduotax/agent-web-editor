@@ -45,13 +45,17 @@ describe("spawnCodexTransport", () => {
     transport.close();
   });
 
-  it("surfaces a missing executable as an exit rather than an unhandled error", async () => {
+  it("names a missing executable instead of reporting a mysterious stop", async () => {
     const transport = await spawnCodexTransport(
       "pi-web-nonexistent-binary",
       [],
       {},
     );
-    const exits: { code: number | null; signal: string | null }[] = [];
+    const exits: {
+      code: number | null;
+      signal: string | null;
+      error?: Error;
+    }[] = [];
     transport.onExit((info) => exits.push(info));
     await vi.waitFor(
       () => {
@@ -59,6 +63,11 @@ describe("spawnCodexTransport", () => {
       },
       { timeout: 4000 },
     );
+    // A failed spawn emits "error", not "exit". Without the error carried
+    // through, a missing binary reads as "stopped (exit code unknown)", which
+    // names neither the cause nor the remedy (AGB-08).
+    expect(exits[0]?.error).toBeInstanceOf(Error);
+    expect(exits[0]?.error?.message).toMatch(/ENOENT|not found|spawn/i);
     transport.close();
   });
 

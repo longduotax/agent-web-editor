@@ -368,6 +368,13 @@ checkboxes above for the current position.
   Codex chat side by side in one project; adapter README, front-door and
   architecture entries, README backend section, and `.env.example`.
   `pnpm check` and `pnpm test:e2e` both green (458 unit tests, 5 e2e).
+- 2026-08-22: All four manual checks run. Check 4 was run against a **copy** of
+  the real `~/.pi/web-workspace/metadata.sqlite` (v7, 1 project, 4 threads, 10
+  runs): it upgraded to v8, every thread read `pi`, runs were preserved,
+  `foreign_key_check` was clean, `runs` still referenced `threads`, a
+  pre-migration backup was written, and the original was left at v7 untouched.
+  Checks 1 and 2 ran against real Codex 0.149.0 and surfaced three defects and
+  one limitation, recorded above.
 
 ## Discoveries and blockers
 
@@ -435,6 +442,39 @@ Discovered while implementing Tasks 1 and 2:
 - **Codex timestamps are Unix milliseconds, not ISO strings**, so every mapped
   timestamp is converted and an unparseable one becomes `null` rather than
   failing the item.
+
+**Found by the manual checks, which the scripted tests could not catch:**
+
+- **`thread/read` returns no items unless `includeTurns` is set.** It defaults
+  to false, so every reopened Codex chat rendered as an **empty transcript** and
+  `recoverPrompt` always answered `not_accepted`. Both are fixed and both now
+  have regression tests. A scripted app-server could never have caught this: the
+  stub answered whatever was asked for regardless of the parameter. This is the
+  clearest argument in the plan for keeping the manual checks.
+- **A missing Codex binary reported the wrong thing.** A failed spawn emits
+  `error`, never `exit`, so it surfaced as "The Codex app-server stopped (exit
+  code unknown)" — naming neither the cause nor the remedy, contrary to AGB-08.
+  The spawn error is now carried through and the message names Codex,
+  the ENOENT, and `PI_WEB_CODEX_BIN`.
+- **`workspace-write` also permits `/tmp` and `$TMPDIR`.** AGB-06 originally
+  claimed Codex "cannot write outside that root". Verified against real Codex: a
+  write to `$HOME` is refused with "Operation not permitted" and the run settles,
+  but a write to `/tmp` succeeds, because Codex's sandbox treats scratch space as
+  part of the workspace. The specification and README were corrected to state the
+  real boundary rather than a tidier one that is not true.
+
+**Known limitation, not fixed:**
+
+- **A reopened Codex chat replays messages but not tool calls.** `thread/read`
+  with `includeTurns: true` returns `itemsView: "full"` and still contains only
+  `userMessage` and `agentMessage` items; the `commandExecution` item that
+  streamed live is absent. The data does exist in Codex's rollout JSONL
+  (`~/.codex/sessions/**/rollout-*.jsonl`, 9 response items for a turn that
+  `thread/read` reports as 2), so a fuller history is recoverable — but only by
+  reading that file, which this plan's decision 2 deliberately declined in favour
+  of the app-server surface. A Pi chat keeps its tool history across a reload and
+  a Codex chat does not, which is a visible difference against AGB-05. Raised for
+  a decision rather than silently absorbed.
 
 No blockers.
 

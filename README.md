@@ -51,7 +51,9 @@ The two backends do **not** run under the same permissions, deliberately:
 - **Pi tools and the explicit project terminal** run with the server user's
   normal permissions. They are not application-approved or OS-sandboxed.
 - **Codex** runs confined to the chat's execution root with no network access
-  (`PI_WEB_CODEX_SANDBOX=workspace-write`, the default). Set it to
+  (`PI_WEB_CODEX_SANDBOX=workspace-write`, the default). That boundary also
+  leaves `/tmp` and `$TMPDIR` writable, which Codex treats as workspace scratch
+  space; everything else, including your home directory, is refused. Set it to
   `danger-full-access` to match Pi's posture, or `read-only` to forbid writes.
   A command blocked by that boundary appears as a failed command in the
   transcript; it never stalls the run.

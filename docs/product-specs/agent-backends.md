@@ -163,7 +163,13 @@ already renders. No Codex-only surface, panel, or control is introduced.
 ### AGB-06 — A Codex chat's file and network boundary is explicit and honest
 
 By default a Codex chat may read and write **within its execution root** and has
-**no network access**. It cannot write outside that root.
+**no network access**. It cannot write into the user's home directory, the
+repository above its worktree, or anywhere else on the machine — with one
+exception the boundary itself grants: the system temporary directories (`/tmp`
+and `$TMPDIR`) remain writable, because Codex's `workspace-write` sandbox treats
+scratch space as part of the workspace. Verified on 2026-08-22: a write to
+`$HOME` is refused with "Operation not permitted" and a write to `/tmp`
+succeeds.
 
 This is deliberately stricter than the Pi backend, which — as
 [the README already documents](../../README.md) — runs with the server user's

@@ -208,6 +208,18 @@ describe("CodexOpenSession", () => {
     await session.dispose();
   });
 
+  it("asks for the thread's items, which are not returned by default", async () => {
+    // `thread/read` omits every item unless includeTurns is set, so without
+    // this a reopened chat renders as an empty transcript.
+    const { server, session } = await opened();
+    await session.snapshot();
+    expect(server.sentParams("thread/read")).toMatchObject({
+      threadId: THREAD,
+      includeTurns: true,
+    });
+    await session.dispose();
+  });
+
   it("reads the stored transcript as a snapshot", async () => {
     const { session } = await opened({
       "thread/read": {
@@ -394,6 +406,7 @@ describe("CodexOpenSession", () => {
     expect(await session.recoverPrompt("recovered prompt", dispatch)).toEqual({
       outcome: "accepted",
     });
+
     expect(await session.recoverPrompt("a different prompt", dispatch)).toEqual(
       { outcome: "not_accepted" },
     );

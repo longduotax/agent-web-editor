@@ -9,7 +9,12 @@ export interface CodexTransport {
   send(line: string): void;
   onLine(listener: (line: string) => void): void;
   onExit(
-    listener: (info: { code: number | null; signal: string | null }) => void,
+    listener: (info: {
+      code: number | null;
+      signal: string | null;
+      /** Set when the child never started, e.g. the binary is missing. */
+      error?: Error;
+    }) => void,
   ): void;
   close(): void;
 }
@@ -304,7 +309,12 @@ export class CodexClient {
 function describeExit(info: {
   code: number | null;
   signal: string | null;
+  error?: Error;
 }): string {
+  // A child that never started is a different problem from one that died, and
+  // the remedy is different too: say which, and what to do about it (AGB-08).
+  if (info.error !== undefined)
+    return `Codex could not be started (${info.error.message}). Check that the Codex CLI is installed and on PATH, or set PI_WEB_CODEX_BIN to its location.`;
   const detail =
     info.signal !== null
       ? `signal ${info.signal}`

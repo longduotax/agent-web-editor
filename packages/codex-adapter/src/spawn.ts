@@ -27,12 +27,17 @@ export async function spawnCodexTransport(
 
   let lineListener: ((line: string) => void) | undefined;
   let exitListener:
-    | ((info: { code: number | null; signal: string | null }) => void)
+    | ((info: {
+        code: number | null;
+        signal: string | null;
+        error?: Error;
+      }) => void)
     | undefined;
   let settled = false;
   const announceExit = (info: {
     code: number | null;
     signal: string | null;
+    error?: Error;
   }): void => {
     if (settled) return;
     settled = true;
@@ -54,8 +59,11 @@ export async function spawnCodexTransport(
 
   // A failed spawn emits "error", never "exit"; both must reach the same
   // listener or a missing binary would hang instead of failing.
-  child.on("error", () => {
-    announceExit({ code: null, signal: null });
+  // A failed spawn emits "error", never "exit". Carrying the error through is
+  // what lets a missing binary be reported as such rather than as a mysterious
+  // stop with an unknown exit code.
+  child.on("error", (error: Error) => {
+    announceExit({ code: null, signal: null, error });
   });
   child.on("exit", (code, signal) => {
     announceExit({ code, signal });
@@ -69,7 +77,11 @@ export async function spawnCodexTransport(
       lineListener = listener;
     },
     onExit(
-      listener: (info: { code: number | null; signal: string | null }) => void,
+      listener: (info: {
+        code: number | null;
+        signal: string | null;
+        error?: Error;
+      }) => void,
     ): void {
       exitListener = listener;
     },
