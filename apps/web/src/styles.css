@@ -1659,6 +1659,7 @@ a:focus-visible {
 }
 .panel-bodies {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -1879,10 +1880,21 @@ a:focus-visible {
   border-radius: 0;
   white-space: pre;
 }
+/* The terminal is a fixed-size viewport that scrolls its own buffer, so it
+   must never grow the box it is given (D13). xterm keeps a stale, oversized
+   scrollbar element inside `.xterm-scrollable-element` after the terminal
+   shrinks — measured at 570px tall inside a 210px terminal — and with
+   `overflow: visible` that leak reached the tab body, made the panel body
+   scrollable, and on a machine with space-consuming scrollbars fed straight
+   back into the fit addon's ResizeObserver. Containing it here is the
+   boundary we own. */
 .terminal-panel {
   display: flex;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 .terminal-toolbar {
   display: flex;
@@ -1913,10 +1925,18 @@ a:focus-visible {
   background: var(--term-bg);
 }
 .terminal-surface {
+  min-width: 0;
+  /* `min-height: 12rem` lived here and acted as a SHRINK FLOOR: this is a
+     `flex: 1` child of a column flex container, so its automatic minimum is
+     on the block axis. In a horizontally split panel — a normal state, not
+     an edge case — the group is shorter than that and the terminal spilled
+     out of its own tab body. The panel enforces its own minimum group size,
+     which is what that 12rem was reaching for. */
+  min-height: 0;
   flex: 1;
-  min-height: 12rem;
   padding: 0.4rem;
   background: var(--page);
+  overflow: hidden;
 }
 .panel-state {
   margin: 0;
