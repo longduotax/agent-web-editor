@@ -8,12 +8,25 @@
 // disk in users' browsers — while the panel uses `{ type: "group" }`.
 //
 // Every narrowing below is on `type === "split"`, never on the leaf tag, so
-// adding a new surface with a new tag needs no change here.
+// adding a new surface with a new tag needs no change here — provided that
+// tag is not itself "split", which is the one thing a new surface must not
+// choose. `LeafTag` makes that a compile error rather than a convention.
 
 export type SplitAxis = "row" | "column"; // row = side by side; column = stacked
 
+/**
+ * A leaf's tag, which may never be "split".
+ *
+ * Every narrowing in this module is on `type === "split"`, so a surface that
+ * tagged its leaves "split" would have `isSplit` classify a leaf as a split
+ * and `const [a, b] = node.children` throw on a node that has no children.
+ * The rule is enforced rather than documented: `LeafTag<"split">` is `never`,
+ * so no leaf of a `TreeNode<"split", Id>` can be constructed.
+ */
+export type LeafTag<Tag extends string> = Tag extends "split" ? never : Tag;
+
 export interface TreeLeaf<Tag extends string, Id> {
-  type: Tag;
+  type: LeafTag<Tag>;
   id: Id;
 }
 

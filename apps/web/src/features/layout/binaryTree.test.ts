@@ -32,6 +32,18 @@ function split(
 }
 
 describe("binaryTree", () => {
+  // A type test, run by tsc rather than by vitest: every narrowing in the
+  // module is `type === "split"`, so a surface that tagged its leaves
+  // "split" would have `isSplit` classify a leaf as a split and
+  // `const [a, b] = node.children` throw on a node that has none. Nothing
+  // stopped `TreeNode<"split", Id>` being written; now the leaf of one
+  // cannot be constructed.
+  it("refuses a leaf tagged as a split", () => {
+    // @ts-expect-error "split" is not a usable leaf tag: see LeafTag.
+    const impossible: TreeNode<"split", string> = { type: "split", id: "a" };
+    expect(impossible).toBeDefined();
+  });
+
   describe("leafIds", () => {
     it("is empty for an absent tree", () => {
       expect(leafIds<"pane", string>(null)).toEqual([]);
