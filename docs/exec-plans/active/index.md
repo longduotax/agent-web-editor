@@ -32,6 +32,25 @@ superseded, or abandoned.
   (layout v1→v2). Implementation is complete and verified (unit coverage,
   end-to-end Playwright coverage, and the tiling-spec supersession); kept Active
   pending merge.
+- [Workspace panel](2026-08-22-workspace-panel.md) — Ready plan version 1,
+  technical approval granted 2026-08-22, product approval satisfied by
+  [Workspace panel](../../product-specs/workspace-panel.md) v1 (approved from
+  the design as presented in session, not yet from a reading of the document).
+  Replaces the
+  `Changes | Files | Terminal` inspector (CWS-06, superseded) with a docked
+  panel of tab groups in their own binary tiling tree, holding durable tabs
+  that carry their own `(project, thread, execution scope)` context: Changes,
+  Diff, Files, File, Terminal, and Browser. Extracts the chat surface's binary
+  tree into a generic `features/layout/binaryTree.ts` without changing the
+  chat layout's persisted format; migrates the device-local
+  `pi-workspace:inspector` record to `pi-workspace:panel` v2; deletes the
+  inspector outright in milestone 2 with no feature flag. Server work: terminal
+  owners rekeyed from execution scope to `TerminalId` so a scope may hold up to
+  eight PTYs, a `create` frame and re-attach by id, a terminals-listing route, a
+  bounded working-directory probe, and a new headers-only browser URL probe
+  with `frame-src` CSP and an opaque-origin iframe sandbox. Overlaps
+  [Codex-style workspace surface](2026-08-22-codex-workspace-surface.md) at
+  CWS-06 only; that plan's other requirements are unaffected.
 - [Scalable conversation history](2026-08-16-scalable-conversation-history.md) —
   Draft plan version 3 has technical approval pending. Product specification v1
   remains approved, but implementation is paused pending plan-v3 approval. The
