@@ -609,8 +609,10 @@ describe("setGroupSizes", () => {
 
     assertPanelInvariants(next);
     if (next.root?.type !== "split") throw new Error("expected a split root");
-    expect(next.root.sizes[0]).toBeCloseTo(0.2, 5);
-    expect(next.root.sizes[1]).toBeCloseTo(0.8, 5);
+    // Below the floor, so it lands on the floor rather than being rescaled
+    // past it.
+    expect(next.root.sizes[0]).toBeCloseTo(0.05, 10);
+    expect(next.root.sizes[1]).toBeCloseTo(0.95, 10);
   });
 
   it("is the identity when the split already has those sizes", () => {

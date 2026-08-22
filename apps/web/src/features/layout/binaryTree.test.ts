@@ -165,11 +165,14 @@ describe("binaryTree", () => {
       expect(normalizeSizes([0.3, 0.7])).toEqual([0.3, 0.7]);
     });
 
-    it("clamps to the minimum fraction and rescales to sum to 1", () => {
-      // 0.001 is clamped up to 0.05, then [0.05, 0.2] is rescaled: [0.2, 0.8].
+    it("rescales a share below the floor up to exactly the floor", () => {
+      // 0.001 against 0.2 is a 1:200 share, which is below the floor, so it
+      // lands ON the floor. It used to be clamped BEFORE rescaling, which
+      // made this pair [0.2, 0.8] — inflating a half-percent share to a
+      // fifth of the split, and leaving the floor itself unenforced.
       const [a, b] = normalizeSizes([0.001, 0.2]);
-      expect(a).toBeCloseTo(0.2, 5);
-      expect(b).toBeCloseTo(0.8, 5);
+      expect(a).toBeCloseTo(MIN_SIZE_FRACTION, 10);
+      expect(b).toBeCloseTo(1 - MIN_SIZE_FRACTION, 10);
     });
 
     it("rescales a pair that does not sum to 1", () => {
@@ -179,14 +182,24 @@ describe("binaryTree", () => {
     });
 
     it("keeps a collapsed side grabbable, and always sums to 1", () => {
-      // Clamping happens before rescaling, so the floor is applied to the
-      // raw pair and the rescale can shave it slightly: 0 clamps to 0.05,
-      // then [0.05, 1] rescales to 0.05/1.05. What matters is that the
-      // collapsed side stays wide enough to grab, never 0.
       const [a, b] = normalizeSizes([0, 1]);
-      expect(a).toBeGreaterThan(0);
-      expect(a).toBeCloseTo(MIN_SIZE_FRACTION / (1 + MIN_SIZE_FRACTION), 10);
+      expect(a).toBeCloseTo(MIN_SIZE_FRACTION, 10);
       expect(a + b).toBeCloseTo(1, 10);
+    });
+
+    // F6. The floor was applied to the RAW pair and then rescaled away, so
+    // it was not a floor: a stored pair like this normalised to ~5.6e-5 and
+    // produced a tile a pointer could not grab back. Clamping the SHARE is
+    // what makes the number mean what it says.
+    it("is a real floor for a wildly out-of-range stored pair", () => {
+      const [a, b] = normalizeSizes([-5, 900]);
+      expect(a).toBeCloseTo(MIN_SIZE_FRACTION, 10);
+      expect(b).toBeCloseTo(1 - MIN_SIZE_FRACTION, 10);
+    });
+
+    it("falls back to an even split for a pair that says nothing", () => {
+      expect(normalizeSizes([0, 0])).toEqual([0.5, 0.5]);
+      expect(normalizeSizes([Number.NaN, 1])).toEqual([0.5, 0.5]);
     });
   });
 
@@ -211,10 +224,11 @@ describe("binaryTree", () => {
 
     it("normalizes the sizes it stores", () => {
       const tree = split("s0", "row", [pane("a"), pane("b")]);
+      // A 1:200 share, which is below the floor and therefore lands on it.
       const next = setSplitSizes(tree, "s0", [0.001, 0.2]);
       if (next.type !== "split") throw new Error("expected a split");
-      expect(next.sizes[0]).toBeCloseTo(0.2, 5);
-      expect(next.sizes[1]).toBeCloseTo(0.8, 5);
+      expect(next.sizes[0]).toBeCloseTo(MIN_SIZE_FRACTION, 10);
+      expect(next.sizes[1]).toBeCloseTo(1 - MIN_SIZE_FRACTION, 10);
     });
 
     it("addresses a split whose children are both splits", () => {

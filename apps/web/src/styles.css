@@ -1732,6 +1732,25 @@ a:focus-visible {
 .panel-announcement:empty {
   display: none;
 }
+/* The tree's viewport (F6). A group has a minimum size in PIXELS, not just
+   a fraction of whatever it is given, so at narrow widths the tree can be
+   larger than the panel — and then the panel scrolls, exactly as the chat
+   surface scrolls rather than shrinking a pane below MIN_PANE_WIDTH_PX. A
+   group squeezed to 139px is not a small group, it is an unusable one: the
+   terminal in it negotiated 16 columns. */
+.panel-tree-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+/* Sized by the tree's own minimum, which the view sets inline. No
+   `min-width: 0` here: that is precisely what this element must not have. */
+.panel-tree-tiles {
+  display: flex;
+  flex: 1;
+}
 /* The panel's own tiling tree (WSP-01), with the chat surface's divider
    affordance: a hairline at rest that turns blue when it is grabbed. */
 .panel-split {

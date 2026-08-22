@@ -164,13 +164,27 @@ export function setSplitSizes<Tag extends string, Id>(
   return { ...node, children: [na, nb] };
 }
 
-// Clamps both fractions to a floor and rescales them to sum to 1, so a
-// divider drag can never produce a tile that cannot be grabbed back.
+// Turns a pair into shares of 1 and holds each of them at a floor, so a
+// divider drag — or a stored pair from anywhere — can never produce a tile
+// that cannot be grabbed back.
+//
+// Rescale FIRST, then clamp. Clamping the raw pair and rescaling afterwards
+// divided the floor away again: `[-5, 900]` clamped to `[0.05, 900]` and
+// normalised to ~5.6e-5, so the "floor" bounded nothing (F6). It also
+// inflated small shares — `[0.001, 0.2]`, a half-percent share, came out as
+// a fifth of the split. Clamping the share is what makes the number mean
+// what its name says.
 export function normalizeSizes(sizes: [number, number]): [number, number] {
-  const clamped: [number, number] = [
-    Math.max(sizes[0], MIN_SIZE_FRACTION),
-    Math.max(sizes[1], MIN_SIZE_FRACTION),
-  ];
-  const total = clamped[0] + clamped[1];
-  return [clamped[0] / total, clamped[1] / total];
+  const total = sizes[0] + sizes[1];
+  // A pair that says nothing about the ratio — zeroes, or anything not a
+  // number — is an even split rather than an arbitrary one.
+  const share =
+    Number.isFinite(total) && total > 0 && Number.isFinite(sizes[0])
+      ? sizes[0] / total
+      : 0.5;
+  const first = Math.min(
+    1 - MIN_SIZE_FRACTION,
+    Math.max(MIN_SIZE_FRACTION, share),
+  );
+  return [first, 1 - first];
 }

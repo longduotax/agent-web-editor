@@ -153,6 +153,7 @@ declare const document: {
   head: { appendChild(node: unknown): void };
   createElement(tag: string): { textContent: string };
   querySelector(selector: string): ProbeElement | null;
+  querySelectorAll(selector: string): Iterable<ProbeElement>;
   elementFromPoint(x: number, y: number): ProbeElement | null;
 };
 declare function getComputedStyle(element: ProbeElement): {
@@ -691,4 +692,81 @@ test("panel terminal: the rendered screen fits its container at every height", a
     // has no padding of its own to confuse a border-box measurement with.
     expect(fit.measuredPaddingY).toBe(0);
   }
+});
+
+/** Every tab group's width, and whether the tree had to scroll to fit them. */
+function groupSizes() {
+  const widths: number[] = [];
+  const heights: number[] = [];
+  for (const group of document.querySelectorAll(".panel-group")) {
+    widths.push(group.clientWidth);
+    heights.push(group.clientHeight);
+  }
+  const scroll = document.querySelector(".panel-tree-scroll");
+  return {
+    widths,
+    heights,
+    treeOverflowX:
+      scroll === null ? -1 : scroll.scrollWidth - scroll.clientWidth,
+  };
+}
+
+/** The columns and rows the terminal last negotiated with the server. */
+async function lastNegotiatedSize(
+  page: Page,
+): Promise<{ columns: number; rows: number } | null> {
+  const frames = await page.evaluate(() => window.__sentFrames ?? []);
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const raw = frames[index];
+    if (raw === undefined) continue;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { type?: unknown }).type === "resize"
+    ) {
+      const frame = parsed as { columns: number; rows: number };
+      return { columns: frame.columns, rows: frame.rows };
+    }
+  }
+  return null;
+}
+
+// F6. WSP-04 says the panel "never shrinks a group into an unreadable
+// state". It enforced a minimum outer WIDTH, but its groups were bounded
+// only by MIN_FRACTION — a proportion, and therefore no floor in pixels: at
+// PANEL_MIN_WIDTH split in two, each group was 139px and the terminal
+// negotiated 16 columns.
+test("panel groups: a split at the minimum width scrolls rather than shrinking", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await openPanelTab(page, "Files");
+
+  // Two groups side by side, then the narrowest the panel goes.
+  await panelChord(page, "ArrowRight");
+  await expect(
+    page.getByRole("separator", { name: "Resize panel groups" }),
+  ).toBeVisible();
+  await page.getByRole("separator", { name: "Resize workspace panel" }).focus();
+  await page.keyboard.press("Home");
+  await page.waitForTimeout(600);
+
+  const sizes = await page.evaluate(groupSizes);
+  expect(sizes.widths).toHaveLength(2);
+  for (const width of sizes.widths) expect(width).toBeGreaterThanOrEqual(240);
+  // Which at a 280px panel means the tree does not fit — and scrolls,
+  // exactly as the chat surface does below MIN_PANE_WIDTH_PX.
+  expect(sizes.treeOverflowX).toBeGreaterThan(0);
+
+  // The point of the floor: the shell is still worth reading.
+  const negotiated = await lastNegotiatedSize(page);
+  expect(negotiated).not.toBeNull();
+  expect(negotiated?.columns ?? 0).toBeGreaterThanOrEqual(24);
+  expect(negotiated?.rows ?? 0).toBeGreaterThanOrEqual(2);
 });

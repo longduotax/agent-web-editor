@@ -7,6 +7,7 @@ import {
 
 import type { TreeNode } from "../layout/binaryTree.js";
 import type { GroupId, PanelState } from "./panelModel.js";
+import { treeMinHeight, treeMinWidth } from "./panelGeometry.js";
 import { TabGroupView } from "./TabGroupView.js";
 import type { TabContext } from "./panelTabs.js";
 import type { PanelActions } from "./usePanelState.js";
@@ -113,9 +114,20 @@ function SplitRegion(
 
   return (
     <div ref={containerRef} className={`panel-split panel-split-${node.axis}`}>
+      {/* The pixel floor (F6). `flexGrow` alone bounded a group only by a
+          FRACTION, so at the panel's minimum width two groups were 139px
+          each and a terminal in one of them negotiated 16 columns. Flexbox
+          honours a minimum over a grow factor, and the tree's own scroll
+          container absorbs whatever will not fit — the chat surface solves
+          the same problem the same way. */}
       <div
         className="panel-split-child"
-        style={{ flexGrow: firstSize, flexBasis: 0 }}
+        style={{
+          flexGrow: firstSize,
+          flexBasis: 0,
+          minWidth: treeMinWidth(first),
+          minHeight: treeMinHeight(first),
+        }}
       >
         <PanelTree {...props} key={first.id} node={first} />
       </div>
@@ -149,7 +161,12 @@ function SplitRegion(
       />
       <div
         className="panel-split-child"
-        style={{ flexGrow: secondSize, flexBasis: 0 }}
+        style={{
+          flexGrow: secondSize,
+          flexBasis: 0,
+          minWidth: treeMinWidth(second),
+          minHeight: treeMinHeight(second),
+        }}
       >
         <PanelTree {...props} key={second.id} node={second} />
       </div>

@@ -12,7 +12,12 @@ import { PanelBodies } from "./PanelBodies.js";
 import { PanelRightIcon } from "./PanelRightIcon.js";
 import { PanelTree } from "./PanelTree.js";
 import { PANEL_MIN_WIDTH } from "./panelModel.js";
-import { PANEL_RESIZE_STEP, panelMaxWidth } from "./panelGeometry.js";
+import {
+  PANEL_RESIZE_STEP,
+  panelMaxWidth,
+  treeMinHeight,
+  treeMinWidth,
+} from "./panelGeometry.js";
 import { tabElementId } from "./TabStrip.js";
 import type { TabContext } from "./panelTabs.js";
 import type { PanelController } from "./usePanelState.js";
@@ -156,15 +161,30 @@ export function WorkspacePanel({
             onClosePanel={closePanel}
           />
         ) : (
-          <PanelTree
-            node={state.root}
-            state={state}
-            actions={actions}
-            focusedContext={focusedContext}
-            groupOrder={groupOrder}
-            closeControlGroupId={closeControlGroupId}
-            onClosePanel={closePanel}
-          />
+          // The tree scrolls rather than shrinking a group past its floor
+          // (F6), which is what the chat surface does with panes: below the
+          // floor a group is not small, it is unusable — 139px of terminal
+          // negotiated 16 columns — and a scrollbar is a far better answer
+          // than a tile nobody can read.
+          <div className="panel-tree-scroll">
+            <div
+              className="panel-tree-tiles"
+              style={{
+                minWidth: treeMinWidth(state.root),
+                minHeight: treeMinHeight(state.root),
+              }}
+            >
+              <PanelTree
+                node={state.root}
+                state={state}
+                actions={actions}
+                focusedContext={focusedContext}
+                groupOrder={groupOrder}
+                closeControlGroupId={closeControlGroupId}
+                onClosePanel={closePanel}
+              />
+            </div>
+          </div>
         )}
         {/* Renders no markup of its own: every tab body is portalled into
             the group that currently owns its tab, so regrouping moves a body
