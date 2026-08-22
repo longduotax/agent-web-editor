@@ -26,6 +26,12 @@
   --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
   --pop-shadow:
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
+  /* The workspace panel's docked outer edge, and nothing else: the panel is
+     a different plane from the chat surface behind it, and on a white page a
+     hairline alone barely says so. Short and soft — strongest at the edge,
+     gone within a few pixels — so it separates the two surfaces without
+     turning into a drop shadow the rest of this design does not use. */
+  --dock-shadow: -2px 0 8px -2px rgba(20, 25, 40, 0.16);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 /* One reading column for the whole surface (D-3). The transcript, the
@@ -33,8 +39,8 @@
    component may hardcode its own measure. */
 :root {
   --surface-measure: 48rem;
-  /* One height for the top-of-column header rows (inspector tabs and the
-     collapsed inspector rail). */
+  /* One height for the top-of-column header rows (the panel's tab strip and
+     its collapsed rail). */
   --header-h: 3.8rem;
 }
 /* keep the repo's legacy alias names pointing at the new tokens so existing
@@ -84,6 +90,12 @@
     --focus-ring: rgba(106, 160, 255, 0.55);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+    /* Dark needs its own value, not the light one: a shadow tuned for a
+       white page is invisible here. The panel's surface is already LIGHTER
+       than the page, so a black shadow deepens the gutter between them and
+       reads as the panel sitting above — the same direction of separation,
+       carried by the opposite colour. */
+    --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
   }
 }
 :root[data-theme="dark"] {
@@ -113,6 +125,7 @@
   --focus-ring: rgba(106, 160, 255, 0.55);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
 }
 body {
   min-width: 320px;
@@ -161,17 +174,17 @@ a:focus-visible {
   overflow: hidden;
   background: var(--surface-0);
 }
-.workspace.inspector-available {
+.workspace.panel-available {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 0;
   transition: grid-template-columns 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.workspace.inspector-railed {
+.workspace.panel-railed {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 2.75rem;
 }
-.workspace.inspector-visible {
+.workspace.panel-visible {
   grid-template-columns:
     minmax(220px, 17rem) minmax(360px, 1fr)
-    var(--inspector-width, 400px);
+    var(--panel-width, 400px);
 }
 .mobile-toolbar {
   display: none;
@@ -587,7 +600,7 @@ a:focus-visible {
    Nothing below it restates the title, the run status or the trust note. */
 .pane-head {
   display: flex;
-  /* Pinned, not content-derived: every pane header and the inspector's own
+  /* Pinned, not content-derived: every pane header and the panel's own
      top row share --header-h, so their bottom hairlines land on one line in
      a multi-pane layout at every width. A wrapping detail line used to make
      one header 34px taller than its neighbour. */
@@ -1386,7 +1399,16 @@ a:focus-visible {
   background: var(--hover);
   cursor: not-allowed;
 }
-.inspector {
+/* The panel is elevated above the chat surface it is docked against: its
+   leading edge carries a soft shadow as well as the hairline. Scoped to this
+   one edge on purpose — the tab-group dividers inside the panel keep the
+   hairline-only treatment CWS-01 asks for, and so does the chat surface. A
+   box-shadow is never hit-tested, so the resize separator that lives on this
+   same edge keeps every pixel of its target, and its own hover/focus colour
+   paints over the shadow because it is a child of this element. When the
+   panel is railed it is `opacity: 0`, so the rail carries no orphaned
+   shadow. */
+.panel {
   position: relative;
   display: flex;
   min-width: 0;
@@ -1394,9 +1416,10 @@ a:focus-visible {
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface-1);
+  box-shadow: var(--dock-shadow);
   z-index: 20;
 }
-.inspector[aria-hidden="true"] {
+.panel[aria-hidden="true"] {
   pointer-events: none;
 }
 .panel-right-icon {
@@ -1408,7 +1431,7 @@ a:focus-visible {
   stroke-linejoin: round;
   stroke-width: 1.15;
 }
-.inspector-resizer {
+.panel-resizer {
   position: absolute;
   z-index: 2;
   top: 0;
@@ -1418,7 +1441,7 @@ a:focus-visible {
   cursor: col-resize;
   touch-action: none;
 }
-.inspector-resizer::after {
+.panel-resizer::after {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -1427,42 +1450,187 @@ a:focus-visible {
   background: transparent;
   content: "";
 }
-.inspector-resizer:hover::after,
-.inspector-resizer:focus-visible::after,
-.inspector-resizer.resizing::after {
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer.resizing::after {
   background: var(--blue);
 }
-.inspector-resizer:focus-visible {
+.panel-resizer:focus-visible {
   outline: none;
 }
-.inspector-tabs {
+.panel-tabstrip {
   display: flex;
   height: var(--header-h);
   align-items: end;
   border-bottom: 1px solid var(--border);
 }
-.inspector-tab-options {
+/* The strip scrolls rather than squeezing tabs into unreadable slivers, and
+   the active tab is scrolled back into view whenever it changes, so overflow
+   can never hide the tab the user is looking at (WSP-09).
+   Positioned so it is the offset parent of its own tabs: a drag measures
+   each tab's `offsetLeft` inside this box, which — unlike a client
+   rectangle — does not move when the strip scrolls under the pointer. */
+.panel-tab-options {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
   align-items: end;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.inspector-tab-options button {
-  min-width: 0;
-  flex: 1;
-  padding: 0.8rem 0.2rem;
+.panel-tab {
+  display: flex;
+  max-width: 12rem;
+  /* A floor, so the close affordance's hit area (below) can never reach the
+     middle of a tab. A one-character file name would otherwise make a 36px
+     tab whose centre is inside its own close control, and clicking a tab to
+     switch to it would close it instead. 3.5rem leaves ~3px of clearance at
+     the narrowest tab the strip can produce. */
+  min-width: 3.5rem;
+  /* Never shrinks: the strip scrolls instead. */
+  flex: 0 0 auto;
+  /* A touch that pans horizontally scrolls the strip — the only way a touch
+     device reaches a tab an overflowing strip cannot show. A touch that
+     moves vertically belongs to the drag (WSP-03), which is the direction
+     every cross-group drop lies in anyway. */
+  touch-action: pan-x;
+  align-items: center;
+  gap: 0.3rem;
+  /* Asymmetric: the extra 0.15rem on the right is hit area for the close
+     affordance, which extends into exactly this padding and no further. */
+  padding: 0.8rem 0.55rem 0.8rem 0.4rem;
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
   background: transparent;
-  text-transform: capitalize;
   cursor: pointer;
+  font-size: 0.78rem;
 }
-.inspector-tab-options button[aria-selected="true"] {
+.panel-tab.active {
   border-bottom-color: var(--blue);
   color: var(--text);
 }
-.inspector-close {
+.panel-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Names the execution scope a tab reads when it is not the focused chat
+   pane's own (WSP-02). */
+.panel-tab-chip {
+  max-width: 7rem;
+  flex: none;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.7rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+}
+/* At rest this affordance is not merely invisible, it is not there to be
+   hit: `opacity: 0` removes an element from view but not from hit testing,
+   and a touch device never hovers — so the right ~1rem of every inactive tab
+   was an invisible close button, and a tap meant to switch tabs closed one
+   instead (D3). */
+.panel-tab-close {
+  position: relative;
+  flex: none;
+  color: var(--muted);
+  visibility: hidden;
+  pointer-events: none;
+  font-size: 0.9rem;
+}
+/* The glyph is 9 x 16px, against 30 x 30 for the strip's own close button
+   (G6). Its behaviour was never the problem — it is inert while the tab is
+   inactive, it arms no drag, and a plain click closes the tab — it was just
+   too small to hit. So the HIT AREA grows and nothing else does: a
+   pseudo-element rather than padding, so the glyph keeps its size, the tab
+   keeps its height. It reaches exactly as far right as the tab's own
+   padding and no further, because a close control overhanging the next tab
+   would close the wrong one, and the tab has a `min-width` so it can never
+   reach a tab's middle either. Measured after: 25 x 30. It inherits
+   `visibility` and `pointer-events` from the span, so an inactive tab's
+   right edge is still not a hidden close button (D3). */
+.panel-tab-close::after {
+  position: absolute;
+  inset: -0.45rem -0.55rem;
+  content: "";
+}
+.panel-tab.active .panel-tab-close {
+  visibility: visible;
+  pointer-events: auto;
+}
+/* Reveal-on-hover is for pointers that can hover. On a touch device this
+   rule never applies, so the affordance stays out of reach and the active
+   tab's control above is the pointer route to closing a tab. */
+@media (hover: hover) {
+  .panel-tab:hover .panel-tab-close {
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+.panel-close-tab,
+.panel-new-tab-button {
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: none;
+  margin: 0 0 0.45rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.panel-close-tab:hover,
+.panel-new-tab-button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.panel-new-tab {
+  position: relative;
+  flex: none;
+}
+.panel-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  min-width: 12rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  box-shadow: var(--pop-shadow);
+}
+.panel-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.8rem;
+}
+.panel-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.panel-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.panel-menu-note {
+  margin: 0.3rem 0.5rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.panel-close {
   width: 2rem;
   height: 2rem;
   flex: none;
@@ -1475,14 +1643,14 @@ a:focus-visible {
   cursor: pointer;
   font-size: 1.1rem;
 }
-.inspector-close:hover {
+.panel-close:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 /* A docked rail rather than a button floating over the transcript: it owns
    its own grid column, and its top segment shares the pane header's height
    so the two hairlines land on one line. */
-.inspector-rail {
+.panel-rail {
   display: flex;
   grid-area: 1 / 3;
   flex-direction: column;
@@ -1491,14 +1659,14 @@ a:focus-visible {
   background: var(--surface-1);
   z-index: 20;
 }
-.inspector-rail-head {
+.panel-rail-head {
   display: grid;
   height: var(--header-h);
   flex: none;
   place-items: center;
   border-bottom: 1px solid var(--hairline);
 }
-.inspector-reopen {
+.panel-reopen {
   display: grid;
   width: 1.85rem;
   height: 1.85rem;
@@ -1510,14 +1678,14 @@ a:focus-visible {
   background: transparent;
   cursor: pointer;
 }
-.inspector-reopen:hover {
+.panel-reopen:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 @media (min-width: 901px) {
-  .workspace.inspector-available .inspector {
+  .workspace.panel-available .panel {
     grid-area: 1 / 3;
-    width: var(--inspector-width, 400px);
+    width: var(--panel-width, 400px);
     justify-self: end;
     opacity: 0;
     visibility: hidden;
@@ -1527,7 +1695,7 @@ a:focus-visible {
       opacity 140ms ease,
       visibility 0s linear 180ms;
   }
-  .workspace.inspector-visible .inspector {
+  .workspace.panel-visible .panel {
     opacity: 1;
     visibility: visible;
     transform: translateX(0);
@@ -1537,10 +1705,257 @@ a:focus-visible {
       visibility 0s;
   }
 }
-.inspector-content {
+/* One tab group: its strip, and the bodies of the tabs it has mounted.
+   Positioned, because its drop targets (WSP-03) are drawn over it. */
+.panel-group {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
   flex: 1;
+  flex-direction: column;
+}
+.panel-bodies {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+/* Each tab body lives in a host node of its own that the panel moves between
+   groups, so the body survives a split (see PanelBodies.tsx). The host must
+   not become a box: `display: contents` leaves the tabpanel inside it a flex
+   item of .panel-bodies, exactly as it was when the group rendered it. */
+.panel-tabpanel-host {
+  display: contents;
+}
+.panel-tabpanel {
+  flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+/* A hidden tab body stays mounted — that is what keeps its scroll position
+   and its data — so it must contribute no layout at all. */
+.panel-tabpanel[hidden] {
+  display: none;
+}
+/* A chord that could not do what it names says so here, and in the live
+   region this element is.
+   Out of flow, deliberately (F3). As an ordinary flex item of this column it
+   took its own height out of every group below it the moment it had
+   something to say: one refusal measured 1383px -> 1357px -> 1383px of group
+   height, each step resizing the running shell (rows 73, then 75 five
+   seconds later). Telling the user that nothing happened must not be the
+   thing that happens. It stays in the live region and stays visible; it just
+   cannot own any layout. `pointer-events: none` because it now covers
+   content — a terminal's last line — that the user may want to click. */
+.panel-announcement {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.panel-announcement:empty {
+  display: none;
+}
+/* The tree's viewport (F6). A group has a minimum size in PIXELS, not just
+   a fraction of whatever it is given, so at narrow widths the tree can be
+   larger than the panel — and then the panel scrolls, exactly as the chat
+   surface scrolls rather than shrinking a pane below MIN_PANE_WIDTH_PX. A
+   group squeezed to 139px is not a small group, it is an unusable one: the
+   terminal in it negotiated 16 columns. */
+.panel-tree-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+/* Sized by the tree's own minimum, which the view sets inline. No
+   `min-width: 0` here: that is precisely what this element must not have. */
+.panel-tree-tiles {
+  display: flex;
+  flex: 1;
+}
+/* The panel's own tiling tree (WSP-01), with the chat surface's divider
+   affordance: a hairline at rest that turns blue when it is grabbed. */
+.panel-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+.panel-split-row {
+  flex-direction: row;
+}
+.panel-split-column {
+  flex-direction: column;
+}
+.panel-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.panel-divider {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  touch-action: none;
+}
+.panel-split-row > .panel-divider {
+  width: 10px;
+  margin: 0 -5px;
+  cursor: col-resize;
+}
+.panel-split-column > .panel-divider {
+  height: 10px;
+  margin: -5px 0;
+  cursor: row-resize;
+}
+.panel-divider::after {
+  position: absolute;
+  background: var(--hairline-2);
+  content: "";
+}
+.panel-split-row > .panel-divider::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+.panel-split-column > .panel-divider::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.panel-divider:hover::after,
+.panel-divider:focus-visible::after,
+.panel-divider.resizing::after {
+  background: var(--blue);
+}
+.panel-divider:focus-visible {
+  outline: none;
+}
+/* Dragging a tab (WSP-03).
+   Every one of these elements exists only while a drag is in progress, and
+   none of them is hit-tested: the pointer is captured by the tab it started
+   on, and the target is resolved from measurements taken at pick-up
+   (tabDrag.ts). They are what the user sees, not what the drag asks. */
+.panel-tab.dragging {
+  opacity: 0.45;
+}
+.panel-drop-zones {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+/* Every band carries a faint outline for as long as the drag lasts (G7).
+   Before this the five targets were fully transparent until the pointer was
+   inside one, so the only way to learn where they were was to sweep the
+   pointer around and watch for a highlight. It is deliberately quiet — a
+   hairline in the same token the panel's own seams use, not a wash of
+   colour — because the surrounding surface is calm and five glowing
+   rectangles over a running terminal would not be. */
+.panel-drop-edge,
+.panel-drop-centre {
+  position: absolute;
+  border: 1px dashed var(--hairline-2);
+  border-radius: 0.3rem;
+}
+.panel-drop-top,
+.panel-drop-bottom {
+  right: 0;
+  left: 0;
+}
+.panel-drop-top {
+  top: 0;
+}
+.panel-drop-bottom {
+  bottom: 0;
+}
+.panel-drop-left {
+  left: 0;
+}
+.panel-drop-right {
+  right: 0;
+}
+/* Individually highlighted as the pointer enters it, which WSP-03 requires:
+   the user must be able to tell which of five targets a release would use. */
+.panel-drop-edge.active,
+.panel-drop-centre.active {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+/* A target the drop would REFUSE looks nothing like one that would work
+   (G4). It is still highlighted — the user is pointing at it and deserves an
+   answer — but in the muted token rather than the accent, with a solid
+   border rather than the dashed at-rest one, and the live region says the
+   reason at the same moment. Both colours are tokens, so this reads in
+   either theme. */
+.panel-drop-edge.refused,
+.panel-drop-centre.refused,
+.panel-drop-caret.refused {
+  border-color: var(--muted);
+  border-style: solid;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.panel-drop-caret.refused {
+  background: var(--muted);
+}
+/* The insertion point inside a strip. Absolutely positioned inside the
+   strip's own scroller, so it scrolls with the tabs it sits between. */
+.panel-drop-caret {
+  position: absolute;
+  z-index: 1;
+  top: 0.35rem;
+  bottom: 0.35rem;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  pointer-events: none;
+}
+/* A label under the pointer, never a clone of the tab's body: cloning one
+   would mount a second terminal. Moved by transform alone, which is
+   composited, so following the pointer costs no layout (WSP-09).
+   Rendered into the document body rather than into `.panel`, and that is
+   what makes `position: fixed` mean the viewport here (G2): `.panel` has a
+   non-`none` transform from its slide-in rule, which makes it the containing
+   block for every fixed descendant, and the panel's left edge was then added
+   to every position — measured at 1138px, so the ghost was off screen at
+   every pointer position the panel can be dragged over. See
+   WorkspacePanel.tsx. */
+.panel-drag-ghost {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
+  max-width: 12rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: var(--surface-2);
+  box-shadow: var(--dock-shadow);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  pointer-events: none;
 }
 .scope-note,
 .terminal-warning {
@@ -1583,6 +1998,72 @@ a:focus-visible {
 .file-list button.active {
   background: var(--surface-3);
 }
+/* The file tree (WSP-05 v2). Rows are `treeitem`s rather than buttons: a
+   tree owns its own rows, and a real button inside one would be a nested
+   interactive control — the same rule the tab strip follows. */
+.file-tree,
+.file-tree-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.file-tree {
+  padding: 0.35rem;
+}
+.file-tree-row {
+  border-radius: 0.3rem;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.file-tree-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+}
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree-twisty {
+  width: 0.7rem;
+  flex: none;
+  color: var(--muted);
+  text-align: center;
+}
+.file-tree-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.file-tree-row > .file-tree-line:hover {
+  background: var(--surface-3);
+  border-radius: 0.3rem;
+}
+/* Not a row the user chooses: a loading, empty, capped, or failed listing. */
+.file-tree-state {
+  color: var(--muted);
+  cursor: default;
+}
+.file-ignored {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 0.6rem 0.4rem;
+}
+.file-ignored label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.file-ignored .panel-state {
+  padding: 0;
+  font-size: 0.72rem;
+}
 .change-kind {
   display: inline-grid;
   width: 1.15rem;
@@ -1604,9 +2085,41 @@ a:focus-visible {
   color: var(--done);
   background: color-mix(in srgb, var(--done) 20%, var(--card));
 }
+/* F2. The scrolling box has to END on screen.
+   Both bodies used to be ordinary flow content inside the tab body's own
+   scroller, so the `pre` grew to its full content height — measured at
+   2534px, with its bottom edge at y=2634 against a visible bottom of
+   y=1017 — and the horizontal scrollbar it genuinely had was ~1600px below
+   anything the user could see. The content was reachable only by a
+   shift-wheel or trackpad gesture, with no affordance at all, which is what
+   was reported as "clipped, with no horizontal scroll" (WSP-05's "remains
+   readable"). Bounding the body to the tab's own height puts the scrollbar
+   back where a pointer can find it, and keeps the header pinned above it. */
 .diff-view,
 .file-preview {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   border-top: 1px solid var(--border);
+}
+/* Only the scrolling region grows; every notice keeps its own height. */
+.diff-view > *,
+.file-preview > * {
+  flex: none;
+}
+.file-preview > pre,
+.diff-view > .diff-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+/* The diff's sections scroll together, in one box, so the two panes of a
+   staged/unstaged diff cannot slide out of alignment with each other. */
+.diff-body > pre {
+  width: max-content;
+  min-width: 100%;
+  overflow: visible;
 }
 /* Diff colouring from the shared theme tokens, so it resolves correctly in
    light and dark. The `+`/`-` prefixes stay in the text: colour is never the
@@ -1666,10 +2179,21 @@ a:focus-visible {
   border-radius: 0;
   white-space: pre;
 }
+/* The terminal is a fixed-size viewport that scrolls its own buffer, so it
+   must never grow the box it is given (D13). xterm keeps a stale, oversized
+   scrollbar element inside `.xterm-scrollable-element` after the terminal
+   shrinks — measured at 570px tall inside a 210px terminal — and with
+   `overflow: visible` that leak reached the tab body, made the panel body
+   scrollable, and on a machine with space-consuming scrollbars fed straight
+   back into the fit addon's ResizeObserver. Containing it here is the
+   boundary we own. */
 .terminal-panel {
   display: flex;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 .terminal-toolbar {
   display: flex;
@@ -1682,6 +2206,15 @@ a:focus-visible {
 .terminal-toolbar span {
   flex: 1;
   color: var(--muted);
+}
+/* A refused command or an unreadable frame: said here, where it can be
+   cleared, rather than written into the scrollback where it cannot (F1). */
+.terminal-toolbar .terminal-notice {
+  flex: 2;
+  overflow: hidden;
+  color: var(--fail);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .terminal-toolbar button {
   border: 1px solid var(--border);
@@ -1700,10 +2233,30 @@ a:focus-visible {
   background: var(--term-bg);
 }
 .terminal-surface {
+  min-width: 0;
+  /* `min-height: 12rem` lived here and acted as a SHRINK FLOOR: this is a
+     `flex: 1` child of a column flex container, so its automatic minimum is
+     on the block axis. In a horizontally split panel — a normal state, not
+     an edge case — the group is shorter than that and the terminal spilled
+     out of its own tab body. The panel enforces its own minimum group size,
+     which is what that 12rem was reaching for. */
+  min-height: 0;
   flex: 1;
-  min-height: 12rem;
   padding: 0.4rem;
   background: var(--page);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* The box the fit addon measures, and the one thing it must be is unpadded
+   (F4). `getComputedStyle().height` on a border-box element is its border
+   box, so any padding here would be handed to the terminal as space to
+   paint rows in and then clipped away — up to 12.8px of the last row.
+   The padding stays on `.terminal-surface`, outside the measurement. */
+.terminal-canvas {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
 }
 .panel-state {
   margin: 0;
@@ -1929,7 +2482,7 @@ a:focus-visible {
     height: calc(100dvh - 2.6rem);
   }
   .sidebar,
-  .inspector {
+  .panel {
     position: fixed;
     z-index: 50;
     top: 0;
@@ -1943,16 +2496,16 @@ a:focus-visible {
     left: 0;
     transform: translateX(-105%);
   }
-  .inspector {
+  .panel {
     right: 0;
     transform: translateX(105%);
   }
-  .inspector-resizer,
-  .inspector-rail {
+  .panel-resizer,
+  .panel-rail {
     display: none;
   }
   .sidebar-open .sidebar,
-  .inspector-open .inspector {
+  .panel-open .panel {
     transform: translateX(0);
   }
   .drawer-backdrop {

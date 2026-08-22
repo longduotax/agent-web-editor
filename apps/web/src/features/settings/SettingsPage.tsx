@@ -54,8 +54,8 @@ export function SettingsPage() {
         >
           <h2 id="settings-shortcuts-heading">Keyboard shortcuts</h2>
           <p className="settings-section-description">
-            Pane shortcuts work anywhere in the workspace, except while you are
-            typing in a composer.
+            Pane and panel shortcuts work anywhere in the workspace, except
+            while you are typing in a composer.
           </p>
           <dl className="shortcut-list">
             {WORKSPACE_KEYBINDINGS.map((binding) => (

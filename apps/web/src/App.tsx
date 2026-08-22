@@ -1,9 +1,9 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -15,7 +15,6 @@ import {
 import {
   ProjectIdSchema,
   ThreadIdSchema,
-  type Project,
   type ProjectId,
   type ThreadId,
 } from "@pi-web/contracts";
@@ -33,11 +32,7 @@ import {
   browseProject,
   discoverSessions,
   getArchivedThreads,
-  getDiff,
-  getFile,
-  getFiles,
   getSnapshot,
-  getStatus,
   getWorkspace,
   importThread,
   removeProject,
@@ -45,14 +40,16 @@ import {
   setExpanded,
   unarchiveThread,
 } from "./api/client.js";
-import { summarizeChanges } from "./components/changesSummary.js";
-import { classifyDiff } from "./components/diffLines.js";
-import { useDebouncedValue } from "./components/useDebouncedValue.js";
 import { ErrorNotice } from "./components/ErrorNotice.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
-import { TerminalView } from "./features/TerminalView.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
+import { PanelRightIcon } from "./features/panel/PanelRightIcon.js";
+import { PANEL_DEFAULT_WIDTH } from "./features/panel/panelModel.js";
+import { clampPanelWidth } from "./features/panel/panelGeometry.js";
+import { threadTabContext } from "./features/panel/tabContext.js";
+import { usePanelState } from "./features/panel/usePanelState.js";
+import { WorkspacePanel } from "./features/panel/WorkspacePanel.js";
 import { UndoToast } from "./features/workspace/UndoToast.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
@@ -60,15 +57,6 @@ import {
   PANE_STATUS_LABEL,
   PANE_STATUS_TOKEN,
 } from "./features/workspace/runStatus.js";
-import {
-  INSPECTOR_MAX_WIDTH,
-  INSPECTOR_MIN_WIDTH,
-  INSPECTOR_TABS,
-  readInspectorPreferences,
-  writeInspectorPreferences,
-  type InspectorPreferences,
-  type InspectorTab,
-} from "./inspectorPreferences.js";
 
 export { Composer } from "./features/workspace/ThreadPane.js";
 
@@ -790,428 +778,14 @@ function Sidebar({
   );
 }
 
-// How many file rows the Files tab paints at once. The unsearched listing on
-// a real repository is ~20,000 entries; rendering them all is what made the
-// inspector slow to open and to scroll (NEW-R3-4).
-const FILE_LIST_RENDER_LIMIT = 200;
-
-const DESKTOP_SIDEBAR_WIDTH = 272;
-const MIN_THREAD_WIDTH = 360;
-const INSPECTOR_RESIZE_STEP = 24;
-
-function PanelRightIcon() {
-  return (
-    <svg className="panel-right-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2" />
-      <path d="M9.25 2.75v10.5" />
-    </svg>
-  );
-}
-
-function inspectorMaxWidth(viewportWidth: number): number {
-  return Math.min(
-    INSPECTOR_MAX_WIDTH,
-    Math.max(
-      INSPECTOR_MIN_WIDTH,
-      viewportWidth - DESKTOP_SIDEBAR_WIDTH - MIN_THREAD_WIDTH,
-    ),
-  );
-}
-
-// Added / removed / hunk-header lines are coloured from theme tokens. The
-// `+`/`-` prefix characters stay in the text, so the distinction is never
-// carried by colour alone.
-function DiffText({ text }: { text: string }) {
-  return (
-    <pre className="diff-text">
-      {classifyDiff(text).map((line, index) => (
-        <span
-          className={`diff-line diff-${line.kind}`}
-          key={`${String(index)}:${line.text}`}
-        >
-          {line.text}
-          {"\n"}
-        </span>
-      ))}
-    </pre>
-  );
-}
-
-function Inspector({
-  project,
-  threadId,
-  tab,
-  width,
-  onTabChange,
-  onWidthChange,
-  onClose,
-  open,
-}: {
-  project: Project;
-  threadId: ThreadId;
-  tab: InspectorTab;
-  width: number;
-  onTabChange: (tab: InspectorTab) => void;
-  onWidthChange: (width: number) => void;
-  onClose: () => void;
-  open: boolean;
-}) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [resizing, setResizing] = useState(false);
-  const resizingPointer = useRef<number | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const maxWidth = inspectorMaxWidth(viewportWidth);
-  const effectiveWidth = Math.min(
-    maxWidth,
-    Math.max(INSPECTOR_MIN_WIDTH, width),
-  );
-  useEffect(() => {
-    setSelectedPath(null);
-    setSearch("");
-  }, [threadId]);
-  useEffect(() => {
-    const resized = () => {
-      setViewportWidth(window.innerWidth);
-    };
-    window.addEventListener("resize", resized);
-    return () => {
-      window.removeEventListener("resize", resized);
-    };
-  }, []);
-  const resizeFromClientX = (clientX: number) => {
-    onWidthChange(
-      Math.min(
-        maxWidth,
-        Math.max(INSPECTOR_MIN_WIDTH, Math.round(window.innerWidth - clientX)),
-      ),
-    );
-  };
-  const finishResize = (element: HTMLDivElement, pointerId: number) => {
-    resizingPointer.current = null;
-    if (
-      typeof element.hasPointerCapture === "function" &&
-      typeof element.releasePointerCapture === "function" &&
-      element.hasPointerCapture(pointerId)
-    )
-      element.releasePointerCapture(pointerId);
-    setResizing(false);
-  };
-  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    let nextWidth: number | undefined;
-    if (event.key === "ArrowLeft")
-      nextWidth = effectiveWidth + INSPECTOR_RESIZE_STEP;
-    if (event.key === "ArrowRight")
-      nextWidth = effectiveWidth - INSPECTOR_RESIZE_STEP;
-    if (event.key === "Home") nextWidth = INSPECTOR_MIN_WIDTH;
-    if (event.key === "End") nextWidth = maxWidth;
-    if (nextWidth === undefined) return;
-    event.preventDefault();
-    onWidthChange(Math.min(maxWidth, Math.max(INSPECTOR_MIN_WIDTH, nextWidth)));
-  };
-  const status = useQuery({
-    queryKey: ["git", project.id, threadId],
-    queryFn: () => getStatus(project.id, threadId),
-    enabled: tab === "changes",
-  });
-  // Debounced + keepPreviousData: a full recursive listing takes hundreds of
-  // milliseconds to seconds on a real repository, so a query per keystroke
-  // both hammered the server and blanked the panel to "Listing files…"
-  // between every character.
-  const debouncedSearch = useDebouncedValue(search);
-  const files = useQuery({
-    queryKey: ["files", project.id, threadId, debouncedSearch],
-    queryFn: () => getFiles(project.id, threadId, debouncedSearch),
-    enabled: tab === "files",
-    placeholderData: keepPreviousData,
-  });
-  const preview = useQuery({
-    queryKey: ["file", project.id, threadId, selectedPath],
-    queryFn: () => getFile(project.id, threadId, selectedPath ?? ""),
-    enabled: tab === "files" && selectedPath !== null,
-  });
-  const diff = useQuery({
-    queryKey: ["diff", project.id, threadId, selectedPath],
-    queryFn: () => getDiff(project.id, threadId, selectedPath ?? ""),
-    enabled: tab === "changes" && selectedPath !== null,
-  });
-  return (
-    <aside
-      className="inspector"
-      aria-label="Project inspector"
-      aria-hidden={!open}
-      inert={!open}
-    >
-      <div
-        className={`inspector-resizer ${resizing ? "resizing" : ""}`}
-        role="separator"
-        aria-label="Resize inspector panel"
-        aria-orientation="vertical"
-        aria-valuemin={INSPECTOR_MIN_WIDTH}
-        aria-valuemax={maxWidth}
-        aria-valuenow={effectiveWidth}
-        tabIndex={0}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          resizingPointer.current = event.pointerId;
-          if (typeof event.currentTarget.setPointerCapture === "function")
-            event.currentTarget.setPointerCapture(event.pointerId);
-          setResizing(true);
-        }}
-        onPointerMove={(event) => {
-          if (resizingPointer.current === event.pointerId)
-            resizeFromClientX(event.clientX);
-        }}
-        onPointerUp={(event) => {
-          finishResize(event.currentTarget, event.pointerId);
-        }}
-        onPointerCancel={(event) => {
-          finishResize(event.currentTarget, event.pointerId);
-        }}
-        onKeyDown={resizeWithKeyboard}
-      />
-      <div className="inspector-tabs">
-        <div className="inspector-tab-options" role="tablist">
-          {INSPECTOR_TABS.map((name) => (
-            <button
-              id={`inspector-tab-${name}`}
-              role="tab"
-              aria-controls="inspector-content"
-              aria-selected={tab === name}
-              key={name}
-              onClick={() => {
-                onTabChange(name);
-                setSelectedPath(null);
-              }}
-            >
-              {name[0]?.toUpperCase()}
-              {name.slice(1)}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="inspector-close"
-          aria-label="Close inspector panel"
-          title="Close inspector"
-          onClick={onClose}
-        >
-          <PanelRightIcon />
-        </button>
-      </div>
-      <div
-        id="inspector-content"
-        className="inspector-content"
-        role="tabpanel"
-        aria-labelledby={`inspector-tab-${tab}`}
-      >
-        {tab === "changes" && (
-          <>
-            <p className="scope-note">
-              Current thread workspace
-              {status.data?.available === true &&
-                status.data.files.length > 0 &&
-                ` · ${summarizeChanges(status.data.files)}`}
-            </p>
-            {status.isPending && (
-              <p className="panel-state" aria-live="polite">
-                Reading the worktree…
-              </p>
-            )}
-            {status.data?.available === false && (
-              <div className="empty">{status.data.message}</div>
-            )}
-            {status.data?.available === true &&
-              status.data.files.length === 0 && (
-                <div className="empty">No changes in this worktree.</div>
-              )}
-            <ul className="file-list">
-              {status.data?.files.map((file) => (
-                <li key={file.path}>
-                  <button
-                    onClick={() => {
-                      setSelectedPath(file.path);
-                    }}
-                    className={selectedPath === file.path ? "active" : ""}
-                  >
-                    <span className={`change-kind ${file.kind}`}>
-                      {file.kind[0]?.toUpperCase()}
-                    </span>
-                    <span>{file.path}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {(status.data?.files.length ?? 0) > 0 && selectedPath === null && (
-              <p className="panel-state">Select a file to view its diff.</p>
-            )}
-            {diff.isPending && selectedPath !== null && (
-              <p className="panel-state" aria-live="polite">
-                Loading diff…
-              </p>
-            )}
-            {diff.data !== undefined && (
-              <div className="diff-view">
-                <header>
-                  {diff.data.path}
-                  {diff.data.truncated && " · truncated"}
-                </header>
-                {diff.data.staged !== "" && (
-                  <>
-                    <h4>Staged</h4>
-                    <DiffText text={diff.data.staged} />
-                  </>
-                )}
-                {diff.data.unstaged !== "" && (
-                  <>
-                    <h4>Unstaged</h4>
-                    <DiffText text={diff.data.unstaged} />
-                  </>
-                )}
-              </div>
-            )}
-            {status.error !== null && (
-              <ErrorNotice
-                error={status.error}
-                onRetry={() => {
-                  void status.refetch();
-                }}
-              />
-            )}
-            {diff.error !== null && (
-              <ErrorNotice
-                error={diff.error}
-                onRetry={() => {
-                  void diff.refetch();
-                }}
-              />
-            )}
-          </>
-        )}
-        {tab === "files" && (
-          <>
-            <input
-              className="file-search"
-              aria-label="Search project files"
-              placeholder="Search files…"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-              }}
-            />
-            {files.isPending && (
-              <p className="panel-state" aria-live="polite">
-                Listing files…
-              </p>
-            )}
-            {files.data?.entries.length === 0 && (
-              <div className="empty">
-                {/* Named for the query the RESULT belongs to, not the
-                    keystroke in flight. */}
-                {debouncedSearch === ""
-                  ? "No files in this workspace."
-                  : `No files match "${debouncedSearch}".`}
-              </div>
-            )}
-            {/* Rendered rows are capped (NEW-R3-4). The server returns the
-                whole recursive listing -- 20,000 entries on this repo, node_
-                modules included -- and painting all of them as real DOM made
-                the first paint and every subsequent scroll of the inspector
-                visibly slow. The cap is a render budget, not a filter: the
-                count below always names the true total and points at search,
-                which narrows the result on the server. */}
-            <ul className="file-list">
-              {files.data?.entries
-                .slice(0, FILE_LIST_RENDER_LIMIT)
-                .map((file) => (
-                  <li key={file.path}>
-                    <button
-                      disabled={file.kind !== "file" && file.kind !== "symlink"}
-                      onClick={() => {
-                        setSelectedPath(file.path);
-                      }}
-                    >
-                      <span aria-hidden="true">
-                        {file.kind === "directory" ? "▸" : "·"}
-                      </span>
-                      <span>{file.path}</span>
-                    </button>
-                  </li>
-                ))}
-            </ul>
-            {(files.data?.entries.length ?? 0) > FILE_LIST_RENDER_LIMIT && (
-              <p className="panel-state" aria-live="polite">
-                {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(files.data?.entries.length ?? 0)} files. Search to narrow the list.`}
-              </p>
-            )}
-            {(files.data?.entries.length ?? 0) > 0 && selectedPath === null && (
-              <p className="panel-state">Select a file to preview it.</p>
-            )}
-            {preview.data !== undefined && (
-              <div className="file-preview">
-                <header>
-                  <span>{preview.data.path}</span>
-                  <button
-                    onClick={() =>
-                      void navigator.clipboard.writeText(preview.data.path)
-                    }
-                  >
-                    Copy path
-                  </button>
-                  <button
-                    disabled={preview.data.binary}
-                    onClick={() =>
-                      void navigator.clipboard.writeText(preview.data.content)
-                    }
-                  >
-                    Copy
-                  </button>
-                </header>
-                {preview.data.binary ? (
-                  <p>Binary file preview is unavailable.</p>
-                ) : (
-                  <pre>{preview.data.content}</pre>
-                )}
-              </div>
-            )}
-            {files.error !== null && (
-              <ErrorNotice
-                error={files.error}
-                onRetry={() => {
-                  void files.refetch();
-                }}
-              />
-            )}
-            {preview.error !== null && (
-              <ErrorNotice
-                error={preview.error}
-                onRetry={() => {
-                  void preview.refetch();
-                }}
-              />
-            )}
-          </>
-        )}
-        {tab === "terminal" && (
-          <TerminalView projectId={project.id} threadId={threadId} />
-        )}
-      </div>
-    </aside>
-  );
-}
-
 /**
- * The project's tiling surface plus the ONE workspace inspector docked right
- * of it (CWS-06).
+ * The project's tiling surface plus the ONE workspace panel docked right of
+ * it (WSP-01).
  *
- * The inspector follows the **focused pane**, never the URL. A route can
- * address at most one thread, but the surface can hold several panes at once
- * (and, on `/new`, none that own a thread yet); deriving the inspector from
- * `useParams().threadId` meant it showed a thread the user was not looking
- * at, or disappeared entirely while a perfectly inspectable pane was
- * focused. `WorkspaceView` reports whichever thread its focused pane owns —
- * `null` for a threadless pane or an empty surface — and that is the single
- * source of truth for what the inspector shows.
+ * The panel's tabs are durable and carry their own context (WSP-02), so
+ * unlike the fixed strip it replaces, it does not follow the focused pane.
+ * Focus is still an input, but only in two places: it decides which thread
+ * the `+` menu opens tabs *for*, and whether a tab shows its worktree chip.
  */
 function ProjectWorkspace({
   projectId,
@@ -1220,77 +794,68 @@ function ProjectWorkspace({
   projectId: ProjectId;
   routeThreadId?: ThreadId | undefined;
 }) {
-  const [inspectorPreferences, setInspectorPreferences] =
-    useState<InspectorPreferences>(readInspectorPreferences);
-  useEffect(() => {
-    writeInspectorPreferences(inspectorPreferences);
-  }, [inspectorPreferences]);
-  // Seeded from the route so the first paint already has the right workspace
-  // when the surface opens on the addressed thread; from then on the focused
-  // pane drives it.
+  const panel = usePanelState();
+  // Seeded from the route so the first paint already knows which thread new
+  // tabs would belong to; from then on the focused pane drives it.
   const [focusedThreadId, setFocusedThreadId] = useState<ThreadId | null>(
     routeThreadId ?? null,
   );
-  const updateInspectorPreferences = (
-    update: Partial<Omit<InspectorPreferences, "version">>,
-  ) => {
-    setInspectorPreferences((current) => ({ ...current, ...update }));
-  };
-  // Kept only for the Inspector, which needs the project record and to know
-  // whether a snapshot is available; ThreadPane owns its own copy of this
-  // query (and the live-update subscription that keeps it fresh) so it stays
-  // self-contained. keepPreviousData means moving focus between two thread
-  // panes swaps the inspector's contents instead of tearing the whole column
-  // down and rebuilding it.
+  // The focused thread's execution scope, which is all the panel needs from
+  // the chat surface. ThreadPane owns its own copy of this query (and the
+  // live subscription that keeps it fresh); this one exists to name a
+  // worktree, which changes only when the focused thread does.
   const snapshot = useQuery({
     queryKey: ["snapshot", projectId, focusedThreadId],
     queryFn: async () => {
       if (focusedThreadId === null)
-        throw new Error("No focused thread to inspect.");
+        throw new Error("No focused thread to open tabs against.");
       return await getSnapshot(projectId, focusedThreadId);
     },
     enabled: focusedThreadId !== null,
     placeholderData: keepPreviousData,
+    // Restored after the port to the panel dropped it silently (D6). It is
+    // usually redundant — ThreadPane holds the same key with the same
+    // interval and the live subscription — but only while the focused
+    // thread still has a pane mounted, and this query is what names the
+    // worktree on a tab's chip. A chip is a claim about which worktree a tab
+    // reads; it should not be able to go stale because a pane closed.
     refetchInterval: 15_000,
   });
-  const inspectable = focusedThreadId !== null && snapshot.data !== undefined;
+  const focusedContext = useMemo(() => {
+    const data = snapshot.data;
+    if (data === undefined || focusedThreadId === null) return null;
+    // keepPreviousData hands back the previously focused thread's snapshot
+    // while the next one loads. Building a context from that would label a
+    // tab with a worktree it does not read.
+    if (data.thread.id !== focusedThreadId) return null;
+    return threadTabContext(data.project, data.thread);
+  }, [snapshot.data, focusedThreadId]);
+
+  // D-1: a tab restored by the v1 inspector migration has no context of its
+  // own. It adopts the focused pane's thread once, and is fixed from then on
+  // like every other tab (WSP-02).
+  const { bindPendingContexts } = panel.actions;
+  useEffect(() => {
+    if (focusedContext === null) return;
+    bindPendingContexts(focusedContext);
+  }, [focusedContext, bindPendingContexts]);
+
   return (
     <WorkspaceLayout
       selectedProjectId={projectId}
       // The sidebar highlights whatever the user is looking at, which is the
       // focused pane's thread — the route only seeds it.
       selectedThreadId={focusedThreadId ?? routeThreadId}
-      inspectorAvailable={inspectable}
-      inspectorOpen={inspectorPreferences.open}
-      inspectorWidth={inspectorPreferences.width}
-      onOpenInspector={() => {
-        updateInspectorPreferences({ open: true });
+      panelOpen={panel.state.open}
+      panelWidth={panel.state.width}
+      onOpenPanel={() => {
+        panel.actions.setOpen(true);
       }}
-      onCloseInspector={() => {
-        updateInspectorPreferences({ open: false });
+      onClosePanel={() => {
+        panel.actions.setOpen(false);
       }}
-      inspector={
-        inspectable ? (
-          <Inspector
-            // Remount on a thread change so the tab's selected file, search
-            // box and in-flight queries never leak across panes.
-            key={focusedThreadId}
-            project={snapshot.data.project}
-            threadId={focusedThreadId}
-            tab={inspectorPreferences.activeTab}
-            width={inspectorPreferences.width}
-            onTabChange={(activeTab) => {
-              updateInspectorPreferences({ activeTab });
-            }}
-            onWidthChange={(width) => {
-              updateInspectorPreferences({ width });
-            }}
-            onClose={() => {
-              updateInspectorPreferences({ open: false });
-            }}
-            open={inspectorPreferences.open}
-          />
-        ) : undefined
+      panel={
+        <WorkspacePanel controller={panel} focusedContext={focusedContext} />
       }
     >
       <WorkspaceView
@@ -1359,29 +924,29 @@ function WorkspaceLayout({
   selectedProjectId,
   selectedThreadId,
   children,
-  inspector,
-  inspectorAvailable = false,
-  inspectorOpen = false,
-  inspectorWidth = 400,
-  onOpenInspector,
-  onCloseInspector,
+  panel,
+  panelOpen = false,
+  panelWidth = PANEL_DEFAULT_WIDTH,
+  onOpenPanel,
+  onClosePanel,
 }: {
   selectedProjectId?: ProjectId | undefined;
   selectedThreadId?: ThreadId | undefined;
   children?: ReactNode;
-  inspector?: ReactNode;
-  inspectorAvailable?: boolean;
-  inspectorOpen?: boolean;
-  inspectorWidth?: number;
-  onOpenInspector?: () => void;
-  onCloseInspector?: () => void;
+  // The whole docked column, rail included. Absent on the routes that have
+  // no project to show one for.
+  panel?: ReactNode;
+  panelOpen?: boolean;
+  panelWidth?: number;
+  onOpenPanel?: () => void;
+  onClosePanel?: () => void;
 }) {
-  const [drawer, setDrawer] = useState<"sidebar" | "inspector" | null>(null);
+  const [drawer, setDrawer] = useState<"sidebar" | "panel" | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const effectiveInspectorWidth = Math.min(
-    inspectorMaxWidth(viewportWidth),
-    Math.max(INSPECTOR_MIN_WIDTH, inspectorWidth),
-  );
+  // A width recorded on a wide monitor is read on a narrow one, so the
+  // stored value is clamped against this viewport before it lays anything
+  // out — the panel must never squash the chat surface out of the window.
+  const effectivePanelWidth = clampPanelWidth(panelWidth, viewportWidth);
   useEffect(() => {
     const resized = () => {
       setViewportWidth(window.innerWidth);
@@ -1392,26 +957,27 @@ function WorkspaceLayout({
     };
   }, []);
   useEffect(() => {
-    if (!inspectorOpen && drawer === "inspector") setDrawer(null);
-  }, [drawer, inspectorOpen]);
+    if (!panelOpen && drawer === "panel") setDrawer(null);
+  }, [drawer, panelOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || drawer === null) return;
-      if (drawer === "inspector") onCloseInspector?.();
+      if (drawer === "panel") onClosePanel?.();
       setDrawer(null);
     };
     window.addEventListener("keydown", close);
     return () => {
       window.removeEventListener("keydown", close);
     };
-  }, [drawer, onCloseInspector]);
-  const inspectorVisible = inspectorOpen && inspector !== undefined;
+  }, [drawer, onClosePanel]);
+  const panelAvailable = panel !== undefined;
+  const panelVisible = panelOpen && panelAvailable;
   return (
     <div
-      className={`workspace ${inspector !== undefined ? "inspector-available" : ""} ${inspectorVisible ? "inspector-visible" : ""} ${inspectorAvailable && !inspectorVisible ? "inspector-railed" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
+      className={`workspace ${panelAvailable ? "panel-available" : ""} ${panelVisible ? "panel-visible" : ""} ${panelAvailable && !panelVisible ? "panel-railed" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "panel" ? "panel-open" : ""}`}
       style={
         {
-          "--inspector-width": `${String(effectiveInspectorWidth)}px`,
+          "--panel-width": `${String(effectivePanelWidth)}px`,
         } as CSSProperties
       }
     >
@@ -1433,25 +999,23 @@ function WorkspaceLayout({
         >
           ☰ Projects
         </button>
-        {inspectorAvailable && (
+        {panelAvailable && (
           <button
             onClick={() => {
-              if (drawer === "inspector") {
-                onCloseInspector?.();
+              if (drawer === "panel") {
+                onClosePanel?.();
                 setDrawer(null);
                 return;
               }
-              onOpenInspector?.();
-              setDrawer("inspector");
+              onOpenPanel?.();
+              setDrawer("panel");
             }}
-            aria-expanded={drawer === "inspector"}
+            aria-expanded={drawer === "panel"}
             aria-label={
-              drawer === "inspector"
-                ? "Close inspector drawer"
-                : "Open inspector drawer"
+              drawer === "panel" ? "Close panel drawer" : "Open panel drawer"
             }
           >
-            Inspector <PanelRightIcon />
+            Panel <PanelRightIcon />
           </button>
         )}
       </div>
@@ -1460,28 +1024,13 @@ function WorkspaceLayout({
         selectedThreadId={selectedThreadId}
       />
       {children}
-      {inspector}
-      {inspectorAvailable && !inspectorVisible && (
-        <div className="inspector-rail">
-          <div className="inspector-rail-head">
-            <button
-              type="button"
-              className="inspector-reopen"
-              aria-label="Open inspector panel"
-              title="Open inspector"
-              onClick={onOpenInspector}
-            >
-              <PanelRightIcon />
-            </button>
-          </div>
-        </div>
-      )}
+      {panel}
       {drawer !== null && (
         <button
           className="drawer-backdrop"
           aria-label="Close drawer"
           onClick={() => {
-            if (drawer === "inspector") onCloseInspector?.();
+            if (drawer === "panel") onClosePanel?.();
             setDrawer(null);
           }}
         />

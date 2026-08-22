@@ -7,8 +7,16 @@ import {
   RelativePathSchema,
 } from "@pi-web/contracts";
 
+import {
+  isIgnored,
+  loadDirectoryIgnoreLayer,
+  loadRootIgnoreLayers,
+  type IgnoreLayer,
+} from "./ignoreRules.js";
+
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 20_000;
+const MAX_SEARCH_MATCHES = 500;
 
 export function parseRelativePath(raw: unknown): string {
   return RelativePathSchema.parse(raw);
@@ -35,9 +43,54 @@ export async function resolveContained(
   return { root, target, relativePath };
 }
 
-export async function listProjectFiles(rootPath: string, searchText = "") {
-  const root = await realpath(rootPath);
-  const search = searchText.trim().toLocaleLowerCase();
+export interface ListProjectFilesOptions {
+  /** Bounded server-side substring search over the workspace-relative path. */
+  search?: string;
+  /**
+   * `"1"` lists the target directory's own children; `"full"` walks the whole
+   * subtree. `"full"` is the default so the parameter is additive: a browser
+   * that does not send it sees exactly what it saw before (WSP-05 v2).
+   */
+  depth?: "1" | "full";
+  /** Reveal paths the working tree's ignore rules match. `.git` never is. */
+  showIgnored?: boolean;
+  /** The directory to list, relative to the execution root; `""` is the root. */
+  path?: string;
+}
+
+/** How the children of one directory are ordered, and why it is stable. */
+function compareEntries(
+  left: { name: string; kind: string },
+  right: { name: string; kind: string },
+): number {
+  // Directories first, then files and symlinks, each case-insensitively by
+  // name. Case-insensitive because a tree that puts `Docs` and `apps` in
+  // different halves of the list reads as unsorted; the case-sensitive
+  // tie-break after it keeps the order total, so two listings of one
+  // directory never disagree about which of `README` and `readme` comes
+  // first.
+  const leftDirectory = left.kind === "directory";
+  const rightDirectory = right.kind === "directory";
+  if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1;
+  const folded = left.name
+    .toLocaleLowerCase()
+    .localeCompare(right.name.toLocaleLowerCase());
+  if (folded !== 0) return folded;
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
+
+export async function listProjectFiles(
+  rootPath: string,
+  options: ListProjectFilesOptions = {},
+) {
+  // One containment check for the whole listing, through the same resolver
+  // every other file route uses: the walk below never re-derives a path from
+  // client text, only from directory entries under this resolved target.
+  const resolved = await resolveContained(rootPath, options.path ?? "", true);
+  const root = resolved.root;
+  const search = (options.search ?? "").trim().toLocaleLowerCase();
+  const depth = options.depth ?? "full";
+  const showIgnored = options.showIgnored ?? false;
   const entries: {
     path: string;
     name: string;
@@ -45,50 +98,136 @@ export async function listProjectFiles(rootPath: string, searchText = "") {
     size: number | null;
   }[] = [];
   let truncated = false;
+  let ignoredHidden = false;
 
-  async function visit(directory: string): Promise<void> {
-    if (
+  // Every ignore file from the root down to and including the directory being
+  // listed, so expanding `apps/web` still honours a rule written in `apps`.
+  const baseLayers = showIgnored
+    ? []
+    : await loadIgnoreLayersFor(root, resolved.relativePath);
+
+  function atCapacity(): boolean {
+    return (
       entries.length >= MAX_TREE_ENTRIES ||
-      (search !== "" && entries.length >= 500)
-    ) {
+      (search !== "" && entries.length >= MAX_SEARCH_MATCHES)
+    );
+  }
+
+  async function visit(
+    directory: string,
+    layers: IgnoreLayer[],
+    remaining: number,
+  ): Promise<void> {
+    if (atCapacity()) {
       truncated = true;
       return;
     }
+    const children: {
+      name: string;
+      kind: "file" | "directory" | "symlink";
+      // A symlinked directory reports `directory: false` here on purpose:
+      // traversal must not follow one (design/inspector-and-terminal.md).
+      walkable: boolean;
+    }[] = [];
     const handle = await opendir(directory);
     for await (const entry of handle) {
+      // Not an ignore rule and not revealed by the opt-in: `.git` is the
+      // repository's own machinery, and reading it is not browsing.
       if (entry.name === ".git") continue;
-      const absolute = resolve(directory, entry.name);
+      children.push({
+        name: entry.name,
+        kind: entry.isSymbolicLink()
+          ? "symlink"
+          : entry.isDirectory()
+            ? "directory"
+            : "file",
+        walkable: entry.isDirectory(),
+      });
+    }
+    children.sort(compareEntries);
+
+    for (const child of children) {
+      const absolute = resolve(directory, child.name);
       const displayPath = relative(root, absolute).split(sep).join("/");
-      const kind = entry.isSymbolicLink()
-        ? "symlink"
-        : entry.isDirectory()
-          ? "directory"
-          : "file";
+      const isDirectory = child.kind === "directory";
+      if (!showIgnored && isIgnored(layers, displayPath, isDirectory)) {
+        // Recorded so the tab can say it is showing less than everything;
+        // an under-reporting listing that stays quiet is not acceptable.
+        ignoredHidden = true;
+        continue;
+      }
       if (search === "" || displayPath.toLocaleLowerCase().includes(search)) {
         let size: number | null = null;
-        if (kind === "file") {
+        if (child.kind === "file") {
           try {
             size = (await stat(absolute)).size;
           } catch {
             size = null;
           }
         }
-        entries.push({ path: displayPath, name: entry.name, kind, size });
+        entries.push({
+          path: displayPath,
+          name: child.name,
+          kind: child.kind,
+          size,
+        });
       }
-      if (entry.isDirectory()) await visit(absolute);
-      if (
-        entries.length >= MAX_TREE_ENTRIES ||
-        (search !== "" && entries.length >= 500)
-      ) {
+      if (child.walkable && remaining > 0) {
+        const nested = showIgnored
+          ? layers
+          : await appendDirectoryLayer(layers, absolute, displayPath);
+        await visit(absolute, nested, remaining - 1);
+      }
+      if (atCapacity()) {
         truncated = true;
         break;
       }
     }
   }
 
-  await visit(root);
-  entries.sort((left, right) => left.path.localeCompare(right.path));
-  return FileTreeResponseSchema.parse({ entries, truncated });
+  // `depth: "1"` is the tree's own request: one level, and the browser asks
+  // again when the user expands a directory. It is what stops the panel
+  // paying for a 20,000-entry walk to paint ten rows.
+  await visit(
+    resolved.target,
+    baseLayers,
+    depth === "1" ? 0 : Number.POSITIVE_INFINITY,
+  );
+  return FileTreeResponseSchema.parse({ entries, truncated, ignoredHidden });
+}
+
+/** The ignore layers in force for a directory, root-first. */
+async function loadIgnoreLayersFor(
+  root: string,
+  relativeDirectory: string,
+): Promise<IgnoreLayer[]> {
+  let layers = await loadRootIgnoreLayers(root);
+  if (relativeDirectory === "") return layers;
+  const segments = relativeDirectory.split("/");
+  let prefix = "";
+  for (const segment of segments) {
+    prefix = prefix === "" ? segment : `${prefix}/${segment}`;
+    layers = await appendDirectoryLayer(
+      layers,
+      resolve(root, ...prefix.split("/")),
+      prefix,
+    );
+  }
+  return layers;
+}
+
+async function appendDirectoryLayer(
+  layers: IgnoreLayer[],
+  absoluteDirectory: string,
+  relativeDirectory: string,
+): Promise<IgnoreLayer[]> {
+  const layer = await loadDirectoryIgnoreLayer(
+    absoluteDirectory,
+    relativeDirectory,
+  );
+  // A new array rather than a push: a sibling directory's rules must not
+  // leak into the branch beside it once the walk comes back up.
+  return layer === null ? layers : [...layers, layer];
 }
 
 function languageFor(path: string): string | null {

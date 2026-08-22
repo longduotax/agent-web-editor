@@ -179,6 +179,11 @@ describe("layoutTree", () => {
       l = splitPane(l, "pane-1", "row", make);
       const result = setSplitSizes(l, "split-does-not-exist", [0.2, 0.8]);
       expect(result).toEqual(l);
+      // By identity, not just by value: a miss walks the whole tree and must
+      // hand back the very tree it was given, because every pane is memoised
+      // on its own node. Deep equality here would pass equally against an
+      // implementation that rebuilt every node it visited.
+      expect(result).toBe(l);
     });
 
     it("normalizes sizes to sum to 1, clamping to a sane minimum", () => {
@@ -190,10 +195,13 @@ describe("layoutTree", () => {
       const root = l.root;
       if (root?.type !== "split") throw new Error("expected split root");
       const [a, b] = root.sizes;
-      // 0.001 is clamped up to the 0.05 minimum, then [0.05, 0.2] is
-      // rescaled to sum to 1: [0.05, 0.2] / 0.25 = [0.2, 0.8].
-      expect(a).toBeCloseTo(0.2, 5);
-      expect(b).toBeCloseTo(0.8, 5);
+      // A 1:200 share. It is rescaled first and then held at the 0.05
+      // floor, so it lands ON the floor: [0.05, 0.95]. (It used to be
+      // clamped before rescaling, which both inflated this share to 0.2 and
+      // left the floor itself unenforced for extreme pairs — see F6 in
+      // binaryTree.test.ts.)
+      expect(a).toBeCloseTo(0.05, 10);
+      expect(b).toBeCloseTo(0.95, 10);
       expect(a + b).toBeCloseTo(1, 10);
     });
 

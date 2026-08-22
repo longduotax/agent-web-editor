@@ -122,8 +122,8 @@ describe("PaneHeader", () => {
     expect(css).toMatch(/--header-h:\s*[\d.]+rem;/);
     for (const selector of [
       ".pane-head",
-      ".inspector-tabs",
-      ".inspector-rail-head",
+      ".panel-tabstrip",
+      ".panel-rail-head",
     ])
       expect(
         ruleBody(css, selector),
@@ -131,7 +131,7 @@ describe("PaneHeader", () => {
       ).toMatch(/\bheight:\s*var\(--header-h\)/);
     // A min-height would let content push a header taller again.
     expect(ruleBody(css, ".pane-head")).not.toMatch(/min-height:/);
-    expect(ruleBody(css, ".inspector-tabs")).not.toMatch(/min-height:/);
+    expect(ruleBody(css, ".panel-tabstrip")).not.toMatch(/min-height:/);
 
     const detail = ruleBody(css, ".pane-head-detail");
     expect(detail).toMatch(/white-space:\s*nowrap/);

@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  clampTerminalSize,
   TerminalServerFrameSchema,
   type ProjectId,
   type TerminalId,
@@ -54,17 +55,47 @@ function observeThemeChanges(onChange: () => void): () => void {
 export function TerminalView({
   projectId,
   threadId,
+  visible = true,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
+  /**
+   * Whether this terminal is on screen. WSP-09: a terminal that is not
+   * visible "keeps its process and buffers output but performs no rendering
+   * work". Output frames are still written, because xterm's own buffer IS
+   * the buffering the requirement asks for and it is the only one that trims
+   * to the scrollback bound; what this suppresses is the measuring work,
+   * which is both wasted and wrong on a `display: none` element — a zero-size
+   * box makes the fit addon propose nonsense and pushes a bogus resize to the
+   * PTY. The terminal is refitted once, on the way back to visible, because
+   * the panel may have been resized while it was away.
+   */
+  visible?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const socket = useRef<WebSocket | null>(null);
   const terminalId = useRef<TerminalId | null>(null);
+  // Read by the resize observer, which must not be torn down and rebuilt
+  // when visibility changes: that effect owns the socket and the process.
+  const visibleRef = useRef(visible);
+  const refit = useRef<() => void>(() => undefined);
   // Mirrors terminalId for rendering. Reading the ref during render made the
   // "Start terminal" button's visibility depend on an unrelated re-render.
   const [attached, setAttached] = useState(false);
+  // The terminal's lifecycle, which only a lifecycle event changes: starting,
+  // running, exited, disconnected. A refused command is NOT one of these.
   const [status, setStatus] = useState("Starting terminal…");
+  /**
+   * The last thing that went wrong that the shell survived — a command the
+   * server refused, a frame that would not parse — or null.
+   *
+   * Separate from `status` because it is transient and `status` is not (F1).
+   * A protocol rejection used to be written into `status`, where nothing ever
+   * cleared it: the toolbar read "Terminal error" for the rest of the session
+   * while the shell ran normally, and only a reload got rid of it. This
+   * clears itself on the next frame that proves the connection works.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const element = container.current;
@@ -96,16 +127,28 @@ export function TerminalView({
       try {
         value = JSON.parse(String(event.data));
       } catch {
-        setStatus("Terminal protocol error");
+        setNotice("A terminal frame could not be read.");
         return;
       }
       const parsed = TerminalServerFrameSchema.safeParse(value);
       if (!parsed.success) {
-        setStatus("Terminal protocol error");
+        setNotice("A terminal frame could not be read.");
         return;
       }
+      // Any frame the server sends and this client understands is proof the
+      // exchange works again, so whatever went wrong last is over (F1).
+      setNotice(null);
       if (parsed.data.type === "ready") {
+        const previous = terminalId.current;
         terminalId.current = parsed.data.terminalId;
+        // A `ready` naming a DIFFERENT terminal than the one on screen is a
+        // restart: the server disposed that shell and spawned another. The
+        // dead shell's screen used to stay exactly where it was, with the
+        // new prompt appended under it, which is why restarting looked like
+        // it did nothing at all. `reset` is the only frame that cleared,
+        // and a restart never sends one.
+        if (previous !== null && previous !== parsed.data.terminalId)
+          terminal.clear();
         setAttached(true);
         setStatus("Terminal running");
       } else if (parsed.data.type === "output")
@@ -121,8 +164,10 @@ export function TerminalView({
         terminal.clear();
         setStatus(parsed.data.reason);
       } else {
-        terminal.writeln(`\r\n[${parsed.data.message}]`);
-        setStatus("Terminal error");
+        // Deliberately NOT written into the terminal buffer: a protocol
+        // error is not program output, and in the scrollback it is
+        // indistinguishable from one and outlives the problem (F1).
+        setNotice(parsed.data.message);
       }
     });
     ws.addEventListener("close", () => {
@@ -144,21 +189,35 @@ export function TerminalView({
           }),
         );
     });
-    const resize = new ResizeObserver(() => {
+    const fitToContainer = () => {
       fit.fit();
       const currentTerminalId = terminalId.current;
-      if (ws.readyState === WebSocket.OPEN && currentTerminalId !== null)
-        ws.send(
-          JSON.stringify({
-            version: 1,
-            type: "resize",
-            projectId,
-            threadId,
-            terminalId: currentTerminalId,
-            columns: terminal.cols,
-            rows: terminal.rows,
-          }),
-        );
+      if (ws.readyState !== WebSocket.OPEN || currentTerminalId === null)
+        return;
+      // The fit addon proposes whatever the box allows, and a group shrunk
+      // to its floor allows `rows: 1` — which the contract refuses, so the
+      // server answered with an error the user saw in their shell (F1). The
+      // bounds come from the contract itself: duplicating the numbers here
+      // would let the two drift apart silently.
+      const { columns, rows } = clampTerminalSize(terminal.cols, terminal.rows);
+      ws.send(
+        JSON.stringify({
+          version: 1,
+          type: "resize",
+          projectId,
+          threadId,
+          terminalId: currentTerminalId,
+          columns,
+          rows,
+        }),
+      );
+    };
+    refit.current = fitToContainer;
+    const resize = new ResizeObserver(() => {
+      // A hidden terminal is a zero-size box: measuring it proposes nonsense
+      // and would push a bogus size to the PTY (WSP-09).
+      if (!visibleRef.current) return;
+      fitToContainer();
     });
     resize.observe(element);
     return () => {
@@ -169,8 +228,17 @@ export function TerminalView({
       terminal.dispose();
       terminalId.current = null;
       socket.current = null;
+      refit.current = () => undefined;
     };
   }, [projectId, threadId]);
+
+  // Deliberately separate from the effect above: that one owns the socket and
+  // the process, and re-running it on a tab switch is exactly what WSP-09
+  // forbids.
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (visible) refit.current();
+  }, [visible]);
 
   const attach = () => {
     if (socket.current?.readyState === WebSocket.OPEN)
@@ -199,6 +267,11 @@ export function TerminalView({
     <div className="terminal-panel">
       <div className="terminal-toolbar">
         <span>{status}</span>
+        {notice !== null && (
+          <span className="terminal-notice" aria-live="polite">
+            {notice}
+          </span>
+        )}
         {!attached && <button onClick={attach}>Start terminal</button>}
         <button
           onClick={() => {
@@ -218,11 +291,17 @@ export function TerminalView({
       <p className="terminal-warning">
         Direct local shell — not sandboxed and separate from agent execution.
       </p>
-      <div
-        ref={container}
-        className="terminal-surface"
-        aria-label="Project terminal"
-      />
+      {/* Two elements, not one (F4). The fit addon measures
+          `getComputedStyle(parent).height`, which for a border-box element
+          is its BORDER box — 218.917px measured against a 206.1px content
+          box — and subtracts only the `.xterm` element's own padding, which
+          is zero. So a padded container had its padding counted as space
+          the terminal could use, and between 0 and 12.8px of the last text
+          row was cut off. The padding lives out here; the box the addon
+          measures has none, so its computed height IS its content box. */}
+      <div className="terminal-surface" aria-label="Project terminal">
+        <div ref={container} className="terminal-canvas" />
+      </div>
     </div>
   );
 }

@@ -350,6 +350,11 @@ export const FileEntrySchema = z.object({
 export const FileTreeResponseSchema = z.object({
   entries: z.array(FileEntrySchema),
   truncated: z.boolean(),
+  // Whether this listing omitted anything because the working tree's ignore
+  // rules matched it. The browser states it rather than under-reporting
+  // quietly (WSP-05 as revised by specification version 2). `.git` is not an
+  // ignore rule and never sets this.
+  ignoredHidden: z.boolean(),
 });
 export const FilePreviewResponseSchema = z.object({
   path: z.string(),
@@ -412,6 +417,45 @@ export const LiveSnapshotRequiredSchema = z.object({
   threadId: ThreadIdSchema,
 });
 
+/**
+ * What a terminal may be resized to.
+ *
+ * Exported because the client has to obey these bounds BEFORE it sends a
+ * frame, not discover them from a rejection: the fit addon happily proposes
+ * `rows: 1` for a group shrunk to its floor, and a frame the schema refuses
+ * costs the user an error in their shell (F1). The schema below is built
+ * from these constants, and the server's own resize guard reads them, so
+ * there is exactly one place the numbers live.
+ */
+export const TERMINAL_MIN_COLUMNS = 2;
+export const TERMINAL_MAX_COLUMNS = 500;
+export const TERMINAL_MIN_ROWS = 2;
+export const TERMINAL_MAX_ROWS = 200;
+
+/** A proposed size brought inside {@link TerminalClientFrameSchema}'s bounds. */
+export function clampTerminalSize(
+  columns: number,
+  rows: number,
+): { columns: number; rows: number } {
+  return {
+    columns: clampDimension(
+      columns,
+      TERMINAL_MIN_COLUMNS,
+      TERMINAL_MAX_COLUMNS,
+    ),
+    rows: clampDimension(rows, TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS),
+  };
+}
+
+function clampDimension(
+  value: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.min(maximum, Math.max(minimum, Math.trunc(value)));
+}
+
 export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
   z.object({
     version: z.literal(1),
@@ -433,8 +477,12 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
-    columns: z.number().int().min(2).max(500),
-    rows: z.number().int().min(2).max(200),
+    columns: z
+      .number()
+      .int()
+      .min(TERMINAL_MIN_COLUMNS)
+      .max(TERMINAL_MAX_COLUMNS),
+    rows: z.number().int().min(TERMINAL_MIN_ROWS).max(TERMINAL_MAX_ROWS),
   }),
   z.object({
     version: z.literal(1),

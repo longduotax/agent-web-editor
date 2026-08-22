@@ -1,0 +1,257 @@
+import {
+  useEffect,
+  type JSX,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+
+import { NewTabMenu } from "./NewTabMenu.js";
+import { PanelRightIcon } from "./PanelRightIcon.js";
+import type { TabGroup } from "./panelModel.js";
+import { tabTitle } from "./panelTabs.js";
+import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
+import { stripCaretOffset } from "./tabDrag.js";
+import { showsWorktreeChip } from "./tabContext.js";
+import type { PanelActions } from "./usePanelState.js";
+import type { TabDragController } from "./useTabDrag.js";
+
+// One tab group's strip: a real tablist with a roving tabindex (WSP-10),
+// a per-tab close control, the worktree chip (WSP-02), and the `+` menu.
+
+export function tabElementId(tabId: TabId): string {
+  return `panel-tab-${tabId}`;
+}
+
+export function tabPanelElementId(tabId: TabId): string {
+  return `panel-tabpanel-${tabId}`;
+}
+
+// Whether a click inside a tab landed on its close affordance rather than
+// on the tab itself.
+function isCloseAffordance(target: EventTarget): boolean {
+  return (
+    target instanceof Element && target.closest("[data-tab-close]") !== null
+  );
+}
+
+export interface TabStripProps {
+  group: TabGroup;
+  tabs: Record<TabId, PanelTab>;
+  actions: PanelActions;
+  /** The panel-wide tab drag (WSP-03), idle or in progress. */
+  drag: TabDragController;
+  /** Whether this group is the panel's focused one. */
+  focused: boolean;
+  /** The focused chat pane's scope: what `+` opens tabs for, and what the
+   * worktree chip is compared against. */
+  focusedContext: TabContext | null;
+  /** 1-based position in reading order, for this strip's accessible name. */
+  index: number;
+  /** How many groups the panel holds, so a lone strip needs no number. */
+  groupCount: number;
+  /** Supplied to exactly one strip, so the panel has one close control. */
+  onClosePanel?: (() => void) | undefined;
+}
+
+export function TabStrip(props: TabStripProps): JSX.Element {
+  const {
+    group,
+    tabs,
+    actions,
+    drag,
+    focused,
+    focusedContext,
+    index,
+    groupCount,
+    onClosePanel,
+  } = props;
+  const activeTabId = group.activeTabId;
+  const activeTab = activeTabId === null ? undefined : tabs[activeTabId];
+  // Where a release right now would insert the dragged tab in THIS strip.
+  const dropIndex =
+    drag.drag?.target?.kind === "strip" && drag.drag.target.groupId === group.id
+      ? drag.drag.target.index
+      : null;
+  const dropZone = dropIndex === null ? undefined : drag.zoneFor(group.id);
+
+  // Overflow must never hide the tab the user is looking at: the strip
+  // scrolls, and the active tab is scrolled back into it.
+  useEffect(() => {
+    if (activeTabId === null) return;
+    const element = document.getElementById(tabElementId(activeTabId));
+    if (typeof element?.scrollIntoView !== "function") return;
+    element.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+
+  const moveFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // A CHORDED arrow is not this tablist's to handle. The panel's split
+    // chords are Shift+primary+Alt plus an arrow, and the panel puts focus
+    // on a tab after every structural chord (F5) — so without this the strip
+    // moved the selection first and the chord then split with whichever tab
+    // the arrow had just landed on, rather than the one the user was
+    // looking at. Found while driving the drag end to end.
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
+      return;
+    const order = group.tabIds;
+    if (order.length === 0 || activeTabId === null) return;
+    const current = order.indexOf(activeTabId);
+    let target: TabId | undefined;
+    if (event.key === "ArrowRight")
+      target = order[(current + 1) % order.length];
+    else if (event.key === "ArrowLeft")
+      target = order[(current - 1 + order.length) % order.length];
+    else if (event.key === "Home") target = order[0];
+    else if (event.key === "End") target = order[order.length - 1];
+    if (target === undefined) return;
+    event.preventDefault();
+    actions.activateTab(target);
+    // The roving tabindex follows the selection, so focus has to as well or
+    // the next Tab press would leave from an element that is now -1.
+    document.getElementById(tabElementId(target))?.focus();
+  };
+
+  return (
+    <div
+      className="panel-tabstrip"
+      onPointerDown={() => {
+        if (!focused) actions.focusGroup(group.id);
+      }}
+    >
+      <div
+        className="panel-tab-options"
+        role="tablist"
+        // A split panel holds two of these, and "Panel tabs" twice over is
+        // indistinguishable to a screen reader (WSP-10).
+        aria-label={
+          groupCount > 1
+            ? `Panel tabs, group ${String(index)} of ${String(groupCount)}`
+            : "Panel tabs"
+        }
+        aria-orientation="horizontal"
+        onKeyDown={moveFocus}
+        // At the panel's minimum width a third tab is off the end of the
+        // strip. The keyboard reaches it (arrow keys above) and a trackpad
+        // reaches it (a horizontal gesture sends deltaX), but a plain wheel
+        // mouse did not: measured in Chromium, a vertical wheel over a
+        // horizontal-only scroller moves nothing at all. So the strip takes
+        // whichever axis the pointer actually moved.
+        onWheel={(event) => {
+          const strip = event.currentTarget;
+          if (strip.scrollWidth <= strip.clientWidth) return;
+          const delta =
+            Math.abs(event.deltaX) > Math.abs(event.deltaY)
+              ? event.deltaX
+              : event.deltaY;
+          if (delta === 0) return;
+          strip.scrollLeft += delta;
+        }}
+      >
+        {/* The insertion point a strip drop would use, drawn in the strip's
+            own scrolled content coordinates so it stays put while the strip
+            scrolls under the drag. */}
+        {dropIndex !== null &&
+          dropZone?.strip !== undefined &&
+          dropZone.strip !== null && (
+            <div
+              className={`panel-drop-caret ${drag.drag?.refused === true ? "refused" : ""}`}
+              aria-hidden="true"
+              style={{ left: stripCaretOffset(dropZone.strip, dropIndex) }}
+            />
+          )}
+        {group.tabIds.map((tabId) => {
+          const tab = tabs[tabId];
+          if (tab === undefined) return null;
+          const title = tabTitle(tab);
+          const active = tabId === activeTabId;
+          const dragged = drag.drag?.tabId === tabId;
+          return (
+            <button
+              type="button"
+              role="tab"
+              key={tabId}
+              id={tabElementId(tabId)}
+              data-panel-tab={tabId}
+              // Only the active tab names a panel: a tab that has never been
+              // activated has no body mounted (WSP-09 mounts on first use),
+              // so pointing at one would be a dangling reference.
+              aria-controls={active ? tabPanelElementId(tabId) : undefined}
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              className={`panel-tab ${active ? "active" : ""} ${dragged ? "dragging" : ""}`}
+              // WSP-03's drag. The close affordance is not a drag handle:
+              // starting a drag from it would make a press on the × either
+              // close the tab or move it depending on a tremor.
+              onPointerDown={(event) => {
+                if (isCloseAffordance(event.target)) return;
+                drag.onTabPointerDown(event, {
+                  tabId,
+                  title,
+                  groupId: group.id,
+                });
+              }}
+              onPointerMove={drag.onTabPointerMove}
+              onPointerUp={drag.onTabPointerUp}
+              onPointerCancel={drag.onTabPointerCancel}
+              onClick={(event) => {
+                // A drag ends in a click on the tab it started from, because
+                // the pointer was captured there. That click belongs to the
+                // drag, not to the tab.
+                if (drag.consumeClick(tabId)) return;
+                if (isCloseAffordance(event.target)) actions.closeTab(tabId);
+                else actions.activateTab(tabId);
+              }}
+            >
+              <span className="panel-tab-title">{title}</span>
+              {showsWorktreeChip(tab.context, focusedContext) &&
+                tab.context !== null && (
+                  <span className="panel-tab-chip">{tab.context.label}</span>
+                )}
+              {/* A pointer affordance, deliberately not a control of its
+                  own: ARIA lets a tablist own nothing but tabs, and a real
+                  button inside a tab is a nested interactive. Keyboard and
+                  assistive-technology users close the active tab through the
+                  strip's own close control (below) or the "Close panel tab"
+                  chord, both of which are announced. */}
+              <span
+                className="panel-tab-close"
+                data-tab-close=""
+                aria-hidden="true"
+                title={`Close ${title}`}
+              >
+                ×
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {activeTab !== undefined && (
+        <button
+          type="button"
+          className="panel-close-tab"
+          aria-label={`Close ${tabTitle(activeTab)} tab`}
+          title={`Close ${tabTitle(activeTab)}`}
+          onClick={() => {
+            actions.closeTab(activeTab.id);
+          }}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      )}
+      <NewTabMenu
+        context={focusedContext}
+        groupId={group.id}
+        actions={actions}
+      />
+      {onClosePanel !== undefined && (
+        <button
+          type="button"
+          className="panel-close"
+          aria-label="Close workspace panel"
+          title="Close panel"
+          onClick={onClosePanel}
+        >
+          <PanelRightIcon />
+        </button>
+      )}
+    </div>
+  );
+}

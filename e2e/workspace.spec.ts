@@ -165,30 +165,37 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
     page.getByText(/Pi tools run with your user permissions/),
   ).toBeVisible();
 
-  const inspector = page.getByRole("complementary", {
-    name: "Project inspector",
+  const panel = page.getByRole("complementary", {
+    name: "Workspace panel",
   });
-  await expect(inspector).toHaveCount(0);
-  await page.getByRole("button", { name: "Open inspector panel" }).click();
-  await expect(inspector).toBeVisible();
-  await page.getByRole("tab", { name: "Files" }).click();
-  await page.getByRole("button", { name: "Close inspector panel" }).click();
-  await expect(inspector).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open workspace panel" }).click();
+  await expect(panel).toBeVisible();
+  // A second durable tab, opened for the focused pane's thread (WSP-02).
+  await page.getByRole("button", { name: "New panel tab" }).click();
+  await page.getByRole("menuitem", { name: "Files" }).click();
+  await expect(
+    page.getByRole("tab", { name: "Files", selected: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close workspace panel" }).click();
+  await expect(panel).toHaveCount(0);
   await page.reload();
-  await expect(inspector).toHaveCount(0);
-  await page.getByRole("button", { name: "Open inspector panel" }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open workspace panel" }).click();
+  // Both tabs came back, still with the same one selected (WSP-04).
+  await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(
     page.getByRole("tab", { name: "Files", selected: true }),
   ).toBeVisible();
 
   const separator = page.getByRole("separator", {
-    name: "Resize inspector panel",
+    name: "Resize workspace panel",
   });
   await page.waitForTimeout(250);
-  const beforeResize = await inspector.boundingBox();
+  const beforeResize = await panel.boundingBox();
   const separatorBox = await separator.boundingBox();
   if (beforeResize === null || separatorBox === null)
-    throw new Error("Inspector resize controls were not laid out");
+    throw new Error("Panel resize controls were not laid out");
   await page.mouse.move(
     separatorBox.x + separatorBox.width / 2,
     separatorBox.y + 20,
@@ -196,10 +203,10 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await page.mouse.down();
   await page.mouse.move(separatorBox.x - 160, separatorBox.y + 20);
   await page.mouse.up();
-  const afterResize = await inspector.boundingBox();
+  const afterResize = await panel.boundingBox();
   expect(afterResize?.width).toBeGreaterThan(beforeResize.width + 100);
   await page.reload();
-  await expect(inspector).toBeVisible();
-  const restored = await inspector.boundingBox();
+  await expect(panel).toBeVisible();
+  const restored = await panel.boundingBox();
   expect(restored?.width).toBeCloseTo(afterResize?.width ?? 0, 0);
 });

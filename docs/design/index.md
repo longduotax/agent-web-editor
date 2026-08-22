@@ -8,7 +8,8 @@ The approved initial-workspace designs are:
 
 - [Local-client security](local-client-security.md) — configurable plain
   loopback launch URL, deliberate absence of client authentication, Host/Origin
-  policy, CSRF signal, and WebSocket access.
+  policy, CSRF signal, WebSocket access, and the bounded outbound URL probe,
+  self-origin refusal, and frame sandbox the browser tab needs.
 - [Application persistence](application-persistence.md) — Drizzle with SQLite,
   metadata schema, runtime row parsing, transactions, migrations, backups, and
   recovery.
@@ -18,7 +19,11 @@ The approved initial-workspace designs are:
 - [Live events and idempotency](live-events-and-idempotency.md) — durable command
   receipts, snapshots, sequenced WebSocket events, replay, and reset behavior.
 - [Inspector and terminal boundaries](inspector-and-terminal.md) — safe file and
-  Git access plus Origin-restricted browser PTY lifecycle.
+  Git access, the Origin-restricted browser PTY lifecycle (now several terminals
+  per execution scope, keyed by terminal identity and capped), the bounded
+  working-directory probe, and the browser-embedding decision. Its browser
+  surface is the [workspace panel](../product-specs/workspace-panel.md); the
+  inspector it was named for is retired.
 - [Web workspace composition](web-workspace-composition.md) — routes, browser
   state ownership, safe rendering, responsive layout, accessibility, and test
   stack.

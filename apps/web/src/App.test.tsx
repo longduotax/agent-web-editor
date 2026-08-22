@@ -48,6 +48,15 @@ vi.mock("./api/client.js", async (importOriginal) => {
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { App, Composer } from "./App.js";
+import type { PanelTab } from "./features/panel/panelTabs.js";
+import { PANEL_STATE_VERSION } from "./features/panel/panelStorage.js";
+
+/** Just enough of the device-local panel record for these assertions. */
+interface PersistedPanel {
+  version: number;
+  open: boolean;
+  tabs: Record<string, PanelTab>;
+}
 
 afterEach(() => {
   cleanup();
@@ -55,6 +64,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+// The docked workspace panel, as assistive technology sees it: a closed
+// panel is aria-hidden and inert, so it is absent from this query even
+// though its element is still in the DOM.
+const panel = () =>
+  screen.queryByRole("complementary", { name: "Workspace panel" });
 
 describe("safe and accessible workspace rendering", () => {
   it("renders the workspace immediately without an authentication screen", () => {
@@ -425,7 +440,7 @@ describe("safe and accessible workspace rendering", () => {
     );
   });
 
-  it("persists inspector visibility, selected tab, and resized width", async () => {
+  it("persists the panel's visibility, its open tabs, and its resized width", async () => {
     const user = userEvent.setup();
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -524,68 +539,80 @@ describe("safe and accessible workspace rendering", () => {
     );
 
     await screen.findByRole("heading", { name: "Resizable thread" });
-    expect(
-      screen.queryByRole("complementary", { name: "Project inspector" }),
-    ).not.toBeInTheDocument();
+    expect(panel()).not.toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Open inspector panel" }),
+      screen.getByRole("button", { name: "Open workspace panel" }),
     );
     expect(
       await screen.findByRole("complementary", {
-        name: "Project inspector",
+        name: "Workspace panel",
       }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "Files" }));
-    await waitFor(() => {
-      expect(
-        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
-      ).toMatchObject({ activeTab: "files", open: true });
-    });
 
-    const closeInspector = screen.getByRole("button", {
-      name: "Close inspector panel",
+    // A second tab, opened for the focused pane's thread (WSP-02).
+    await user.click(screen.getByRole("button", { name: "New panel tab" }));
+    await user.click(screen.getByRole("menuitem", { name: "Files" }));
+    await waitFor(() => {
+      expect(JSON.parse(values.get("pi-workspace:panel") ?? "")).toMatchObject({
+        version: PANEL_STATE_VERSION,
+        open: true,
+      });
     });
-    expect(closeInspector.querySelector(".panel-right-icon")).not.toBeNull();
-    await user.click(closeInspector);
+    // Both tabs are in the device-local record, not just the visible one.
+    // Parsed rather than string-matched: `toContain` on raw JSON passes on a
+    // record that says anything at all about a type, in any position.
+    const record = JSON.parse(
+      values.get("pi-workspace:panel") ?? "",
+    ) as PersistedPanel;
     expect(
-      screen.queryByRole("complementary", { name: "Project inspector" }),
-    ).not.toBeInTheDocument();
-    expect(document.querySelector(".inspector")).toHaveAttribute(
+      Object.values(record.tabs)
+        .map((tab) => tab.type)
+        .sort(),
+    ).toEqual(["changes", "files"]);
+
+    const closePanel = screen.getByRole("button", {
+      name: "Close workspace panel",
+    });
+    expect(closePanel.querySelector(".panel-right-icon")).not.toBeNull();
+    await user.click(closePanel);
+    expect(panel()).not.toBeInTheDocument();
+    // Closed means inert, not merely invisible (WSP-10).
+    expect(document.querySelector(".panel")).toHaveAttribute(
       "aria-hidden",
       "true",
     );
-    expect(document.querySelector(".inspector")).toHaveAttribute("inert");
+    expect(document.querySelector(".panel")).toHaveAttribute("inert");
     await waitFor(() => {
-      expect(
-        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
-      ).toMatchObject({ activeTab: "files", open: false });
+      expect(JSON.parse(values.get("pi-workspace:panel") ?? "")).toMatchObject({
+        open: false,
+      });
     });
 
     await user.click(
-      screen.getByRole("button", { name: "Open inspector panel" }),
+      screen.getByRole("button", { name: "Open workspace panel" }),
     );
     expect(
       await screen.findByRole("tab", { name: "Files", selected: true }),
     ).toBeInTheDocument();
 
     const separator = screen.getByRole("separator", {
-      name: "Resize inspector panel",
+      name: "Resize workspace panel",
     });
     fireEvent.pointerDown(separator, { pointerId: 1 });
     fireEvent.pointerMove(separator, { clientX: 720, pointerId: 1 });
     fireEvent.pointerUp(separator, { pointerId: 1 });
     await waitFor(() => {
-      expect(
-        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
-      ).toMatchObject({ width: 720 });
+      expect(JSON.parse(values.get("pi-workspace:panel") ?? "")).toMatchObject({
+        width: 720,
+      });
     });
     expect(separator).toHaveAttribute("aria-valuenow", "720");
     separator.focus();
     await user.keyboard("{ArrowLeft}");
     await waitFor(() => {
-      expect(
-        JSON.parse(values.get("pi-workspace:inspector") ?? ""),
-      ).toMatchObject({ width: 744 });
+      expect(JSON.parse(values.get("pi-workspace:panel") ?? "")).toMatchObject({
+        width: 744,
+      });
     });
   });
 
@@ -670,6 +697,13 @@ describe("safe and accessible workspace rendering", () => {
                 runtimeSessionId: "50000000-0000-4000-8000-000000000001",
                 runState: null,
                 unread: false,
+                // The panel names the worktree a tab reads from this, so
+                // the fixture carries what the contract always carries.
+                workspace: {
+                  mode: "shared",
+                  branchName: null,
+                  available: true,
+                },
               }
             : {
                 id: threadId,
@@ -678,6 +712,11 @@ describe("safe and accessible workspace rendering", () => {
                 runtimeSessionId: "40000000-0000-4000-8000-000000000001",
                 runState: null,
                 unread: false,
+                workspace: {
+                  mode: "shared",
+                  branchName: null,
+                  available: true,
+                },
               },
         transcript: [],
         currentRun: null,
@@ -908,13 +947,13 @@ describe("sidebar run status", () => {
   });
 });
 
-// R2-1. The single workspace inspector (Changes | Files | Terminal) is the
-// only panel left after UX-1, and the spec describes it as following the
-// FOCUSED PANE. It used to derive from useParams().threadId instead, so
-// focusing a threadless pane while the route pointed at a thread left the
-// inspector showing a pane the user was not looking at, and focusing a
-// thread pane while the route was /new made the whole column vanish.
-describe("inspector follows the focused pane", () => {
+// WSP-02, inverted from R2-1. The shipped inspector followed the FOCUSED
+// PANE: it re-targeted itself, and remounted, whenever chat focus moved, so
+// a selected file, a search box and every in-flight query were discarded by
+// a click on another pane. The panel's tabs are durable and carry their own
+// context instead, so a focus change must leave every one of them exactly as
+// it was — and a tab whose worktree is no longer the focused one says so.
+describe("the panel does not follow the focused pane", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 
@@ -1011,58 +1050,74 @@ describe("inspector follows the focused pane", () => {
     );
   }
 
-  const inspector = () =>
-    screen.queryByRole("complementary", { name: "Project inspector" });
-
-  it("hides the inspector while a threadless pane is focused and restores it on refocus, without the URL changing", async () => {
+  it("keeps every tab, its selection and its worktree when focus moves to a threadless pane", async () => {
     const user = userEvent.setup();
     renderWorkspace();
 
     await screen.findByRole("heading", { name: "Focused thread" });
     await user.click(
-      screen.getByRole("button", { name: "Open inspector panel" }),
+      screen.getByRole("button", { name: "Open workspace panel" }),
     );
-    expect(inspector()).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "New panel tab" }));
+    await user.click(screen.getByRole("menuitem", { name: "Files" }));
+    expect(
+      await screen.findByRole("tab", { name: "Files", selected: true }),
+    ).toBeInTheDocument();
+    // Nothing is chipped while the tabs read the focused pane's own
+    // worktree. Scoped to the strip: the project's name is also the sidebar
+    // row and the pane header's repository label.
+    expect(
+      within(screen.getByRole("tablist")).queryByText("Example project"),
+    ).not.toBeInTheDocument();
 
     // Split: the fresh pane owns no thread and takes focus.
     await user.click(screen.getByRole("button", { name: "Split" }));
-    const newChatPane = await screen.findByRole("region", { name: "New chat" });
-    expect(newChatPane).toBeInTheDocument();
+    expect(
+      await screen.findByRole("region", { name: "New chat" }),
+    ).toBeInTheDocument();
 
-    // A threadless pane has no workspace to inspect, so the column goes away
-    // entirely -- rail included.
+    // The panel stays, with both tabs and the same one selected.
+    expect(panel()).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(
+      screen.getByRole("tab", { name: /Files/, selected: true }),
+    ).toBeInTheDocument();
+    // ...and each tab now names the worktree it reads, because nothing on
+    // screen implies it any more (WSP-02).
     await waitFor(() => {
-      expect(inspector()).not.toBeInTheDocument();
+      expect(
+        within(screen.getByRole("tablist")).getAllByText("Example project"),
+      ).toHaveLength(2);
     });
-    expect(document.querySelector(".inspector-rail")).toBeNull();
 
-    // Refocusing the thread pane brings its workspace back. The route never
+    // Refocusing the thread pane takes the chips away again. The route never
     // changed at any point in this test.
     await user.click(screen.getByRole("region", { name: "Focused thread" }));
     await waitFor(() => {
-      expect(inspector()).toBeInTheDocument();
+      expect(
+        within(screen.getByRole("tablist")).queryByText("Example project"),
+      ).not.toBeInTheDocument();
     });
-    expect(
-      screen.getByRole("tab", { name: "Changes", selected: true }),
-    ).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
   });
 
-  it("hides the inspector once every pane is closed", async () => {
+  it("keeps the panel and its tabs when every pane is closed", async () => {
     const user = userEvent.setup();
     renderWorkspace();
 
     await screen.findByRole("heading", { name: "Focused thread" });
     await user.click(
-      screen.getByRole("button", { name: "Open inspector panel" }),
+      screen.getByRole("button", { name: "Open workspace panel" }),
     );
-    expect(inspector()).toBeInTheDocument();
+    expect(panel()).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(await screen.findByText("No panes are open.")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(inspector()).not.toBeInTheDocument();
-    });
-    expect(document.querySelector(".inspector-rail")).toBeNull();
+
+    // A tab reads a worktree, not a pane: closing every pane takes nothing
+    // away from it.
+    expect(panel()).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Changes/ })).toBeInTheDocument();
   });
 });
 
@@ -1511,7 +1566,11 @@ describe("sidebar affordances are visible without hovering", () => {
 // placeholderData, so every character started a fresh full-tree listing
 // (~750ms–5s on a real repo) and `files.isPending` replaced the whole list
 // with "Listing files…" between each one.
-describe("inspector Files tab search", () => {
+//
+// Seeded from a v1 inspector record, so this also covers WSP-04's migration
+// end to end: the record becomes one Files tab, which binds to the focused
+// pane's thread on first render and then reads that worktree.
+describe("panel Files tab search", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
   const project = {
@@ -1591,9 +1650,19 @@ describe("inspector Files tab search", () => {
       capabilities: { prompt: true, steer: true, stop: true },
       diagnostics: [],
     } satisfies ThreadSnapshot);
+    // The tree lists one level at a time; the search asks for the whole
+    // subtree. Both answer from this stub.
     api.getFiles.mockResolvedValue({
-      entries: [{ path: "src/main.ts", kind: "file" as const }],
+      entries: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          kind: "file" as const,
+          size: 1,
+        },
+      ],
       truncated: false,
+      ignoredHidden: false,
     });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -1611,8 +1680,14 @@ describe("inspector Files tab search", () => {
     const search = await screen.findByRole("textbox", {
       name: "Search project files",
     });
-    await screen.findByText("src/main.ts");
+    // The tab opens on the tree: one row, showing its own name.
+    await screen.findByRole("treeitem", { name: "main.ts" });
     expect(api.getFiles).toHaveBeenCalledTimes(1);
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
+      path: "",
+      depth: "1",
+      showIgnored: false,
+    });
 
     await user.type(search, "mai");
     // Three keystrokes, still one request in flight-or-done: nothing fires
@@ -1620,12 +1695,26 @@ describe("inspector Files tab search", () => {
     expect(api.getFiles).toHaveBeenCalledTimes(1);
     // ...and the panel never blanks to its loading state mid-typing.
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
-    expect(screen.getByText("src/main.ts")).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: "main.ts" })).toBeVisible();
 
     await waitFor(() => {
       expect(api.getFiles).toHaveBeenCalledTimes(2);
     });
-    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, "mai");
+    // A settled search is flat, full paths, and asks for the whole subtree.
+    expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, {
+      search: "mai",
+      depth: "full",
+      showIgnored: false,
+    });
+    expect(await screen.findByText("src/main.ts")).toBeVisible();
+    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
+
+    // Typing on: the settled result stays on screen while the next one runs.
+    await user.type(search, "n");
+    await waitFor(() => {
+      expect(api.getFiles).toHaveBeenCalledTimes(3);
+    });
+    expect(screen.getByText("src/main.ts")).toBeVisible();
     expect(screen.queryByText("Listing files…")).not.toBeInTheDocument();
   });
 });
@@ -1633,8 +1722,9 @@ describe("inspector Files tab search", () => {
 // R2-12. The UX-7 Changes-tab states shipped in round 1 with no test at all,
 // and the changes summary rescued from the deleted EnvironmentPanel lost its
 // 308 lines of coverage with it. The pure summary logic is unit-tested in
-// components/changesSummary.test.ts; this covers the rendering.
-describe("inspector Changes tab states", () => {
+// components/changesSummary.test.ts; this covers the rendering — through a
+// migrated v1 inspector record, as above.
+describe("panel Changes tab states", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
   const project = {
@@ -1772,7 +1862,9 @@ describe("inspector Changes tab states", () => {
     renderChangesTab();
 
     expect(
-      await screen.findByText(/Current thread workspace.*1 added, 1 modified/),
+      await screen.findByText(
+        /Working tree: Example project.*1 added, 1 modified/,
+      ),
     ).toBeVisible();
     expect(screen.getByText("Select a file to view its diff.")).toBeVisible();
     expect(

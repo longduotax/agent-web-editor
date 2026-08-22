@@ -5,7 +5,7 @@ import type { GitFileStatus } from "@pi-web/contracts";
  *
  * Folded forward from the removed Environment panel (CWS-06, superseded):
  * the one place the workspace still summarizes the focused thread's changes
- * is the inspector's Changes tab. Renamed/copied read as neither an addition
+ * is the workspace panel's Changes tab. Renamed/copied read as neither an addition
  * nor a removal, so they fall in with "modified"; an untracked file reads as
  * an addition, because that is what it will be once staged.
  */

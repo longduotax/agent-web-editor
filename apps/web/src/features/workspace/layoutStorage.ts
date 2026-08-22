@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ThreadIdSchema } from "@pi-web/contracts";
 import type { ProjectId } from "@pi-web/contracts";
 
+import { preferenceStorage } from "../storage/preferenceStorage.js";
 import { createInitialLayout, restoreIntoTree } from "./layoutTree.js";
 import type { LayoutNode, PaneId, WorkspaceLayout } from "./layoutTree.js";
 
@@ -47,40 +48,6 @@ const WorkspaceLayoutSchema = z.object({
   focusedPaneId: z.string().nullable(),
   boundPaneId: z.string().nullable(),
 });
-
-interface PreferenceStorage {
-  getItem(key: string): unknown;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
-function storageMethods(value: object): PreferenceStorage | null {
-  if (
-    !("getItem" in value) ||
-    !("setItem" in value) ||
-    !("removeItem" in value)
-  )
-    return null;
-  const { getItem, setItem, removeItem } = value;
-  if (
-    typeof getItem !== "function" ||
-    typeof setItem !== "function" ||
-    typeof removeItem !== "function"
-  )
-    return null;
-  return {
-    getItem: getItem.bind(value) as (key: string) => unknown,
-    setItem: setItem.bind(value) as (key: string, stored: string) => void,
-    removeItem: removeItem.bind(value) as (key: string) => void,
-  };
-}
-
-function preferenceStorage(): PreferenceStorage | null {
-  const storage: unknown = globalThis.localStorage;
-  return typeof storage === "object" && storage !== null
-    ? storageMethods(storage)
-    : null;
-}
 
 export function layoutStorageKey(projectId: ProjectId): string {
   return `pi-workspace:layout:${projectId}`;
