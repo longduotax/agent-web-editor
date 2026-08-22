@@ -10,6 +10,17 @@
 export type PreviewLink =
   | { kind: "file"; path: string }
   | { kind: "external"; href: string }
+  /**
+   * A place inside the document being displayed (J8).
+   *
+   * These were rendered inert, with the tooltip "This link does not point
+   * anywhere the workspace can open" — correct about the workspace and wrong
+   * about the link, which points at a heading three inches further down. A
+   * table of contents is the commonest thing a repository document has, and
+   * telling a reader that its every entry leads nowhere is worse than saying
+   * nothing.
+   */
+  | { kind: "fragment"; id: string }
   | { kind: "inert" };
 
 const INERT: PreviewLink = { kind: "inert" };
@@ -79,6 +90,34 @@ function parentSegments(path: string): string[] {
   return segments;
 }
 
+/** The text of a `#fragment`, or `null` when there is none to speak of. */
+function decodeFragment(raw: string): string | null {
+  if (raw === "") return null;
+  try {
+    const decoded = decodeURIComponent(raw);
+    return decoded === "" ? null : decoded;
+  } catch {
+    // A malformed escape names nothing, exactly as it does for a path.
+    return null;
+  }
+}
+
+/**
+ * The GitHub-style slug of a heading, which is what a document's own
+ * fragments are written against.
+ *
+ * Applied to both sides of the comparison — the fragment as written and the
+ * text of each rendered heading — so the two agree by construction rather
+ * than by the author having spelled the slug the same way we would.
+ */
+export function headingSlug(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N} _-]/gu, "")
+    .replace(/ /g, "-");
+}
+
 export function resolvePreviewLink(
   href: string | undefined,
   fromPath: string,
@@ -98,7 +137,12 @@ export function resolvePreviewLink(
       ? { kind: "external", href: trimmed }
       : INERT;
   }
-  if (trimmed.startsWith("#")) return INERT;
+  if (trimmed.startsWith("#")) {
+    // `#` alone is a link to the top of a page, which is a web idiom rather
+    // than a place in a document; it names nothing here.
+    const id = decodeFragment(trimmed.slice(1));
+    return id === null ? INERT : { kind: "fragment", id };
+  }
   const path = repositoryPath(trimmed, fromPath);
   return path === null ? INERT : { kind: "file", path };
 }

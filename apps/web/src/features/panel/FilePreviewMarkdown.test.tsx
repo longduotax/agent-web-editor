@@ -13,10 +13,16 @@ afterEach(() => {
 
 function renderDocument(source: string, path = "docs/design/notes.md") {
   const onOpenFile = vi.fn();
+  const onGoToFragment = vi.fn();
   const view = render(
-    <FilePreviewMarkdown source={source} path={path} onOpenFile={onOpenFile} />,
+    <FilePreviewMarkdown
+      source={source}
+      path={path}
+      onOpenFile={onOpenFile}
+      onGoToFragment={onGoToFragment}
+    />,
   );
-  return { ...view, onOpenFile };
+  return { ...view, onOpenFile, onGoToFragment };
 }
 
 describe("FilePreviewMarkdown", () => {
@@ -118,5 +124,21 @@ describe("FilePreviewMarkdown", () => {
     await user.click(screen.getByRole("button", { name: "readme" }));
 
     expect(onOpenFile).toHaveBeenCalledWith("README.md");
+  });
+
+  it("offers a fragment as a control that moves inside this document (J8)", async () => {
+    const user = userEvent.setup();
+    const { onGoToFragment } = renderDocument(
+      "# A guide\n\nSee [the hard part](#the-hard-part).\n\n## The hard part\n",
+    );
+
+    const link = screen.getByRole("button", { name: "the hard part" });
+    // Not an anchor: it navigates nothing. And not inert either — the
+    // previous rendering told the reader it pointed nowhere, which was true
+    // about the workspace and false about the link.
+    expect(link).toHaveAttribute("title", "Go to this part of the document.");
+    await user.click(link);
+
+    expect(onGoToFragment).toHaveBeenCalledWith("the-hard-part");
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolvePreviewLink } from "./markdownLinks.js";
+import { headingSlug, resolvePreviewLink } from "./markdownLinks.js";
 
 describe("resolvePreviewLink", () => {
   const from = "docs/design/notes.md";
@@ -99,12 +99,38 @@ describe("resolvePreviewLink", () => {
       expect(resolvePreviewLink(href, from)).toEqual({ kind: "inert" });
   });
 
-  it("is inert for a link that names nothing, and for one that names only a fragment", () => {
+  it("is inert for a link that names nothing at all", () => {
     expect(resolvePreviewLink(undefined, from)).toEqual({ kind: "inert" });
     expect(resolvePreviewLink("", from)).toEqual({ kind: "inert" });
     expect(resolvePreviewLink("   ", from)).toEqual({ kind: "inert" });
-    // The preview gives headings no ids, so an in-document anchor would go
-    // nowhere; saying so is better than a link that silently does nothing.
-    expect(resolvePreviewLink("#heading", from)).toEqual({ kind: "inert" });
+    // `#` alone is "the top of the page", a web idiom rather than a place in
+    // a document.
+    expect(resolvePreviewLink("#", from)).toEqual({ kind: "inert" });
+  });
+
+  it("resolves a fragment to a place in this document rather than to nothing (J8)", () => {
+    // These were rendered inert, with the tooltip "This link does not point
+    // anywhere the workspace can open" — correct about the workspace and
+    // wrong about the link, which points at a heading further down the same
+    // document. A table of contents is the commonest thing a repository
+    // document has.
+    expect(resolvePreviewLink("#heading", from)).toEqual({
+      kind: "fragment",
+      id: "heading",
+    });
+    expect(resolvePreviewLink("#a%20section", from)).toEqual({
+      kind: "fragment",
+      id: "a section",
+    });
+    // A malformed escape names nothing here either.
+    expect(resolvePreviewLink("#%E0%A4%A", from)).toEqual({ kind: "inert" });
+  });
+
+  it("slugs a heading the way the documents that link to it do", () => {
+    expect(headingSlug("Workspace guide")).toBe("workspace-guide");
+    expect(headingSlug("WSP-05 — Files and File tabs")).toBe(
+      "wsp-05--files-and-file-tabs",
+    );
+    expect(headingSlug("  Mixed CASE  ")).toBe("mixed-case");
   });
 });

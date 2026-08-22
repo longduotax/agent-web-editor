@@ -328,7 +328,7 @@ describe("the syntax palette clears WCAG AA on the surface it is painted on", ()
   const documentSurfaces = [
     ".file-markdown .md-inert-link",
     ".file-markdown .md-image-missing",
-    ".file-markdown :is(.md-file-link, .md-external-link)",
+    ".file-markdown :is(.md-file-link, .md-fragment-link, .md-external-link)",
     ".panel-state",
     ".empty",
   ];

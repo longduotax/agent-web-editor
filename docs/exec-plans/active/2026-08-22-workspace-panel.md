@@ -2495,6 +2495,33 @@ open against two worktrees, which WSP-02 answers with the worktree chip;
 prefixing both with an identical directory would add noise and disambiguate
 nothing.
 
+**J8 — fragment links were told, inaccurately, that they point nowhere.**
+`](#anchor)` rendered inert with the tooltip "This link does not point anywhere
+the workspace can open" — a true sentence about the workspace and a false one
+about the link, which points at a heading in the document on screen. The
+rendering was correct in refusing to emit an anchor; the sentence was not.
+
+**Decided: make them work.** The reviewer offered either "say what is true" or
+"make in-document fragments actually scroll to their heading", and the second
+is what a reader expects — a table of contents is the commonest thing a
+repository document has, and every entry in one was being called a dead end. A
+`#fragment` is now a fourth link kind alongside file, external and inert. It
+renders as a control (not an anchor: it navigates nothing) and, on activation,
+the tab finds the heading whose GitHub-style slug matches, scrolls the document
+box to it by arithmetic — not `scrollIntoView`, which would also scroll every
+scrollable ancestor including the panel — and **moves focus to it**, because a
+jump nobody's cursor followed is not a jump for a keyboard or screen-reader
+user. Duplicate headings get GitHub's `-1`, `-2` treatment, which is why
+`#overview-1` is a link people write.
+
+Resolution is against the **rendered DOM**, not the source: a heading element
+carries exactly the text a slug is computed from, with inline markup already
+resolved, so `## The **hard** part` and its `#the-hard-part` link agree without
+this re-implementing inline parsing. And when nothing matches, the tab says so
+in the panel's live region — "This document has no section called “x”." —
+rather than doing nothing, which was the failure mode the inert rendering was
+trying to avoid and did not.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

@@ -34,12 +34,22 @@ export interface FilePreviewMarkdownProps {
   /** The workspace-relative path it was read from, which links resolve against. */
   path: string;
   onOpenFile: (path: string) => void;
+  /**
+   * Asked to go to a place inside this same document (J8).
+   *
+   * The renderer does not do it itself because it does not own the box that
+   * scrolls — the tab does — and because "there is no such heading" is
+   * something the reader has to be told, which needs the panel's live
+   * region. So the link resolves here and the movement happens there.
+   */
+  onGoToFragment: (id: string) => void;
 }
 
 export function FilePreviewMarkdown({
   source,
   path,
   onOpenFile,
+  onGoToFragment,
 }: FilePreviewMarkdownProps): JSX.Element {
   return (
     <ReactMarkdown
@@ -65,7 +75,13 @@ export function FilePreviewMarkdown({
           );
         },
         a: ({ children, href, title }) => (
-          <PreviewLink href={href} title={title} path={path} open={onOpenFile}>
+          <PreviewLink
+            href={href}
+            title={title}
+            path={path}
+            open={onOpenFile}
+            goToFragment={onGoToFragment}
+          >
             {children}
           </PreviewLink>
         ),
@@ -84,6 +100,7 @@ function describeImage(reference: string, path: string): string | null {
       return target.path;
     case "external":
       return target.href;
+    case "fragment":
     case "inert":
       return null;
   }
@@ -95,12 +112,14 @@ function PreviewLink({
   title,
   path,
   open,
+  goToFragment,
 }: {
   children: ReactNode;
   href: string | undefined;
   title: string | undefined;
   path: string;
   open: (path: string) => void;
+  goToFragment: (id: string) => void;
 }): JSX.Element {
   const target = resolvePreviewLink(href, path);
   switch (target.kind) {
@@ -141,6 +160,23 @@ function PreviewLink({
               reader. */}
           <span className="sr-only">{` (${authorityOf(target.href)}, opens in a new browser tab)`}</span>
         </a>
+      );
+    case "fragment":
+      // A control, like an in-repository link, and for the same reason: it
+      // does not navigate. It moves the reader inside the document they are
+      // already looking at, which is what a table of contents is for and
+      // what these links were previously told they could not do.
+      return (
+        <button
+          type="button"
+          className="md-fragment-link"
+          title={title ?? "Go to this part of the document."}
+          onClick={() => {
+            goToFragment(target.id);
+          }}
+        >
+          {children}
+        </button>
       );
     case "inert":
       // Rendered as what it is: text that names no reachable target. A live

@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type JSX,
 } from "react";
@@ -12,6 +13,7 @@ import { RelativePathSchema } from "@pi-web/contracts";
 import { ApiClientError, getFile } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { FilePreviewMarkdown } from "./FilePreviewMarkdown.js";
+import { headingSlug } from "./markdownLinks.js";
 import {
   HIGHLIGHT_MAX_CHARACTERS,
   isMarkdownPath,
@@ -181,6 +183,57 @@ export const FileTab = memo(function FileTab({
     [actions, context],
   );
 
+  // The rendered document, which is also the box that scrolls it.
+  const documentRef = useRef<HTMLDivElement | null>(null);
+
+  // Going to a place inside the document being displayed (J8).
+  //
+  // Resolved against the rendered DOM rather than against the source, because
+  // the DOM is what the reader is looking at and its headings carry exactly
+  // the text a slug is computed from — inline markup already resolved, so
+  // `## The **hard** part` and its `#the-hard-part` link agree without this
+  // having to re-implement inline parsing.
+  //
+  // Scrolled by arithmetic rather than by `scrollIntoView`, which would also
+  // scroll every scrollable ancestor and can move the panel itself; and
+  // focus goes to the heading, because a jump nobody's cursor followed is
+  // not a jump for a screen-reader or keyboard user.
+  const goToFragment = useCallback(
+    (id: string) => {
+      const container = documentRef.current;
+      if (container === null) return;
+      const wanted = headingSlug(id);
+      const seen = new Map<string, number>();
+      let match: HTMLElement | null = null;
+      for (const heading of container.querySelectorAll<HTMLElement>(
+        "h1, h2, h3, h4, h5, h6",
+      )) {
+        const base = headingSlug(heading.textContent);
+        // GitHub's own answer to two headings with one name, and the reason
+        // `#overview-1` is a link people write.
+        const count = seen.get(base) ?? 0;
+        seen.set(base, count + 1);
+        const slug = count === 0 ? base : `${base}-${String(count)}`;
+        if (slug === wanted || heading.id === id) {
+          match = heading;
+          break;
+        }
+      }
+      if (match === null) {
+        // Said out loud rather than silently doing nothing, which is the
+        // failure mode the inert rendering was trying to avoid and did not.
+        actions.announce(`This document has no section called “${id}”.`);
+        return;
+      }
+      container.scrollTop +=
+        match.getBoundingClientRect().top -
+        container.getBoundingClientRect().top;
+      match.tabIndex = -1;
+      match.focus({ preventScroll: true });
+    },
+    [actions],
+  );
+
   if (context === null) return <UnboundNotice />;
 
   // What this tab may present AS a workspace-relative path (J10).
@@ -312,11 +365,12 @@ export const FileTab = memo(function FileTab({
         !file.binary &&
         file.content !== "" &&
         (rendered ? (
-          <div className="file-markdown markdown">
+          <div className="file-markdown markdown" ref={documentRef}>
             <FilePreviewMarkdown
               source={shown.text}
               path={file.path}
               onOpenFile={openFile}
+              onGoToFragment={goToFragment}
             />
           </div>
         ) : (

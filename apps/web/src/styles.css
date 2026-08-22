@@ -2336,11 +2336,11 @@ a:focus-visible {
   background: var(--surface-3);
   white-space: nowrap;
 }
-/* A link inside a previewed markdown file (WSP-05). Three kinds, and they
-   are told apart on purpose: one opens another File tab, one leaves for a
-   real browser tab and says so, and one goes nowhere and is not offered as
-   a link at all. */
-.file-markdown :is(.md-file-link, .md-external-link) {
+/* A link inside a previewed markdown file (WSP-05). Four kinds, and they
+   are told apart on purpose: one opens another File tab, one moves inside
+   the document being displayed, one leaves for a real browser tab and says
+   so, and one goes nowhere and is not offered as a link at all. */
+.file-markdown :is(.md-file-link, .md-fragment-link, .md-external-link) {
   padding: 0;
   border: 0;
   color: var(--accent);

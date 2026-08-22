@@ -177,6 +177,18 @@ test.beforeAll(async () => {
       "",
       "![A missing diagram](https://example.com/diagram.png)",
       "",
+      "- [Down the page](#the-far-heading)",
+      "",
+      // Enough document between the link and its target that a jump is a
+      // real scroll rather than a no-op (J8).
+      ...Array.from({ length: 60 }, (_, index) => `Filler ${String(index)}.\n`),
+      "## The far heading",
+      "",
+      "The end.",
+      "",
+      // And enough after it that the box can actually put the heading at its
+      // top, rather than hitting the end of the document first.
+      ...Array.from({ length: 60 }, (_, index) => `Tail ${String(index)}.\n`),
     ].join("\n"),
     "utf8",
   );
@@ -265,6 +277,7 @@ interface ProbeElement {
 }
 declare const document: {
   head: { appendChild(node: unknown): void };
+  activeElement: ProbeElement | null;
   documentElement: ProbeElement;
   createElement(tag: string): { textContent: string };
   querySelector(selector: string): ProbeElement | null;
@@ -1117,6 +1130,56 @@ test("panel file tab: a long path ellipsises to its file name at every panel wid
     // And none of it is bought with overflow the panel then has to scroll.
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
   }
+});
+
+test("panel file tab: a fragment link moves inside the document it is written in", async ({
+  page,
+}) => {
+  // J8. These rendered inert with the tooltip "This link does not point
+  // anywhere the workspace can open" — a true sentence about the workspace
+  // and a false one about the link, which points at a heading in the
+  // document on screen. End to end because the outcome is a scroll offset,
+  // and jsdom has no scrolling.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  const before = await page.evaluate(() => {
+    const document_ = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown',
+    );
+    return document_ === null ? -1 : document_.scrollTop;
+  });
+  expect(before).toBe(0);
+
+  await page.getByRole("button", { name: "Down the page" }).click();
+
+  const after = await page.evaluate(() => {
+    const document_ = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown',
+    );
+    const heading = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown h2',
+    );
+    if (document_ === null || heading === null) return null;
+    return {
+      scrollTop: document_.scrollTop,
+      // The heading is at the top of the box that scrolls, within a pixel.
+      offset:
+        heading.getBoundingClientRect().y - document_.getBoundingClientRect().y,
+      focused: document.activeElement === heading,
+    };
+  });
+  expect(after).not.toBeNull();
+  if (after === null) return;
+  expect(after.scrollTop).toBeGreaterThan(0);
+  expect(Math.abs(after.offset)).toBeLessThanOrEqual(1);
+  // And the reader is actually there, not merely looking at it.
+  expect(after.focused).toBe(true);
 });
 
 test("panel file tab: a one-line bundle is bounded by characters and says what it left out", async ({

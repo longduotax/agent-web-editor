@@ -192,6 +192,75 @@ describe("FileTab: markdown preview and its source toggle", () => {
   });
 });
 
+describe("FileTab: a link into this same document (J8)", () => {
+  const withContents = preview({
+    path: "docs/guide.md",
+    language: "markdown",
+    content: [
+      "# Workspace guide",
+      "",
+      "- [The hard part](#the-hard-part)",
+      "- [Nowhere](#no-such-heading)",
+      "",
+      "## The hard part",
+      "",
+      "A paragraph.",
+      "",
+    ].join("\n"),
+  });
+
+  it("goes to the heading a fragment names, and puts the reader there", async () => {
+    // These were rendered inert, tooltipped "This link does not point
+    // anywhere the workspace can open" — a true sentence about the workspace
+    // and a false one about the link, which points at a heading in the
+    // document on screen.
+    api.getFile.mockResolvedValue(withContents);
+    const user = userEvent.setup();
+    const { actions } = renderTab({ path: "docs/guide.md" });
+    await screen.findByRole("heading", { name: "Workspace guide" });
+
+    await user.click(screen.getByRole("button", { name: "The hard part" }));
+
+    // Focus, not just scroll: a jump nobody's cursor followed is not a jump
+    // for a keyboard or screen-reader user.
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "The hard part" }),
+    );
+    expect(actions.announce).not.toHaveBeenCalled();
+  });
+
+  it("says so when the document has no such heading", async () => {
+    api.getFile.mockResolvedValue(withContents);
+    const user = userEvent.setup();
+    const { actions } = renderTab({ path: "docs/guide.md" });
+    await screen.findByRole("heading", { name: "Workspace guide" });
+
+    await user.click(screen.getByRole("button", { name: "Nowhere" }));
+
+    expect(actions.announce).toHaveBeenCalledWith(
+      "This document has no section called “no-such-heading”.",
+    );
+  });
+
+  it("still refuses a link that names nothing reachable", async () => {
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "docs/guide.md",
+        language: "markdown",
+        content: "A [dead end](javascript:alert(1)) in a sentence.\n",
+      }),
+    );
+    renderTab({ path: "docs/guide.md" });
+
+    const inert = await screen.findByText("dead end");
+    expect(inert.tagName).toBe("SPAN");
+    expect(inert).toHaveAttribute(
+      "title",
+      "This link does not point anywhere the workspace can open.",
+    );
+  });
+});
+
 describe("FileTab: syntax highlighting", () => {
   it("paints the file as plain text while the highlighter is still loading", async () => {
     // A promise that never settles: the state between first paint and the
