@@ -1280,6 +1280,126 @@ A green suite says the code does what the plan said, and says nothing about
 whether the plan said enough; a red flag from an inspector says something looked
 wrong to that inspector, and says nothing until it is reproduced.
 
+**2026-08-22 — six defects from a second hands-on UI pass, every one measured
+against a real PTY in a real browser.** Each was reproduced from the reported
+measurement before anything was changed, and each is pinned by a test that
+fails without its fix. Where the mechanism is CSS or layout the test is an
+end-to-end measurement, because jsdom loads no stylesheet and therefore cannot
+see any of these.
+
+1. **A shrunken group wrote an error into the user's shell and mislabelled the
+   terminal for the session (F1).** At `MIN_FRACTION` the fit addon proposed
+   `{ columns: 191, rows: 1 }`; the contract bounds rows at 2, so the server
+   answered `{"type":"error","message":"Terminal command was rejected."}` —
+   which the client wrote into the scrollback, where it is indistinguishable
+   from program output and permanent, and which latched `status` at "Terminal
+   error" for the rest of the session because nothing ever cleared it. Fixed at
+   all three layers: the bounds are exported from `packages/contracts` and the
+   client clamps to them before sending (the server's own guard reads the same
+   constants, so the numbers cannot drift); a refused command is a transient
+   notice beside the lifecycle status, cleared by the next frame that proves
+   the exchange works; and protocol errors never reach the terminal buffer.
+   The size floor itself is F6 — the clamp is a guarantee about what may be
+   sent, not a substitute for a readable group.
+2. **The file preview's horizontal scrollbar was off screen (F2, finding 6 of
+   the first pass, and both earlier hypotheses were wrong).** Nothing
+   overflowed the panel and `.file-preview pre` did scroll inside itself, so
+   `min-width: 0` was never involved. The `pre` was not HEIGHT-bounded: it grew
+   to its full 2534px content height inside a scrolling ancestor that ended at
+   `y = 1017`, putting its real 20px scrollbar ~1600px below anything visible.
+   Both bodies are now flex columns bounded to the tab's own height with the
+   header pinned above one scrolling region. The Diff tab had the same shape
+   and additionally scrolled its staged and unstaged sections independently;
+   they now share one box.
+3. **The split-refusal announcement relaid out the panel and resized the
+   running shell twice (F3), a regression from the D8 fix.**
+   `.panel-announcement` was an ordinary flex item of the `.panel` column, so
+   one refusal measured 1383px -> 1357px -> 1383px of group height, sending
+   `resize rows:73` on the way in and `rows:75` when it cleared five seconds
+   later. Telling the user that nothing happened was itself the thing that
+   happened, and it is the closest reproduction anyone found of the reported
+   "flicker at the bottom of the terminal". It is now absolutely positioned
+   over the panel's bottom edge — still visible, still in the `role="status"`
+   region, owning no layout.
+4. **Every terminal was up to ~12.8px taller than its container (F4).** The fit
+   addon reads `getComputedStyle(parent).height`, which for a border-box
+   element is the BORDER box (218.917px measured against a 206.1px content
+   box), and subtracts only the `.xterm` element's own padding, which is zero.
+   `.terminal-surface`'s `padding: 0.4rem` was therefore counted as space to
+   paint rows in and then clipped away. Fixed where the arithmetic goes wrong
+   rather than against it: the padding stays on `.terminal-surface` and the
+   addon measures a new unpadded `.terminal-canvas` inside it.
+5. **Keyboard focus dropped to `<body>` after every structural chord (F5).**
+   The D2 fix holds — a chord acts on the group the keyboard is in — but close,
+   split, and move each destroy or reparent the focused element, and nothing
+   put focus anywhere afterwards, so a keyboard user had to re-issue the
+   focus-panel chord every time. Focus management moved from `TabStrip` to
+   `WorkspacePanel`, the one component that outlives a structural change: a
+   strip mounted BY a split cannot tell the request that created it from one
+   that predates it. The focus request is bumped inside the same functional
+   update that decides whether the command changed anything, so a refused chord
+   still moves nothing.
+6. **A group had no minimum size in pixels, only a fraction (F6).** At
+   `PANEL_MIN_WIDTH` split in two, each group was 139px and the terminal
+   negotiated `{ columns: 16, rows: 73 }` — WSP-04's "never shrinks a group
+   into an unreadable state", unmet, because `MIN_FRACTION` is a proportion and
+   a proportion is no floor. **Approach taken: the chat surface's, which is to
+   scroll rather than to shrink** (`MIN_PANE_WIDTH_PX` plus `.tiling-surface`'s
+   `overflow-x: auto`). A group now has a stated pixel floor, a subtree's
+   minimum is computed from the tree, and the panel scrolls when the tree
+   cannot fit. Refusing the split was the alternative and was rejected: it
+   would make a chord that silently does nothing at some widths, which is the
+   defect D8 was raised to remove.
+
+   Taken with it, deliberately: **`normalizeSizes` now clamps the SHARE rather
+   than the raw pair.** It clamped before rescaling, so the floor was divided
+   away again — `[-5, 900]` normalised to ~5.6e-5, a tile no pointer could grab
+   back — and small shares were inflated (`[0.001, 0.2]`, a half-percent share,
+   came out as a fifth of the split). This is the same defect one level down,
+   which is why it is in scope here. Three tests that pinned the old arithmetic
+   are updated, in `binaryTree.test.ts`, `layoutTree.test.ts`, and
+   `panelModel.test.ts`; no other chat-surface test changed.
+
+**The three unconfirmed reports, each settled by measurement rather than by
+argument.** The reporter's window was intermittently occluded, which stalls
+`requestAnimationFrame` and delays `ResizeObserver`, so none of them could be
+trusted as reported.
+
+- **No scrollback replay after a reload — NOT REPRODUCED.** The server sends
+  its replay ring as an `output` frame immediately after `ready`, the client
+  writes every `output` frame, and text typed before a reload is on screen
+  after one. Driven end to end against a real PTY; kept as a regression test
+  rather than turned into a fix. The most likely explanation of the original
+  observation is the stalled `requestAnimationFrame` the occlusion caused:
+  xterm's write is queued and painted on a frame.
+- **Restart appearing to do nothing — CONFIRMED, and it is the client.** The
+  server disposes the shell, spawns another, and sends a fresh `ready` with a
+  new terminal id plus the new shell's output. But `terminal.clear()` was
+  called only for a `reset` frame, and a restart sends none, so the dead
+  shell's screen stayed exactly where it was with the new prompt appended
+  underneath — visually, nothing had happened. A `ready` naming a DIFFERENT
+  terminal now clears; one naming the same terminal deliberately does not,
+  because that is the re-attach path and clearing would throw the replay away.
+- **Tab strip at minimum width — CONFIRMED as a pointer gap, narrower than
+  reported.** Keyboard (arrow keys) and trackpad (a gesture sends `deltaX`)
+  both reach the tabs a 280px strip cannot fit. A plain wheel mouse did not:
+  measured in Chromium, a vertical wheel over a horizontal-only scroller moves
+  nothing at all, so this was a real reachability gap rather than a missing
+  decoration. The strip now scrolls by whichever axis the pointer moved.
+  `scrollbar-width: none` stays, and that is the judgement call: unhiding the
+  scrollbar costs 15px of strip height on every machine whose scrollbars are
+  classic, buys nothing where they are overlay, and reachability — not
+  decoration — was the complaint. The active tab is scrolled into view on every
+  activation, so the strip is never showing the user nothing they asked for.
+
+**What this pass says about the last one.** The two hypotheses recorded against
+finding 6 were both wrong, and both were plausible enough to have been
+implemented. What settled it was measuring the thing that was actually claimed
+to be missing — where the scrollbar IS — rather than the mechanism that was
+guessed. Three of the six defects here (F2, F3, F4) are pure layout, invisible
+to a green jsdom suite by construction, and all three are now measured in the
+end-to-end spec at the sizes that reproduce them.
+
 - No blockers. Milestone 4 is **gated**, not blocked: it waits on product
   approval of specification version 2, which is a normal lifecycle step rather
   than an obstacle.

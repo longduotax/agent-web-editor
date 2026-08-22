@@ -472,8 +472,17 @@ The first of these is a **design decision to confirm rather than a defect to
 fix**: a tablist may own only tabs, so a real button nested inside a tab is a
 nested interactive control, and the strip's single close control names the
 selected tab while arrow keys move the selection. What must hold is that any tab
-can be closed in one step without a pointer. The second is unconfirmed as to
-mechanism and open.
+can be closed in one step without a pointer.
+
+The second is **closed**, and its mechanism was neither of the two that were
+guessed. Nothing was clipped and no ancestor overflowed: the `pre` scrolled
+horizontally all along, but it was not height-bounded, so it ended ~1600px
+below the visible area and took its own scrollbar with it. Both the File and
+Diff bodies are now bounded to the tab's own height, which puts the scrollbar
+back where a pointer can find it. The measurements, and five further defects
+the same follow-up pass found and fixed, are recorded in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section.
 
 ### Closed as not defects — the tool was at fault, not the page
 
