@@ -26,7 +26,9 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { ApiClientError } from "../../api/client.js";
 import { ChangesTab } from "./ChangesTab.js";
+import { DIFF_LINE_LIMIT } from "./parseUnifiedDiff.js";
 import { DiffTab } from "./DiffTab.js";
 import { FilesTab } from "./FilesTab.js";
 import { FileTab } from "./FileTab.js";
@@ -388,13 +390,42 @@ describe("DiffTab", () => {
     collapsedHunks: [] as string[],
   };
 
-  it("labels the staged and unstaged sections separately and keeps the +/- prefixes", async () => {
-    api.getDiff.mockResolvedValue({
+  /** The shape of everything below: two hunks, both sides numbered. */
+  const UNSTAGED = [
+    "diff --git a/src/main.ts b/src/main.ts",
+    "index c9e9e05..061a3ba 100644",
+    "--- a/src/main.ts",
+    "+++ b/src/main.ts",
+    "@@ -1,3 +1,3 @@",
+    " one",
+    "-two",
+    "+TWO",
+    "@@ -20,2 +20,3 @@ function main() {",
+    " twenty",
+    "+twenty and a half",
+    "",
+  ].join("\n");
+
+  function diffOf(
+    overrides: Partial<{
+      staged: string;
+      unstaged: string;
+      truncated: boolean;
+    }> = {},
+  ) {
+    return {
       path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n-old\n+new\n",
-      unstaged: "@@ -2 +2 @@\n-two\n+three\n",
+      staged: "",
+      unstaged: UNSTAGED,
       truncated: false,
-    });
+      ...overrides,
+    };
+  }
+
+  it("labels the staged and unstaged sections separately and keeps the +/- prefixes", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
     const { container } = renderBody(
       <DiffTab tab={tab} visible actions={actionsSpy()} />,
     );
@@ -402,22 +433,149 @@ describe("DiffTab", () => {
     expect(await screen.findByText("Staged")).toBeVisible();
     expect(screen.getByText("Unstaged")).toBeVisible();
     // The prefix character stays in the text, so the distinction is never
-    // carried by colour alone.
+    // carried by colour alone (WSP-06).
     expect(container.querySelector(".diff-add")).toHaveTextContent("+new");
-    expect(container.querySelector(".diff-remove")).toHaveTextContent("-old");
+    expect(container.querySelector(".diff-delete")).toHaveTextContent("-old");
+  });
+
+  it("names the worktree it reads and the file's own add and delete counts", async () => {
+    api.getDiff.mockResolvedValue(diffOf());
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(await screen.findByText("2 added")).toBeVisible();
+    expect(screen.getByText("1 deleted")).toBeVisible();
+    // Current working-tree state of a named worktree, never the thread's
+    // output (WSP-06).
+    expect(screen.getByText("Working tree: Example project")).toBeVisible();
+    expect(screen.getByTitle("src/main.ts")).toBeVisible();
+  });
+
+  it("draws both line numbers as attributes rather than as text", async () => {
+    // The mechanism, not the appearance: a number in an attribute is drawn by
+    // `content: attr(…)` on a `::before`, which a selection cannot reach and
+    // `textContent` does not contain, so a copied diff is the diff (J11). A
+    // number rendered as a text node would be copied with it. The end-to-end
+    // suite measures the selection itself, which jsdom cannot.
+    api.getDiff.mockResolvedValue(diffOf());
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    const lines = [...container.querySelectorAll(".diff-line")].map((line) => [
+      line.getAttribute("data-old"),
+      line.querySelector(".diff-line-body")?.getAttribute("data-new"),
+      line.textContent,
+    ]);
+    expect(lines).toEqual([
+      ["1", "1", " one\n"],
+      ["2", "", "-two\n"],
+      ["", "2", "+TWO"],
+      ["20", "20", " twenty\n"],
+      ["", "21", "+twenty and a half"],
+    ]);
+    // And nothing a copy would pick up carries a gutter number.
+    expect(container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
+  });
+
+  it("collapses a hunk into the tab's own record, and reopens it from there", async () => {
+    const user = userEvent.setup();
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    renderBody(<DiffTab tab={tab} visible actions={actions} />);
+    const toggle = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(toggle);
+
+    // The collapse is persisted state on the tab (WSP-04), not component
+    // state, which is what carries it through a tab switch, a reload and a
+    // drag between groups.
+    expect(actions.updateTab).toHaveBeenCalledTimes(1);
+    const patch = vi.mocked(actions.updateTab).mock.calls[0]?.[1];
+    const collapsedHunks = patch?.collapsedHunks ?? [];
+    expect(collapsedHunks).toHaveLength(1);
+
+    cleanup();
+    const reopened = renderBody(
+      <DiffTab
+        tab={{ ...tab, collapsedHunks }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+    const restored = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    expect(restored).toHaveAttribute("aria-expanded", "false");
+    // Hidden rather than unmounted: collapsing costs no layout and expanding
+    // re-does no work (WSP-09).
+    const bodies = reopened.container.querySelectorAll(".diff-lines");
+    expect(bodies[0]).not.toBeVisible();
+    expect(bodies[1]).toBeVisible();
+  });
+
+  it("keeps a collapsed hunk collapsed when the same diff is fetched again", async () => {
+    // The identity a collapse is remembered by has to survive a refetch of
+    // the same content, and survive a hunk being added above it. Both are
+    // asserted over the parser in `parseUnifiedDiff.test.ts`; this is the
+    // claim that the tab uses that identity and not the hunk's position.
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    const first = renderBody(<DiffTab tab={tab} visible actions={actions} />);
+    const toggle = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    await userEvent.setup().click(toggle);
+    const collapsedHunks =
+      vi.mocked(actions.updateTab).mock.calls[0]?.[1].collapsedHunks ?? [];
+    first.unmount();
+    cleanup();
+
+    // The same file with a new hunk inserted ABOVE the collapsed one, which
+    // renumbers every header below it.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "@@ -1,1 +1,2 @@",
+          " zero",
+          "+inserted",
+          "@@ -2,3 +3,3 @@",
+          " one",
+          "-two",
+          "+TWO",
+          "",
+        ].join("\n"),
+      }),
+    );
+    renderBody(
+      <DiffTab
+        tab={{ ...tab, collapsedHunks }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /@@ -2,3 \+3,3 @@/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.getByRole("button", { name: /@@ -1,1 \+1,2 @@/ }),
+    ).toHaveAttribute("aria-expanded", "true");
   });
 
   // F2, the Diff tab's half. A `pre` that scrolls on its own puts its
   // horizontal scrollbar wherever that section happens to end, which for
-  // anything but a tiny diff is below the fold. Both sections live in ONE
+  // anything but a tiny diff is below the fold. Every `pre` lives in ONE
   // box, which the stylesheet bounds to the tab's height.
-  it("scrolls both sections in one box the stylesheet can bound", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n-old\n+new\n",
-      unstaged: "@@ -2 +2 @@\n-two\n+three\n",
-      truncated: false,
-    });
+  it("scrolls every section and every hunk in one box the stylesheet can bound", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
     const { container } = renderBody(
       <DiffTab tab={tab} visible actions={actionsSpy()} />,
     );
@@ -425,19 +583,83 @@ describe("DiffTab", () => {
 
     const body = container.querySelector(".diff-view > .diff-body");
     expect(body).not.toBeNull();
-    // Every `pre` in the view is inside it, and none of them is a scroll
-    // container of its own.
-    expect(container.querySelectorAll(".diff-view pre")).toHaveLength(2);
-    expect(body?.querySelectorAll("pre")).toHaveLength(2);
+    expect(container.querySelectorAll(".diff-view pre")).toHaveLength(3);
+    expect(body?.querySelectorAll("pre")).toHaveLength(3);
+  });
+
+  it("shows an untracked file's preview as additions with no old side", async () => {
+    // What the read boundary produces for a file Git does not track: a
+    // `/dev/null` old side, so every line is an addition and the old gutter
+    // is empty for all of them.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --git a/src/main.ts b/src/main.ts",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/src/main.ts",
+          "@@ -0,0 +1,2 @@",
+          "+first",
+          "+second",
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(screen.getByText("new file mode 100644")).toBeVisible();
+    expect(
+      [...container.querySelectorAll(".diff-line")].map((line) =>
+        line.getAttribute("data-old"),
+      ),
+    ).toEqual(["", ""]);
+    expect(screen.getByText("2 added")).toBeVisible();
+    expect(screen.getByText("0 deleted")).toBeVisible();
+  });
+
+  it("says a binary file has nothing to compare instead of showing nothing", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --git a/src/main.ts b/src/main.ts",
+          "index 0000000..0f49c4a 100644",
+          "Binary files a/src/main.ts and b/src/main.ts differ",
+          "",
+        ].join("\n"),
+      }),
+    );
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByText(
+        "Git reports this file as binary, so there are no lines to compare.",
+      ),
+    ).toBeVisible();
+    // No counts either: there are no lines to have counted.
+    expect(screen.queryByText("0 added")).toBeNull();
+  });
+
+  it("shows a diff it cannot read exactly as Git wrote it", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ unstaged: "fatal: something went wrong\n" }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+
+    expect(
+      await screen.findByText(/could not read this as a unified diff/),
+    ).toBeVisible();
+    expect(container.querySelector(".diff-raw")).toHaveTextContent(
+      "fatal: something went wrong",
+    );
   });
 
   it("says when a diff is empty rather than showing an empty box", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "",
-      unstaged: "",
-      truncated: false,
-    });
+    api.getDiff.mockResolvedValue(diffOf({ unstaged: "" }));
     renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
 
     expect(
@@ -445,16 +667,68 @@ describe("DiffTab", () => {
     ).toBeVisible();
   });
 
-  it("says when the diff was truncated", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n+new\n",
-      unstaged: "",
-      truncated: true,
-    });
+  it("says when the server stopped reading the diff short", async () => {
+    api.getDiff.mockResolvedValue(diffOf({ truncated: true }));
     renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
 
-    expect(await screen.findByText(/truncated/)).toBeVisible();
+    expect(
+      await screen.findByText(
+        "The workspace stopped reading this diff at its own output limit, so everything below is the beginning of the change and not all of it.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("paints a bounded portion of a huge diff and says so, of what", async () => {
+    const body = Array.from(
+      { length: DIFF_LINE_LIMIT + 40 },
+      (_, index) => `+line ${String(index)}`,
+    );
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          `@@ -0,0 +1,${String(DIFF_LINE_LIMIT + 40)} @@`,
+          ...body,
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(container.querySelectorAll(".diff-line")).toHaveLength(
+      DIFF_LINE_LIMIT,
+    );
+    expect(
+      screen.getByText(
+        `Showing the first ${String(DIFF_LINE_LIMIT)} of the ${String(DIFF_LINE_LIMIT + 40)} lines of the unstaged diff. The counts above are of the whole change.`,
+      ),
+    ).toBeVisible();
+    // The counts stay the file's own, not the painted portion's (J7).
+    expect(
+      screen.getByText(`${String(DIFF_LINE_LIMIT + 40)} added`),
+    ).toBeVisible();
+  });
+
+  it("says plainly when the file has stopped being one that changed", async () => {
+    // The working tree is not stable between the status call that listed the
+    // path and the diff call that asks for it — the design boundary says so —
+    // so this is an ordinary event on this tab and not an error to apologise
+    // for.
+    api.getDiff.mockRejectedValue(
+      new ApiClientError(
+        404,
+        "git_path_not_changed",
+        "The file is not in the current change set.",
+      ),
+    );
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByText(/no changes in this worktree any more/),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 
   it("offers a retry when the read fails", async () => {
@@ -468,15 +742,36 @@ describe("DiffTab", () => {
   });
 
   it("issues no request while it is hidden", () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "",
-      unstaged: "",
-      truncated: false,
-    });
+    api.getDiff.mockResolvedValue(diffOf({ unstaged: "" }));
     renderBody(<DiffTab tab={tab} visible={false} actions={actionsSpy()} />);
 
     expect(api.getDiff).not.toHaveBeenCalled();
+  });
+
+  it("says so, instead of querying, when it has no worktree to read", () => {
+    renderBody(
+      <DiffTab
+        tab={{ ...tab, context: null }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    expect(api.getDiff).not.toHaveBeenCalled();
+    expect(screen.getByText(/not bound to a worktree yet/)).toBeVisible();
+  });
+
+  it("has no axe violations with both sections and a collapsed hunk", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Staged");
+
+    const results = await axe.run(container);
+    expect(results.violations).toEqual([]);
   });
 });
 

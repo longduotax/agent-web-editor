@@ -15,6 +15,7 @@ import { RelativePathSchema } from "@pi-web/contracts";
 import { ApiClientError, getFile } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { FilePreviewMarkdown } from "./FilePreviewMarkdown.js";
+import { HeaderPath, UnknownPath } from "./HeaderPath.js";
 import { headingSlug } from "./markdownLinks.js";
 import {
   HIGHLIGHT_MAX_CHARACTERS,
@@ -260,15 +261,7 @@ export const FileTab = memo(function FileTab({
       <header>
         {/* The workspace-relative path the server returned. An absolute
             server path is never shown, and never copied. */}
-        {path === null ? (
-          <span className="file-path">
-            <span className="file-path-name">
-              This tab&apos;s path is not a workspace path.
-            </span>
-          </span>
-        ) : (
-          <HeaderPath path={path} />
-        )}
+        {path === null ? <UnknownPath /> : <HeaderPath path={path} />}
         <div className="file-actions">
           {markdown && (
             <button
@@ -387,36 +380,6 @@ export const FileTab = memo(function FileTab({
     </div>
   );
 });
-
-/**
- * The path in the tab's header, in two pieces.
- *
- * One piece, and the header wrapped it: `text-overflow: ellipsis` is inert
- * while `white-space` computes to `normal`, so at the panel's 280px floor the
- * path rendered one character per line in a 10px column and the header grew
- * from 24px to 107px — 83px of the file's own reading area, spent on saying
- * nothing (J1). The stylesheet now nowraps it; this splits it so the ellipsis
- * falls where it costs least.
- *
- * Which end is kept is a judgement about paths: `docs/product-specs/…` names
- * a hundred files and `…/workspace-panel.md` names one, so the directories
- * are what shrinks and the file name is what survives. The whole path is on
- * the element's tooltip either way, and the two spans read as one string, so
- * neither the accessible name nor a text selection notices the split.
- */
-function HeaderPath({ path }: { path: string }): JSX.Element {
-  const cut = path.lastIndexOf("/");
-  const directories = cut === -1 ? "" : path.slice(0, cut + 1);
-  const name = cut === -1 ? path : path.slice(cut + 1);
-  return (
-    <span className="file-path" title={path}>
-      {directories !== "" && (
-        <span className="file-path-dir">{directories}</span>
-      )}
-      <span className="file-path-name">{name}</span>
-    </span>
-  );
-}
 
 /** The rendered portion of a file, and what it left out. */
 interface BoundedText {
@@ -621,7 +584,7 @@ function ReadFailure({
   const message = refusalMessage(error);
   if (message === null) return <ErrorNotice error={error} onRetry={onRetry} />;
   return (
-    <div className="empty file-refusal">
+    <div className="empty panel-refusal">
       <p>{message}</p>
       <button type="button" onClick={onRetry}>
         Retry

@@ -419,6 +419,155 @@ describe("the File tab's line numbers", () => {
   });
 });
 
+// --- WSP-06: the diff's own palette and its two gutters -------------------
+
+describe("the Diff tab's colours", () => {
+  // The diff paints its text on a tinted wash of its own, so the surface its
+  // contrast has to clear is that wash and not the code background beside
+  // it. These tokens are therefore NOT aliases of `--green` and `--red`,
+  // which are chosen against the page's white — the mechanism that put six
+  // of nine syntax tokens below the bar (J2).
+  const pairs = [
+    ["--diff-add-fg", "--diff-add-bg"],
+    ["--diff-delete-fg", "--diff-delete-bg"],
+    ["--diff-hunk-fg", "--diff-hunk-bg"],
+  ] as const;
+
+  for (const theme of ["light", "dark"] as const) {
+    it(`paints every diff colour above ${String(AA_NORMAL)}:1 in the ${theme} theme`, () => {
+      const tokens = themeTokens(theme);
+      const failing = pairs
+        .map(([foreground, background]) => {
+          const colour = resolve(tokens[foreground] ?? "", tokens);
+          const surface = resolve(tokens[background] ?? "", tokens);
+          return {
+            foreground,
+            colour,
+            surface,
+            ratio: contrast(colour, surface),
+          };
+        })
+        .filter((entry) => entry.ratio < AA_NORMAL);
+      expect(
+        failing.map(
+          (entry) =>
+            `${entry.foreground} ${entry.colour} on ${entry.surface} ${String(entry.ratio)}:1`,
+        ),
+      ).toEqual([]);
+    });
+
+    it(`paints the diff's line numbers above ${String(AA_NORMAL)}:1 on every wash in the ${theme} theme`, () => {
+      // The gutters are drawn INSIDE the line, so an added line's number is
+      // painted on the added line's background. Four surfaces, therefore,
+      // not one.
+      const tokens = themeTokens(theme);
+      const gutter = resolve(tokens["--diff-gutter-colour"] ?? "", tokens);
+      const surfaces = [
+        resolve(declarationsFor(".file-preview pre").background ?? "", tokens),
+        resolve(tokens["--diff-add-bg"] ?? "", tokens),
+        resolve(tokens["--diff-delete-bg"] ?? "", tokens),
+        resolve(tokens["--diff-hunk-bg"] ?? "", tokens),
+      ];
+      const failing = surfaces
+        .map((surface) => ({ surface, ratio: contrast(gutter, surface) }))
+        .filter((entry) => entry.ratio < AA_NORMAL);
+      expect(
+        failing.map(
+          (entry) => `${gutter} on ${entry.surface} ${String(entry.ratio)}:1`,
+        ),
+      ).toEqual([]);
+    });
+
+    it(`paints the header's counts above ${String(AA_NORMAL)}:1 in the ${theme} theme`, () => {
+      // They are on the header's surface, not on a wash: the same colour,
+      // a different background, and both have to clear the bar.
+      const tokens = themeTokens(theme);
+      const surface = resolve(
+        declarationsFor(".diff-view > header").background ?? "",
+        tokens,
+      );
+      for (const selector of [".diff-count-add", ".diff-count-delete"])
+        expect(
+          `${selector} ${String(contrast(colourOf(selector, theme), surface) >= AA_NORMAL)}`,
+        ).toBe(`${selector} true`);
+    });
+
+    it(`keeps each diff wash distinguishable from the code surface in the ${theme} theme`, () => {
+      // Contrast alone is satisfiable by three washes indistinguishable from
+      // the background, which would pass every case above and leave the
+      // reader with no wash at all. The `+`/`-` prefixes still carry the
+      // distinction on their own — this is about whether the colour adds
+      // anything.
+      const tokens = themeTokens(theme);
+      const [plainRed, plainGreen, plainBlue] = channels(
+        resolve(declarationsFor(".file-preview pre").background ?? "", tokens),
+      );
+      const tooClose: string[] = [];
+      for (const name of [
+        "--diff-add-bg",
+        "--diff-delete-bg",
+        "--diff-hunk-bg",
+      ]) {
+        const wash = resolve(tokens[name] ?? "", tokens);
+        const [r, g, b] = channels(wash);
+        const distance = Math.sqrt(
+          (r - plainRed) ** 2 + (g - plainGreen) ** 2 + (b - plainBlue) ** 2,
+        );
+        if (distance < 15)
+          tooClose.push(`${name} ${wash}: ${String(Math.round(distance))}`);
+      }
+      expect(tooClose).toEqual([]);
+    });
+  }
+});
+
+describe("the Diff tab's line numbers", () => {
+  const oldSide = declarationsFor(".diff-lines .diff-line::before");
+  const newSide = declarationsFor(".diff-lines .diff-line-body::before");
+
+  it("draws both numbers from attributes, not from the line's text", () => {
+    // The same mechanism as the File tab's single gutter (J11), and the same
+    // reason: generated content is not part of the document's text, so a
+    // selection cannot reach it and a copied diff is the diff. Two gutters
+    // need two pseudo-elements, which is why the line's text is wrapped in an
+    // element of its own.
+    expect(oldSide.content).toBe("attr(data-old)");
+    expect(newSide.content).toBe("attr(data-new)");
+    expect(oldSide["user-select"]).toBe("none");
+    expect(newSide["user-select"]).toBe("none");
+  });
+
+  it("reserves a width the diff's own largest number decides", () => {
+    expect(oldSide.width).toContain("--diff-gutter");
+    expect(newSide.width).toContain("--diff-gutter");
+  });
+});
+
+describe("the Diff tab's header path", () => {
+  // J1 again, on the other header that states a path. The declarations are
+  // shared with the File tab's rule, so this asserts that the diff's
+  // selector is really in that rule rather than that the rule exists.
+  it("never wraps, so its ellipsis is a rule the browser can apply", () => {
+    const path = declarationsFor(".diff-view > header .file-path");
+    expect(path["white-space"]).toBe("nowrap");
+    expect(path["min-width"]).toBe("0");
+    expect(path.overflow).toBe("hidden");
+  });
+
+  it("spends its ellipsis on the directories and keeps the file name whole", () => {
+    expect(
+      declarationsFor(".diff-view > header .file-path-dir")["text-overflow"],
+    ).toBe("ellipsis");
+    expect(
+      declarationsFor(".diff-view > header .file-path-name")["text-overflow"],
+    ).toBe("ellipsis");
+  });
+
+  it("lets the header's controls wrap rather than clip or overflow", () => {
+    expect(declarationsFor(".diff-view > header")["flex-wrap"]).toBe("wrap");
+  });
+});
+
 // --- J1: the File tab's header path --------------------------------------
 
 describe("the File tab's header path", () => {
