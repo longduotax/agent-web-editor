@@ -146,6 +146,7 @@ interface ProbeElement {
   scrollHeight: number;
   scrollLeft: number;
   className: string;
+  parentElement: ProbeElement | null;
   getBoundingClientRect(): { x: number; y: number; height: number };
 }
 declare const document: {
@@ -158,6 +159,8 @@ declare function getComputedStyle(element: ProbeElement): {
   boxShadow: string;
   opacity: string;
   position: string;
+  paddingTop: string;
+  paddingBottom: string;
 };
 declare const window: { __sentFrames?: string[] };
 declare const WebSocket: {
@@ -622,4 +625,70 @@ test("panel announcement: a refused chord changes no geometry and sends no resiz
   expect(after.surfaceHeight).toBe(before.surfaceHeight);
 
   expect(await resizeFrameCount(page)).toBe(resizesBefore);
+});
+
+/**
+ * F4. What the fit addon measures, and what it produced.
+ *
+ * The addon reads `getComputedStyle(parent).height` and subtracts only the
+ * `.xterm` element's own padding. For a `box-sizing: border-box` parent that
+ * height is the BORDER box — 218.917px measured against a 206.1px content
+ * box — so the container's own 0.4rem of padding was counted as space the
+ * terminal could use, and between 0 and 12.8px of the last text row was cut
+ * off depending on the height. The fix is to give the addon a container
+ * whose computed height IS its content box, so this asserts that: no
+ * vertical padding on the measured element, and a screen that fits inside
+ * it.
+ */
+function terminalFit() {
+  const xterm = document.querySelector(".xterm");
+  const measured = xterm === null ? null : xterm.parentElement;
+  const screen = document.querySelector(".xterm-screen");
+  if (measured === null || screen === null) return null;
+  const style = getComputedStyle(measured);
+  return {
+    measuredPaddingY:
+      Number.parseFloat(style.paddingTop) +
+      Number.parseFloat(style.paddingBottom),
+    // The area actually available to paint rows in: the measured element's
+    // padding box, less its own padding. This is the number the fit addon
+    // gets wrong, because a border-box element reports the outer one.
+    contentHeight:
+      measured.clientHeight -
+      Number.parseFloat(style.paddingTop) -
+      Number.parseFloat(style.paddingBottom),
+    screenHeight: screen.getBoundingClientRect().height,
+  };
+}
+
+// F4. Systematic, not intermittent: every terminal in the panel was up to
+// ~12.8px taller than the box it was given.
+test("panel terminal: the rendered screen fits its container at every height", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // A sweep of heights, because the overflow this reproduces is
+  // `floor(borderBoxH / 16) * 16 - (borderBoxH - 12.8)`: it is zero at some
+  // heights and 12px at others, so one sample proves nothing.
+  for (const height of [720, 654, 601, 540, 487]) {
+    await page.setViewportSize({ width: 1280, height });
+    await page.waitForTimeout(400);
+    const fit = await page.evaluate(terminalFit);
+    expect(fit).not.toBeNull();
+    if (fit === null) return;
+
+    // The box the addon measures reports its content height, because it has
+    // no padding of its own to confuse a border-box measurement with.
+    // What was rendered fits in the space there actually is. Half a pixel of
+    // slack for sub-pixel cell heights.
+    expect(fit.screenHeight).toBeLessThanOrEqual(fit.contentHeight + 0.5);
+    // And the box the addon measures reports its content height, because it
+    // has no padding of its own to confuse a border-box measurement with.
+    expect(fit.measuredPaddingY).toBe(0);
+  }
 });

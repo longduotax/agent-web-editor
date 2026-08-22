@@ -2016,6 +2016,18 @@ a:focus-visible {
   padding: 0.4rem;
   background: var(--page);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* The box the fit addon measures, and the one thing it must be is unpadded
+   (F4). `getComputedStyle().height` on a border-box element is its border
+   box, so any padding here would be handed to the terminal as space to
+   paint rows in and then clipped away — up to 12.8px of the last row.
+   The padding stays on `.terminal-surface`, outside the measurement. */
+.terminal-canvas {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
 }
 .panel-state {
   margin: 0;

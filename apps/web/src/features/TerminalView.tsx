@@ -282,11 +282,17 @@ export function TerminalView({
       <p className="terminal-warning">
         Direct local shell — not sandboxed and separate from agent execution.
       </p>
-      <div
-        ref={container}
-        className="terminal-surface"
-        aria-label="Project terminal"
-      />
+      {/* Two elements, not one (F4). The fit addon measures
+          `getComputedStyle(parent).height`, which for a border-box element
+          is its BORDER box — 218.917px measured against a 206.1px content
+          box — and subtracts only the `.xterm` element's own padding, which
+          is zero. So a padded container had its padding counted as space
+          the terminal could use, and between 0 and 12.8px of the last text
+          row was cut off. The padding lives out here; the box the addon
+          measures has none, so its computed height IS its content box. */}
+      <div className="terminal-surface" aria-label="Project terminal">
+        <div ref={container} className="terminal-canvas" />
+      </div>
     </div>
   );
 }
