@@ -484,3 +484,42 @@ export function panelStateProblems(state: PanelState): string[] {
 
   return problems;
 }
+
+// Gives a context to a tab restored without one (D-1: the v1 inspector
+// record names only a tab type, because the shipped inspector followed the
+// focused pane and never stored which thread its content belonged to).
+//
+// Binding is not a plain `updateTab`, because it can create a duplicate that
+// nothing else would ever collapse: `openTab` dedupes at open time only, and
+// two Changes tabs of one scope are structurally sound, so a migrated tab
+// bound to a scope the user has already opened a tab for would sit beside it
+// forever with an identical title. The collision is resolved the way opening
+// a duplicate is — one tab survives and is revealed — and the survivor is
+// the older of the two, since that is the one the user has been reading.
+export function bindTabContext(
+  state: PanelState,
+  tabId: TabId,
+  context: TabContext,
+): PanelState {
+  const tab = state.tabs[tabId];
+  // A browser tab's null context is permanent and correct: it reads no
+  // worktree at all.
+  if (tab === undefined || tab.type === "browser" || tab.context !== null)
+    return state;
+
+  const bound = updateTab(state, tabId, { context });
+  const boundTab = bound.tabs[tabId];
+  if (boundTab === undefined) return bound;
+  const duplicate = Object.values(bound.tabs).find(
+    (other) => other.id !== tabId && sameTarget(other, boundTab),
+  );
+  if (duplicate === undefined) return bound;
+
+  // Insertion order is creation order, and it survives the JSON round trip
+  // the panel record makes, so it is a usable "which came first".
+  const order = Object.keys(bound.tabs);
+  const keepId =
+    order.indexOf(tabId) <= order.indexOf(duplicate.id) ? tabId : duplicate.id;
+  const dropId = keepId === tabId ? duplicate.id : tabId;
+  return activateTab(closeTab(bound, dropId), keepId);
+}

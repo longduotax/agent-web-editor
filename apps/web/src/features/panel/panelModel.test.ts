@@ -4,6 +4,7 @@ import type { ProjectId, TerminalId, ThreadId } from "@pi-web/contracts";
 import { leafIds } from "../layout/binaryTree.js";
 import {
   activateTab,
+  bindTabContext,
   closeGroup,
   closeTab,
   createEmptyPanel,
@@ -767,5 +768,84 @@ describe("panelStateProblems", () => {
       tabs: { ...state.tabs, ghost: { ...tab, id: "ghost" } },
     };
     expect(panelStateProblems(broken)).not.toEqual([]);
+  });
+});
+
+// D-1. A tab restored by the v1 inspector migration carries no context, and
+// binding one can turn it into a duplicate of a tab the user opened in the
+// meantime: openTab's dedupe runs at open time only, so nothing else would
+// ever collapse the two, and panelStateProblems is right not to call it
+// broken. Binding therefore has to resolve the collision itself.
+describe("bindTabContext", () => {
+  it("binds a context-less tab", () => {
+    const makeId = ids();
+    const state = openTab(
+      createEmptyPanel(makeId),
+      { type: "changes", context: null },
+      makeId,
+    );
+    const tabId = Object.keys(state.tabs)[0] ?? "";
+
+    const bound = bindTabContext(state, tabId, context());
+
+    expect(bound.tabs[tabId]?.context).toEqual(context());
+    assertPanelInvariants(bound);
+  });
+
+  it("collapses a bind that duplicates an open tab, keeping the older one", () => {
+    const makeId = ids();
+    const migrated = openTab(
+      createEmptyPanel(makeId),
+      { type: "changes", context: null },
+      makeId,
+    );
+    const migratedId = Object.keys(migrated.tabs)[0] ?? "";
+    const state = openTab(migrated, changesTab(), makeId);
+    const openedId =
+      Object.keys(state.tabs).find((id) => id !== migratedId) ?? "";
+    expect(Object.keys(state.tabs)).toHaveLength(2);
+
+    const bound = bindTabContext(state, migratedId, context());
+
+    expect(Object.keys(bound.tabs)).toEqual([migratedId]);
+    expect(bound.tabs[openedId]).toBeUndefined();
+    expect(bound.groups[bound.focusedGroupId ?? ""]?.activeTabId).toBe(
+      migratedId,
+    );
+    assertPanelInvariants(bound);
+  });
+
+  it("leaves a tab that already has a context alone, by reference", () => {
+    const makeId = ids();
+    const state = openTab(createEmptyPanel(makeId), changesTab(), makeId);
+    const tabId = Object.keys(state.tabs)[0] ?? "";
+
+    expect(bindTabContext(state, tabId, context({ scopeKey: "other" }))).toBe(
+      state,
+    );
+  });
+
+  it("leaves a browser tab's null context alone: it reads no worktree", () => {
+    const makeId = ids();
+    const state = openTab(
+      createEmptyPanel(makeId),
+      {
+        type: "browser",
+        context: null,
+        url: "http://localhost:3000",
+        history: [],
+        historyIndex: 0,
+      },
+      makeId,
+    );
+    const tabId = Object.keys(state.tabs)[0] ?? "";
+
+    expect(bindTabContext(state, tabId, context())).toBe(state);
+  });
+
+  it("ignores an unknown tab", () => {
+    const makeId = ids();
+    const state = openTab(createEmptyPanel(makeId), changesTab(), makeId);
+    expect(bindTabContext(state, "nope", context())).toBe(state);
   });
 });

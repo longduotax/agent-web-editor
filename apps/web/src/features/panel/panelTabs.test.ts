@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectId, TerminalId, ThreadId } from "@pi-web/contracts";
 
-import { sameTarget, tabTitle } from "./panelTabs.js";
+import { sameTarget, tabNeedsThread, tabTitle } from "./panelTabs.js";
 import type { PanelTab, TabContext } from "./panelTabs.js";
 
 const PROJECT_A = "11111111-1111-1111-1111-111111111111" as ProjectId;
@@ -300,5 +300,25 @@ describe("sameTarget", () => {
     };
     const dead: PanelTab = { ...live, id: "t2", terminalId: null };
     expect(sameTarget(live, dead)).toBe(false);
+  });
+});
+
+// WSP-02: with no chat pane owning a thread, the + menu offers only the tab
+// types that read no worktree, and says why the rest are unavailable. The
+// menu asks this rather than carrying a list of its own.
+describe("tabNeedsThread", () => {
+  it("is true for every tab type that reads a working tree", () => {
+    for (const type of [
+      "changes",
+      "files",
+      "file",
+      "diff",
+      "terminal",
+    ] as const)
+      expect(tabNeedsThread(type)).toBe(true);
+  });
+
+  it("is false for a browser tab, which reads no working tree", () => {
+    expect(tabNeedsThread("browser")).toBe(false);
   });
 });

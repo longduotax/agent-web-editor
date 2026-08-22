@@ -142,3 +142,11 @@ export function sameTarget(a: NewPanelTab, b: NewPanelTab): boolean {
     }
   }
 }
+
+// Whether a tab of this type can only exist against a thread's execution
+// scope. Everything that reads the filesystem or Git does; a browser tab
+// does not, which is what lets the `+` menu still offer something when no
+// chat pane owns a thread (WSP-02).
+export function tabNeedsThread(type: PanelTab["type"]): boolean {
+  return type !== "browser";
+}

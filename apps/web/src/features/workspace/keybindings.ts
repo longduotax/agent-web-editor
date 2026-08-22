@@ -27,9 +27,7 @@ export type WorkspaceCommand = ChatCommand | PanelCommand;
  * neither nested in the other — so each has to recognise its own commands
  * and leave the rest alone.
  */
-export function asPanelCommand(
-  command: WorkspaceCommand,
-): PanelCommand | null {
+export function asPanelCommand(command: WorkspaceCommand): PanelCommand | null {
   switch (command.type) {
     case "panel-tab":
     case "panel-close-tab":
@@ -67,9 +65,7 @@ export interface Platform {
  * requires AND the ones it refuses, so no chord can resolve to two commands.
  */
 export type ModifierGroup =
-  | "shift-primary"
-  | "primary-alt"
-  | "shift-primary-alt";
+  "shift-primary" | "primary-alt" | "shift-primary-alt";
 
 export interface KeyBinding {
   /** What the user is trying to do, in the words the help list shows. */
