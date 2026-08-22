@@ -2298,6 +2298,64 @@ stylesheet and asserts the declaration that was missing, since **jsdom applies
 no author CSS at all and cannot tell a missing rule from a present one**; and
 an end-to-end case measures the rendered header at 550, 400 and 280.
 
+**J2 and J3 — most of the light theme's coloured text was below AA.** Measured
+against the resolved `.file-preview > pre` background (`rgb(244,244,245)` in
+light, `rgb(31,33,39)` in dark) at 12.48px weight 400, which is normal text and
+therefore a 4.5:1 bar: **six of nine syntax tokens failed in light**, and the
+two carrying the most text failed hardest. Not a corner case — in one real file,
+of 735 coloured spans, **178 were strings and 202 comments, both at 3.13:1**. The
+majority of coloured text in the light theme was the failing part, which is what
+"reads as washed out rather than as structure" was describing. `--code-punctuation`
+and `--code-attribute`, which the report did not list, failed too.
+
+The mechanism was that most `--code-*` tokens were **aliases of the status
+palette** — `var(--green)`, `var(--amber)`, `var(--red)`, `var(--accent)`,
+`var(--muted)` — and those hues are chosen against the page's white, not
+against the preview's `--hover` panel. So they are no longer aliases: the light
+values are the same hues darkened until each clears the bar with margin, and
+the dark values, every one of which already passed, are written out beside them.
+The full palette, measured:
+
+| token                | light   | ratio | dark    | ratio |
+| -------------------- | ------- | ----- | ------- | ----- |
+| `--code-plain`       | #3a3a3e | 10.30 | #c3c5cb | 9.32  |
+| `--code-keyword`     | #8a2fb0 | 6.13  | #cba6f7 | 7.92  |
+| `--code-type`        | #0b6a77 | 5.72  | #4dc3d4 | 7.72  |
+| `--code-function`    | #1a5fd0 | 5.32  | #6aa0ff | 6.20  |
+| `--code-constant`    | #b32d22 | 5.76  | #e0645c | 4.71  |
+| `--code-tag`         | #b32d22 | 5.76  | #e0645c | 4.71  |
+| `--code-string`      | #187038 | 5.60  | #4ec06f | 6.97  |
+| `--code-number`      | #8a5510 | 5.64  | #d6a53a | 7.13  |
+| `--code-attribute`   | #8a5510 | 5.64  | #d6a53a | 7.13  |
+| `--code-comment`     | #63636a | 5.42  | #8b8d95 | 4.86  |
+| `--code-punctuation` | #63636a | 5.42  | #8b8d95 | 4.86  |
+
+J3's muted prose is the same defect on a different surface. `--muted` is
+3.44:1 on the panel's white, which is tolerable for a label beside something
+else and not for the words of a sentence — one real README renders 23 inert
+links inside running prose. A second token, `--muted-body` (5.96:1 light,
+6.15:1 dark), now carries the text that is prose: `.md-inert-link`,
+`.md-image-missing`, `.panel-state`, `.empty`, and `.panel-announcement`, which
+is also where a copy that worked or failed now says so (J4). `--muted` itself
+is unchanged and still carries chrome. `.md-external-link` was left on
+`--accent`: 4.57:1 is a pass, thin but a pass, and the test now holds it there.
+
+**The test is the deliverable, not the palette.** A palette is re-tuned by eye
+and regresses silently, and the existing suites could not see this at all —
+jsdom applies no author stylesheet, so a colour token is not a thing a
+component test can measure. `apps/web/src/styles.test.ts` reads `styles.css`
+itself, resolves `var()` chains through the light and dark blocks the way the
+cascade does, and computes WCAG contrast for every `--code-*` token and every
+prose surface above against its own resolved background, in both themes,
+failing below 4.5:1. Two further cases guard the two ways a fix like this rots:
+one asserts the hues stay **apart from each other**, since a palette that
+passes contrast by collapsing into six near-identical darks would satisfy the
+first case and destroy what highlighting is for; and one asserts the **two dark
+blocks agree**, because `styles.css` writes the dark theme twice — once under
+`prefers-color-scheme` for the System setting and once under `[data-theme]`
+for the pinned one — so a palette edited in one and not the other would ship
+two different dark themes (CWS-02).
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

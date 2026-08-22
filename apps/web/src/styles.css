@@ -11,6 +11,14 @@
   --text: #1d1d1f;
   --text-2: #3a3a3e;
   --muted: #8a8a8f;
+  /* Quiet text that is BODY COPY rather than chrome, and therefore has to
+     clear WCAG AA against the surface it sits on (J3). `--muted` is 3.44:1
+     on this page's white, which is fine for a label beside something else
+     and not fine for the words of a sentence: one real README renders 23
+     inert links inside running prose, and the panel's own notices are the
+     sentences it uses to tell the truth about a bounded view. 5.96:1 here,
+     6.15:1 in dark; `styles.test.ts` keeps it honest. */
+  --muted-body: #63636a;
   --faint: #b3b3b8;
   --green: #2f9e44;
   --red: #d1453b;
@@ -68,23 +76,37 @@
    switch with no re-highlight, no listener, and no reload — the same
    mechanism the terminal's tokens above rely on.
 
-   Most are aliases of tokens this page already uses, so they follow the
-   palette wherever it goes. The two that are not — a keyword hue and a type
-   hue the palette has no member for — are literals, and are therefore
-   redefined in both dark blocks below like every other literal in this
-   file. */
+   **They are their own colours rather than aliases of the status palette,
+   and that is the fix for J2.** Most of them used to be aliases —
+   `--code-string: var(--green)`, `--code-number: var(--amber)` — and those
+   status hues are chosen against the page's white, not against the
+   preview's `--hover` panel. Measured on that panel, six of nine light
+   tokens were below the 4.5:1 AA bar and the two carrying the most text
+   were the worst: in one real file, of 735 coloured spans, 178 were strings
+   and 202 comments, both at 3.13:1. The majority of coloured text in the
+   light theme was the failing part, which is why it read as washed out
+   rather than as structure.
+
+   The light values below are the same hues, darkened until each clears
+   4.5:1 on `--hover` with margin, and kept apart from each other so the
+   palette still says something: red, amber, green, teal, blue, purple, and
+   one grey — comments and punctuation share it, as they always have, and a
+   comment is told from an operator by being italic rather than by a tint
+   too small to see. The dark values are unchanged — every one of them already
+   passed — and are written as literals for the same reason the light ones
+   are. `apps/web/src/styles.test.ts` computes all of it. */
 :root {
-  --code-plain: var(--text-2);
-  --code-comment: var(--muted);
-  --code-punctuation: var(--muted);
-  --code-string: var(--green);
-  --code-number: var(--amber);
-  --code-constant: var(--red);
-  --code-function: var(--accent);
-  --code-tag: var(--red);
-  --code-attribute: var(--amber);
-  --code-keyword: #9a3fbd;
-  --code-type: #0f7b8a;
+  --code-plain: #3a3a3e; /* 10.30:1 */
+  --code-comment: #63636a; /* 5.42:1, italic in the theme */
+  --code-punctuation: #63636a; /* 5.42:1 */
+  --code-string: #187038; /* 5.60:1 */
+  --code-number: #8a5510; /* 5.64:1 */
+  --code-constant: #b32d22; /* 5.76:1 */
+  --code-function: #1a5fd0; /* 5.32:1 */
+  --code-tag: #b32d22; /* 5.76:1 */
+  --code-attribute: #8a5510; /* 5.64:1 */
+  --code-keyword: #8a2fb0; /* 6.13:1 */
+  --code-type: #0b6a77; /* 5.72:1 */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -101,6 +123,7 @@
     --text: #ececee;
     --text-2: #c3c5cb;
     --muted: #8b8d95;
+    --muted-body: #9a9ca4;
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
@@ -121,8 +144,17 @@
        reads as the panel sitting above — the same direction of separation,
        carried by the opposite colour. */
     --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
-    --code-keyword: #cba6f7;
-    --code-type: #4dc3d4;
+    --code-plain: #c3c5cb; /* 9.32:1 */
+    --code-comment: #8b8d95; /* 4.86:1 */
+    --code-punctuation: #8b8d95; /* 4.86:1 */
+    --code-string: #4ec06f; /* 6.97:1 */
+    --code-number: #d6a53a; /* 7.13:1 */
+    --code-constant: #e0645c; /* 4.71:1 */
+    --code-function: #6aa0ff; /* 6.20:1 */
+    --code-tag: #e0645c; /* 4.71:1 */
+    --code-attribute: #d6a53a; /* 7.13:1 */
+    --code-keyword: #cba6f7; /* 7.92:1 */
+    --code-type: #4dc3d4; /* 7.72:1 */
   }
 }
 :root[data-theme="dark"] {
@@ -138,6 +170,7 @@
   --text: #ececee;
   --text-2: #c3c5cb;
   --muted: #8b8d95;
+  --muted-body: #9a9ca4;
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
@@ -153,8 +186,17 @@
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
-  --code-keyword: #cba6f7;
-  --code-type: #4dc3d4;
+  --code-plain: #c3c5cb; /* 9.32:1 */
+  --code-comment: #8b8d95; /* 4.86:1 */
+  --code-punctuation: #8b8d95; /* 4.86:1 */
+  --code-string: #4ec06f; /* 6.97:1 */
+  --code-number: #d6a53a; /* 7.13:1 */
+  --code-constant: #e0645c; /* 4.71:1 */
+  --code-function: #6aa0ff; /* 6.20:1 */
+  --code-tag: #e0645c; /* 4.71:1 */
+  --code-attribute: #d6a53a; /* 7.13:1 */
+  --code-keyword: #cba6f7; /* 7.92:1 */
+  --code-type: #4dc3d4; /* 7.72:1 */
 }
 body {
   min-width: 320px;
@@ -1788,7 +1830,7 @@ a:focus-visible {
   margin: 0;
   padding: 0.35rem 0.6rem;
   border-top: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--muted-body);
   background: var(--surface-2);
   font-size: 0.72rem;
   pointer-events: none;
@@ -2312,7 +2354,7 @@ a:focus-visible {
   font-size: 0.85em;
 }
 .file-markdown .md-inert-link {
-  color: var(--muted);
+  color: var(--muted-body);
   text-decoration: underline dotted;
 }
 .file-markdown .md-image-missing {
@@ -2320,7 +2362,7 @@ a:focus-visible {
   padding: 0.15rem 0.4rem;
   border: 1px dashed var(--border);
   border-radius: 0.3rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.82em;
   overflow-wrap: anywhere;
 }
@@ -2444,7 +2486,7 @@ a:focus-visible {
 .panel-state {
   margin: 0;
   padding: 0.7rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .empty,
@@ -2453,7 +2495,7 @@ a:focus-visible {
   padding: 0.7rem;
   border: 1px dashed var(--border);
   border-radius: 0.4rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .error-notice {
