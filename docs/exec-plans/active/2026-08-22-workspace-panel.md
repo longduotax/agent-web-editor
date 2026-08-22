@@ -2472,6 +2472,29 @@ record is not one. The request is still issued and still refused by the server:
 the boundary stays the authority on what may be read, and this is only about
 what may be displayed and copied as a path.
 
+**J6 — two File tabs on two different files were indistinguishable.**
+`docs/README.md` and `frontend/node_modules/flatted/README.md` both computed
+the accessible name "README.md", the tab element carried **no `title` at all**,
+and both close controls read "Close README.md". Browsing a repository produces
+that collision constantly — `README.md`, `index.ts`, `package.json` — and the
+file-tree row that opens the tab carries the full path on its own tooltip while
+the tab it opened did not.
+
+A tab's label is now computed against every other open tab in the panel, not
+just its own strip: a basename until two tabs share one **while addressing
+different things**, and then each grows parent directories until the labels
+differ — `docs/README.md` and `flatted/README.md`, `web/src/index.ts` and
+`server/src/index.ts`. That label is what the strip paints, what the close
+affordance and the strip's close button name, what the drag ghost carries, and
+what the panel announces on close, so no route to the tab is ambiguous while
+another is not. The full path is on the tab's `title`, which does not touch the
+accessible name because `tab` is a name-from-content role.
+
+**Two tabs on the SAME file are deliberately left alone.** That is one file
+open against two worktrees, which WSP-02 answers with the worktree chip;
+prefixing both with an identical directory would add noise and disambiguate
+nothing.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

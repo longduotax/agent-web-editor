@@ -135,6 +135,72 @@ function stylesheetPath(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../styles.css");
 }
 
+describe("TabStrip: two tabs on two files are tellable apart (J6)", () => {
+  const readmes: Record<TabId, PanelTab> = {
+    "tab-1": {
+      id: "tab-1",
+      type: "file",
+      context: here,
+      path: "docs/README.md",
+      view: "preview",
+    },
+    "tab-2": {
+      id: "tab-2",
+      type: "file",
+      context: here,
+      path: "frontend/node_modules/flatted/README.md",
+      view: "preview",
+    },
+  };
+
+  function renderReadmes() {
+    render(
+      <TabStrip
+        group={{
+          id: "group-1",
+          tabIds: ["tab-1", "tab-2"],
+          activeTabId: "tab-1",
+        }}
+        tabs={readmes}
+        actions={actionsSpy()}
+        drag={idleDrag()}
+        focused
+        focusedContext={here}
+        index={1}
+        groupCount={1}
+      />,
+    );
+  }
+
+  it("gives each tab a distinct accessible name and the full path on its tooltip", () => {
+    renderReadmes();
+
+    // Both were "README.md" — the same computed accessible name, twice.
+    const own = screen.getByRole("tab", { name: "docs/README.md" });
+    const dependency = screen.getByRole("tab", { name: "flatted/README.md" });
+    expect(own).toBeVisible();
+    expect(dependency).toBeVisible();
+    // The whole path, as the file-tree row that opened the tab already
+    // carries. It does not become the accessible name: `tab` is a
+    // name-from-content role, and `title` is consulted only without content.
+    expect(dependency).toHaveAttribute(
+      "title",
+      "frontend/node_modules/flatted/README.md",
+    );
+  });
+
+  it("names the same tab in its close control", () => {
+    renderReadmes();
+
+    // Both close affordances read "Close README.md", and so did the strip's
+    // one real close button.
+    expect(
+      screen.getByRole("button", { name: "Close docs/README.md tab" }),
+    ).toBeVisible();
+    expect(screen.getByTitle("Close flatted/README.md")).toBeInTheDocument();
+  });
+});
+
 describe("TabStrip", () => {
   it("is a tablist whose active tab points at its own panel", () => {
     renderStrip();

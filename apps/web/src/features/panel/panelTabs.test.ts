@@ -6,6 +6,8 @@ import {
   sameTarget,
   tabNeedsThread,
   tabTitle,
+  tabTitles,
+  tabTooltip,
 } from "./panelTabs.js";
 import type { PanelTab, TabContext } from "./panelTabs.js";
 
@@ -438,5 +440,74 @@ describe("tabNeedsThread", () => {
 
   it("is false for a browser tab, which reads no working tree", () => {
     expect(tabNeedsThread("browser")).toBe(false);
+  });
+});
+
+describe("tabTitles: two tabs on two files are told apart (J6)", () => {
+  function fileTab(id: string, path: string, scope = PROJECT_A): PanelTab {
+    return {
+      id,
+      type: "file",
+      context: context({ projectId: scope, scopeKey: scope }),
+      path,
+      view: "preview",
+    };
+  }
+
+  it("leaves a title alone when nothing else shares it", () => {
+    const tabs = [fileTab("a", "docs/README.md"), fileTab("b", "src/main.ts")];
+    expect(tabTitles(tabs)).toEqual({ a: "README.md", b: "main.ts" });
+  });
+
+  it("grows a parent directory when two tabs share a basename", () => {
+    // The reported case: `docs/README.md` and
+    // `frontend/node_modules/flatted/README.md` both computed the accessible
+    // name "README.md", the tab carried no tooltip, and both close controls
+    // read "Close README.md".
+    const tabs = [
+      fileTab("a", "docs/README.md"),
+      fileTab("b", "frontend/node_modules/flatted/README.md"),
+    ];
+    expect(tabTitles(tabs)).toEqual({
+      a: "docs/README.md",
+      b: "flatted/README.md",
+    });
+  });
+
+  it("keeps growing until the labels are actually different", () => {
+    const tabs = [
+      fileTab("a", "apps/web/src/index.ts"),
+      fileTab("b", "apps/server/src/index.ts"),
+    ];
+    expect(tabTitles(tabs)).toEqual({
+      a: "web/src/index.ts",
+      b: "server/src/index.ts",
+    });
+  });
+
+  it("leaves two tabs on the SAME file alone, because the chip tells them apart", () => {
+    // WSP-02's answer to one file open against two worktrees. Prefixing both
+    // with the same directory would add noise and disambiguate nothing.
+    const tabs = [
+      fileTab("a", "docs/README.md", PROJECT_A),
+      fileTab("b", "docs/README.md", PROJECT_B),
+    ];
+    expect(tabTitles(tabs)).toEqual({ a: "README.md", b: "README.md" });
+  });
+
+  it("gives every tab a tooltip naming what it addresses", () => {
+    expect(tabTooltip(fileTab("a", "docs/README.md"))).toBe("docs/README.md");
+    expect(
+      tabTooltip({
+        id: "t",
+        type: "terminal",
+        context: context(),
+        cwd: "/tmp/project/apps/web",
+        terminalId: null,
+      }),
+    ).toBe("/tmp/project/apps/web");
+    expect(tabTooltip({ id: "t", type: "changes", context: context() })).toBe(
+      "Changes",
+    );
   });
 });
