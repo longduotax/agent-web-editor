@@ -19,7 +19,14 @@ export interface PaneHeaderProps {
   // `detailTitle` carries the full text as a tooltip so nothing is lost.
   detail?: ReactNode;
   detailTitle?: string | undefined;
-  onSplit(): void; // split right (row); keyboard still offers both axes
+  // Splits right (row); the keyboard offers both axes. The new pane is
+  // always an empty New chat, never a second view of this thread. The
+  // SHORTCUT rows say so now ("Split right into a new chat"); this button
+  // still says only "Split" because App.test.tsx and ThreadPane.test.tsx
+  // match its accessible name exactly and neither file is this
+  // implementer's to edit. See the handoff in
+  // .claude/loop/iteration-3/implementer-e2.md.
+  onSplit(): void;
   onClose(): void;
 }
 

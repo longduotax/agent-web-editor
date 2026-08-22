@@ -90,14 +90,14 @@ export interface KeyBinding {
  */
 export const WORKSPACE_KEYBINDINGS: readonly KeyBinding[] = [
   {
-    label: "Split pane right",
+    label: "Split right into a new chat",
     group: "shift-primary",
     key: "=",
     keyLabel: "=",
     command: { type: "split", axis: "row" },
   },
   {
-    label: "Split pane down",
+    label: "Split down into a new chat",
     group: "shift-primary",
     key: "-",
     keyLabel: "-",

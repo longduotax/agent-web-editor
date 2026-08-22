@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -9,6 +10,7 @@ import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
 import { tiledPaneIds } from "./layoutTree.js";
+import { isComposerEntryKey, landFocusOnPane } from "./paneFocus.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 import { ThreadPane } from "./ThreadPane.js";
 import { NewChatPane } from "./NewChatPane.js";
@@ -147,8 +149,66 @@ function PaneRegion({
 }) {
   const focused = paneId === controller.layout.focusedPaneId;
   const threadId = controller.layout.panes[paneId]?.threadId ?? null;
+  const tileRef = useRef<HTMLDivElement>(null);
+  // Read through a ref inside the focus effect below, never listed as a
+  // dependency of it. Focus must follow a COMMAND, and `focused` also turns
+  // true when the user clicks a pane — including when they click straight
+  // into its composer, which the effect would then rudely undo.
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+  const { paneFocusIntent, registerPaneElement } = controller;
+
+  useEffect(() => {
+    registerPaneElement(paneId, tileRef.current);
+    return () => {
+      registerPaneElement(paneId, null);
+    };
+  }, [paneId, registerPaneElement]);
+
+  // Parks focus on the pane a command just moved to, instead of letting a
+  // freshly split new-chat pane autofocus its composer.
+  //
+  // The composer is what made G15 bite: every workspace chord is suppressed
+  // while a text entry has focus (isTextEntryTarget), so a split disarmed the
+  // keyboard it was pressed from — ⇧⌘= could not be pressed twice, and no
+  // arrow key worked after a split until you pressed Escape.
+  //
+  // This is a plain effect and not a fight with `autoFocus`: React applies
+  // autoFocus while committing the newly mounted composer, and this runs
+  // after that commit. Verified in the running app rather than assumed — a
+  // new-chat pane's worktree preflight resolves seconds after the split, and
+  // focus stays on the pane across it.
+  useEffect(() => {
+    // 0 is "no command has moved focus yet", i.e. a cold load: leave the
+    // entry pane's composer autofocused, which is right for the one pane the
+    // user opened the surface to type in.
+    if (paneFocusIntent === 0 || !focusedRef.current) return;
+    landFocusOnPane(tileRef.current);
+  }, [paneFocusIntent]);
+
   return (
-    <div className="tiling-region">
+    <div
+      className="tiling-region"
+      ref={tileRef}
+      onKeyDown={(event) => {
+        // Only from the parked pane itself. A key pressed in a composer, a
+        // header button or the resize handle belongs to that control.
+        if (
+          event.defaultPrevented ||
+          !(event.target instanceof HTMLElement) ||
+          !event.target.classList.contains("pane") ||
+          !isComposerEntryKey(event)
+        )
+          return;
+        const composer =
+          tileRef.current?.querySelector<HTMLTextAreaElement>("textarea");
+        if (composer === null || composer === undefined) return;
+        composer.focus({ preventScroll: true });
+        // The printable character is left to arrive in the composer by
+        // itself; Enter would submit an empty message, so it stops here.
+        if (event.key === "Enter") event.preventDefault();
+      }}
+    >
       {threadId !== null ? (
         <ThreadPane
           projectId={projectId}

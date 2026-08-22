@@ -34,6 +34,68 @@ export function releaseFocusToPane(from: HTMLElement): HTMLElement | null {
 }
 
 /**
+ * Land focus on a pane, given its tile element.
+ *
+ * The counterpart to `releaseFocusToPane`, for the other direction: a command
+ * moved pane focus (split / close / a direction key) and DOM focus has to
+ * follow it. It must land on the PANE and not on its composer — every
+ * workspace chord is suppressed while a text entry has focus, so a split that
+ * dropped you into the new pane's textarea disarmed the whole keyboard, and
+ * the split chord could not even be pressed twice (G15).
+ *
+ * Scrolling is done as a separate `scrollIntoView`, not by letting `focus()`
+ * do it: the surface scrolls horizontally once there are more panes than fit
+ * (CWS-07), so a pane the direction keys just reached may be off screen and
+ * has to be brought into view — but only by the least it can ("nearest"),
+ * never by centring a pane that was already fully visible.
+ */
+export function landFocusOnPane(tile: Element | null): HTMLElement | null {
+  const pane =
+    tile instanceof HTMLElement
+      ? (tile.querySelector<HTMLElement>(".pane") ?? tile)
+      : null;
+  if (pane === null) return null;
+  pane.focus({ preventScroll: true });
+  // Guarded because jsdom does not implement it and the surface must not
+  // depend on a scroll to be correct.
+  if (typeof pane.scrollIntoView === "function")
+    pane.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return pane;
+}
+
+/**
+ * True for a keydown on a parked pane that means "I want to start typing".
+ *
+ * Leaving focus on the pane after a split is what keeps the chords alive, but
+ * it would be a bad trade if it also cost a Tab to write the message you
+ * split the pane in order to write. The pane shell is not in the tab order
+ * and the next tab stop is the header's Split button, so "one Tab away" was
+ * never true.
+ *
+ * So a bare printable character, or Enter, hands the pane's composer the
+ * focus. The character itself is deliberately NOT consumed: the composer is
+ * focused during keydown, before the browser produces text from the event, so
+ * it arrives in the textarea on its own — the pane behaves as if you had been
+ * typing there all along. Enter is consumed, because letting it through would
+ * submit the message you have not written yet.
+ *
+ * Anything with a modifier is refused: those are chords (this app's, the
+ * browser's, or the OS's) and none of them mean "type this".
+ */
+export function isComposerEntryKey(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+}): boolean {
+  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+  // Length 1 is how a printable character is distinguished from a named key
+  // ("Tab", "ArrowLeft", "F3"); it counts UTF-16 units, so an astral-plane
+  // character reads as 2 and simply does not trigger this shortcut.
+  return event.key.length === 1 || event.key === "Enter";
+}
+
+/**
  * True for the keydown that should release the composer: a BARE Escape.
  *
  * Modified Escapes are left alone on purpose. They are not this app's to

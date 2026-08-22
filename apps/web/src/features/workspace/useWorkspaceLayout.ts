@@ -10,7 +10,12 @@ import {
   setSplitSizes,
   splitPane,
 } from "./layoutTree.js";
-import type { PaneId, SplitId, WorkspaceLayout } from "./layoutTree.js";
+import type {
+  PaneId,
+  PaneRect,
+  SplitId,
+  WorkspaceLayout,
+} from "./layoutTree.js";
 import { pruneNewChatDrafts } from "./drafts.js";
 import { readLayout, writeLayout } from "./layoutStorage.js";
 import type { WorkspaceCommand } from "./keybindings.js";
@@ -18,6 +23,27 @@ import type { WorkspaceCommand } from "./keybindings.js";
 export interface WorkspaceLayoutController {
   layout: WorkspaceLayout;
   dispatch(command: WorkspaceCommand): void;
+  // Where each pane is on screen. The direction keys are a spatial question
+  // and the rendered rects are the only honest answer to it, so the surface
+  // reports each pane's tile element here as it mounts and drops it on
+  // unmount. `moveFocus` falls back to the tree's own geometry when the
+  // registry is incomplete, so this is an improvement to accuracy, not a
+  // prerequisite for the feature working.
+  // A property rather than a method signature on purpose: the surface
+  // destructures it to use as an effect dependency, and a method signature
+  // would make that an unbound-method lint error at every call site.
+  registerPaneElement: (paneId: PaneId, element: Element | null) => void;
+  // Bumped whenever a COMMAND moved pane focus — a split, a close, or a
+  // directional move. It is the signal for "put DOM focus on the newly
+  // focused pane", which is what keeps the keyboard armed for the next chord
+  // (a composer swallows every workspace binding: see isTextEntryTarget).
+  //
+  // A counter rather than a pane id, deliberately: focus has to move again on
+  // a second command that lands on the SAME pane, and it must NOT move when a
+  // pane becomes focused for any other reason — clicking into its composer,
+  // most of all. `0` means nothing has been commanded yet, which is how the
+  // entry pane's composer keeps its autofocus on a cold load.
+  paneFocusIntent: number;
   assignThreadToPane(paneId: PaneId, threadId: ThreadId): void;
   newPane(): void;
   focus(paneId: PaneId): void;
@@ -44,6 +70,7 @@ function makePaneId(): PaneId {
 function applyCommand(
   layout: WorkspaceLayout,
   command: WorkspaceCommand,
+  measured: Readonly<Record<PaneId, PaneRect>>,
 ): WorkspaceLayout {
   switch (command.type) {
     case "split": {
@@ -57,10 +84,30 @@ function applyCommand(
       return closePane(layout, focusedPaneId);
     }
     case "focus":
-      return moveFocus(layout, command.direction);
+      return moveFocus(layout, command.direction, measured);
     default:
       return layout;
   }
+}
+
+// Reads every registered tile's box at the moment the command is dispatched.
+// Measured then rather than tracked continuously: a resize observer would
+// re-render the whole surface on every drag frame to keep a value only these
+// four keys ever read.
+function measurePanes(
+  elements: ReadonlyMap<PaneId, Element>,
+): Record<PaneId, PaneRect> {
+  const measured: Record<PaneId, PaneRect> = {};
+  for (const [paneId, element] of elements) {
+    const box = element.getBoundingClientRect();
+    measured[paneId] = {
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+    };
+  }
+  return measured;
 }
 
 export function useWorkspaceLayout(
@@ -89,8 +136,37 @@ export function useWorkspaceLayout(
     pruneNewChatDrafts(projectId, Object.keys(layout.panes));
   }, [projectId, layout]);
 
+  const paneElements = useRef(new Map<PaneId, Element>());
+  const [paneFocusIntent, setPaneFocusIntent] = useState(0);
+
+  const registerPaneElement = useCallback(
+    (paneId: PaneId, element: Element | null) => {
+      if (element === null) paneElements.current.delete(paneId);
+      else paneElements.current.set(paneId, element);
+    },
+    [],
+  );
+
+  // Computed against `layoutRef` rather than inside a functional updater, for
+  // the same reason `close` is: the OUTCOME decides something outside the
+  // layout (whether DOM focus moves), and an updater's return value is not
+  // reachable from here. `layoutRef` is assigned during render, so this is
+  // the layout that is on screen when the key is pressed.
   const dispatch = useCallback((command: WorkspaceCommand) => {
-    setLayout((current) => applyCommand(current, command));
+    const current = layoutRef.current;
+    const next = applyCommand(
+      current,
+      command,
+      measurePanes(paneElements.current),
+    );
+    if (next === current) return;
+    layoutRef.current = next;
+    setLayout(next);
+    // Only when the command actually landed somewhere else. A direction key
+    // at the edge of the layout is a no-op now, and a no-op must not yank DOM
+    // focus off whatever the user was on.
+    if (next.focusedPaneId !== current.focusedPaneId)
+      setPaneFocusIntent((intent) => intent + 1);
   }, []);
 
   const assignThreadToPane = useCallback(
@@ -158,6 +234,8 @@ export function useWorkspaceLayout(
   return {
     layout,
     dispatch,
+    registerPaneElement,
+    paneFocusIntent,
     assignThreadToPane,
     newPane,
     focus,
