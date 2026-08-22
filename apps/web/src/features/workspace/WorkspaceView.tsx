@@ -8,6 +8,8 @@ import {
 
 import {
   detectPlatform,
+  isTextEntryTarget,
+  normalizeKey,
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
@@ -17,20 +19,11 @@ import { TilingSurface } from "./TilingSurface.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 
-// Browser Shift variants of "=" and "-" report as "+" and "_"; the
-// keybindings map the un-shifted key alongside a shiftKey flag, so normalize
-// back before resolving a command.
-function normalizeKey(key: string): string {
-  if (key === "+") return "=";
-  if (key === "_") return "-";
-  return key;
-}
-
 export function WorkspaceView(props: {
   projectId: ProjectId;
   // Reports whichever thread the focused pane owns, or null for a threadless
-  // pane / an empty surface. The workspace inspector is docked outside this
-  // component but must follow the focused pane rather than the URL, so the
+  // pane / an empty surface. The workspace panel is docked outside this
+  // component and opens new tabs against whichever thread is focused, so the
   // focus state has to travel upward (see App.tsx's ProjectWorkspace).
   onFocusedThreadChange?: ((threadId: ThreadId | null) => void) | undefined;
 }): JSX.Element {
@@ -105,14 +98,7 @@ export function WorkspaceView(props: {
       // Down select-to-start/end, Cmd+Shift+Backspace delete-to-start)
       // while the user is typing in a composer or the sidebar's rename
       // input — let the browser/input handle those untouched.
-      const target = event.target as HTMLElement | null;
-      if (
-        target !== null &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      )
-        return;
+      if (isTextEntryTarget(event.target)) return;
       const keyEventLike: KeyEventLike = {
         key: normalizeKey(event.key),
         metaKey: event.metaKey,

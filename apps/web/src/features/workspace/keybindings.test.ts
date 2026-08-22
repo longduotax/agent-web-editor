@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  asPanelCommand,
   detectPlatform,
   resolveCommand,
   shortcutKeys,
   WORKSPACE_KEYBINDINGS,
   type KeyEventLike,
+  type ModifierGroup,
   type Platform,
 } from "./keybindings.js";
 
@@ -152,21 +154,121 @@ describe("resolveCommand", () => {
     });
   });
 
+  // WSP-10: every panel action reachable by drag also has a chord, and the
+  // chords live in this same table so the Settings list cannot advertise one
+  // the handler does not dispatch.
+  describe("workspace panel (shift + primary + alt)", () => {
+    const panelChords: { key: string; command: unknown }[] = [
+      { key: "PageDown", command: { type: "panel-tab", direction: "next" } },
+      { key: "PageUp", command: { type: "panel-tab", direction: "previous" } },
+      { key: "Backspace", command: { type: "panel-close-tab" } },
+      { key: "End", command: { type: "panel-move-tab", direction: "next" } },
+      {
+        key: "Home",
+        command: { type: "panel-move-tab", direction: "previous" },
+      },
+      { key: "ArrowRight", command: { type: "panel-split", edge: "right" } },
+      { key: "ArrowLeft", command: { type: "panel-split", edge: "left" } },
+      { key: "ArrowDown", command: { type: "panel-split", edge: "bottom" } },
+      { key: "ArrowUp", command: { type: "panel-split", edge: "top" } },
+      { key: "Enter", command: { type: "panel-focus" } },
+      { key: " ", command: { type: "panel-toggle" } },
+    ];
+
+    for (const { key: pressed, command } of panelChords) {
+      it(`mac: shift+meta+alt+${pressed}`, () => {
+        expect(
+          resolveCommand(
+            key({ key: pressed, shiftKey: true, metaKey: true, altKey: true }),
+            mac,
+          ),
+        ).toEqual(command);
+      });
+
+      it(`other: shift+ctrl+alt+${pressed}`, () => {
+        expect(
+          resolveCommand(
+            key({ key: pressed, shiftKey: true, ctrlKey: true, altKey: true }),
+            other,
+          ),
+        ).toEqual(command);
+      });
+    }
+
+    // The three groups must stay disjoint, or one chord would silently
+    // shadow another: the panel group is the only one that holds Shift and
+    // Alt at once.
+    it("does not collide with the chat surface's groups", () => {
+      expect(
+        resolveCommand(
+          key({ key: "Backspace", shiftKey: true, metaKey: true }),
+          mac,
+        ),
+      ).toEqual({ type: "close" });
+      expect(
+        resolveCommand(
+          key({ key: "ArrowLeft", metaKey: true, altKey: true }),
+          mac,
+        ),
+      ).toEqual({ type: "focus", direction: "left" });
+    });
+
+    it("spells the three-modifier chord for each platform", () => {
+      const binding = WORKSPACE_KEYBINDINGS.find(
+        (candidate) => candidate.command.type === "panel-toggle",
+      );
+      if (binding === undefined) throw new Error("missing panel-toggle");
+      expect(shortcutKeys(binding, mac)).toEqual(["⇧", "⌘", "⌥", "Space"]);
+      expect(shortcutKeys(binding, other)).toEqual([
+        "Shift",
+        "Ctrl",
+        "Alt",
+        "Space",
+      ]);
+    });
+
+    it("separates panel commands from chat-surface commands", () => {
+      expect(asPanelCommand({ type: "panel-focus" })).toEqual({
+        type: "panel-focus",
+      });
+      expect(asPanelCommand({ type: "close" })).toBeNull();
+      expect(asPanelCommand({ type: "split", axis: "row" })).toBeNull();
+    });
+
+    it("advertises every panel command exactly once", () => {
+      const panelCommands = WORKSPACE_KEYBINDINGS.map(
+        (binding) => binding.command,
+      ).filter((command) => asPanelCommand(command) !== null);
+      expect(panelCommands).toHaveLength(11);
+      expect(new Set(panelCommands.map((c) => JSON.stringify(c))).size).toBe(
+        11,
+      );
+    });
+  });
+
   // The help list and the dispatcher read the same table, so a binding can
   // never be listed without working (or work without being listed).
   describe("WORKSPACE_KEYBINDINGS is the single source of truth", () => {
     it("resolves every advertised binding on both platforms", () => {
+      const modifiersByGroup: Record<
+        ModifierGroup,
+        { mac: Partial<KeyEventLike>; other: Partial<KeyEventLike> }
+      > = {
+        "shift-primary": {
+          mac: { shiftKey: true, metaKey: true },
+          other: { shiftKey: true, altKey: true },
+        },
+        "primary-alt": {
+          mac: { metaKey: true, altKey: true },
+          other: { ctrlKey: true, altKey: true },
+        },
+        "shift-primary-alt": {
+          mac: { shiftKey: true, metaKey: true, altKey: true },
+          other: { shiftKey: true, ctrlKey: true, altKey: true },
+        },
+      };
       for (const binding of WORKSPACE_KEYBINDINGS) {
-        const modifiers =
-          binding.group === "shift-primary"
-            ? {
-                mac: { shiftKey: true, metaKey: true },
-                other: { shiftKey: true, altKey: true },
-              }
-            : {
-                mac: { metaKey: true, altKey: true },
-                other: { ctrlKey: true, altKey: true },
-              };
+        const modifiers = modifiersByGroup[binding.group];
         expect(
           resolveCommand(key({ key: binding.key, ...modifiers.mac }), mac),
           `${binding.label} on mac`,
