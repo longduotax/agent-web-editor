@@ -5,6 +5,9 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import { TabStrip } from "./TabStrip.js";
@@ -93,6 +96,12 @@ function renderStrip(
     />,
   );
   return actions;
+}
+
+// The shipped stylesheet, resolved from this file rather than from the
+// working directory, so the assertion below reads what the app loads.
+function stylesheetPath(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../styles.css");
 }
 
 describe("TabStrip", () => {
@@ -247,6 +256,32 @@ describe("TabStrip", () => {
     expect(
       screen.queryByRole("button", { name: "Close workspace panel" }),
     ).not.toBeInTheDocument();
+  });
+
+  // D3. The affordance used to rest at `opacity: 0`, which hides an element
+  // from view but leaves it fully hit-testable — so on a device with no
+  // hover, the right edge of every inactive tab was an invisible close
+  // button. This reads the shipped stylesheet rather than a copy of it,
+  // because the defect lived entirely in the CSS.
+  it("puts the per-tab close affordance out of reach until its tab is hovered or active", () => {
+    const style = document.createElement("style");
+    style.textContent = readFileSync(stylesheetPath(), "utf8");
+    document.head.appendChild(style);
+    renderStrip();
+
+    // Files is inactive and nothing is hovering it: a tap landing here must
+    // reach the tab, not the affordance.
+    const inactive = screen.getByTitle("Close Files");
+    expect(getComputedStyle(inactive).visibility).toBe("hidden");
+    expect(getComputedStyle(inactive).pointerEvents).toBe("none");
+
+    const active = within(
+      screen.getByRole("tab", { name: "Changes" }),
+    ).getByTitle("Close Changes");
+    expect(getComputedStyle(active).visibility).toBe("visible");
+    expect(getComputedStyle(active).pointerEvents).toBe("auto");
+
+    style.remove();
   });
 
   it("has no axe violations", async () => {

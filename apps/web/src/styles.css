@@ -1491,15 +1491,30 @@ a:focus-visible {
   white-space: nowrap;
   font-size: 0.66rem;
 }
+/* At rest this affordance is not merely invisible, it is not there to be
+   hit: `opacity: 0` removes an element from view but not from hit testing,
+   and a touch device never hovers — so the right ~1rem of every inactive tab
+   was an invisible close button, and a tap meant to switch tabs closed one
+   instead (D3). */
 .panel-tab-close {
   flex: none;
   color: var(--muted);
-  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
   font-size: 0.9rem;
 }
-.panel-tab:hover .panel-tab-close,
 .panel-tab.active .panel-tab-close {
-  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+/* Reveal-on-hover is for pointers that can hover. On a touch device this
+   rule never applies, so the affordance stays out of reach and the active
+   tab's control above is the pointer route to closing a tab. */
+@media (hover: hover) {
+  .panel-tab:hover .panel-tab-close {
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 .panel-close-tab,
 .panel-new-tab-button {
