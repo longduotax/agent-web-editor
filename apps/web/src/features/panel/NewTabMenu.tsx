@@ -49,7 +49,8 @@ export function NewTabMenu({
 }: {
   /** The focused chat pane's execution scope, or null when none owns one. */
   context: TabContext | null;
-  groupId: GroupId;
+  /** Where the tab lands; omitted when the panel has no group at all yet. */
+  groupId?: GroupId | undefined;
   actions: PanelActions;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -115,7 +116,10 @@ export function NewTabMenu({
                   disabled={tab === null}
                   onClick={() => {
                     if (tab === null) return;
-                    actions.openTab(tab, { groupId });
+                    actions.openTab(
+                      tab,
+                      groupId === undefined ? undefined : { groupId },
+                    );
                     setOpen(false);
                   }}
                 >

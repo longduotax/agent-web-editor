@@ -4,7 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { getFiles } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { useDebouncedValue } from "../../components/useDebouncedValue.js";
-import { UnboundNotice } from "./tabBody.js";
+import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
 // How many file rows are painted at once. The unsearched listing on a real
@@ -41,6 +41,7 @@ export const FilesTab = memo(function FilesTab({
       );
     },
     enabled: visible && context !== null,
+    staleTime: PANEL_QUERY_STALE_TIME,
     // A full recursive listing takes hundreds of milliseconds to seconds on
     // a real repository, so the previous result stays on screen instead of
     // the list blanking to "Listing files…" between searches (WSP-09).

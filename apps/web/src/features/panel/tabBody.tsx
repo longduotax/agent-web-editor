@@ -8,6 +8,19 @@ import type { PanelActions } from "./usePanelState.js";
 // mounted when it is hidden — that is what keeps its scroll position and its
 // data — but every query and timer inside it is gated on this flag.
 
+/**
+ * How long a tab body's data is trusted without asking again.
+ *
+ * WSP-09 requires that switching between open tabs never re-fetches what the
+ * tab already has. A query gated on visibility is otherwise refetched the
+ * moment it is re-enabled, because react-query treats it as stale
+ * immediately — so switching away and back would cost a request every time.
+ * Beyond this window the tab does refetch, but in the background: the
+ * retained content stays on screen, so nothing blanks and no scroll position
+ * is lost.
+ */
+export const PANEL_QUERY_STALE_TIME = 30_000;
+
 export interface TabBodyProps<Type extends PanelTab["type"]> {
   tab: Extract<PanelTab, { type: Type }>;
   visible: boolean;

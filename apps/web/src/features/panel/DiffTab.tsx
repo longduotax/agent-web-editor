@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getDiff } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { DiffText } from "./DiffText.js";
-import { UnboundNotice } from "./tabBody.js";
+import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
 // One path's working-tree diff (WSP-06). This is the ported rendering:
@@ -25,6 +25,7 @@ export const DiffTab = memo(function DiffTab({
       return await getDiff(context.projectId, context.threadId, tab.path);
     },
     enabled: visible && context !== null,
+    staleTime: PANEL_QUERY_STALE_TIME,
   });
 
   if (context === null) return <UnboundNotice />;

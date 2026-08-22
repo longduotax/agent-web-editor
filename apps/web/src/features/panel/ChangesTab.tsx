@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getStatus } from "../../api/client.js";
 import { summarizeChanges } from "../../components/changesSummary.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
-import { UnboundNotice } from "./tabBody.js";
+import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
 // The working-tree status of one execution scope (WSP-06). Labelled as the
@@ -25,6 +25,7 @@ export const ChangesTab = memo(function ChangesTab({
       return await getStatus(context.projectId, context.threadId);
     },
     enabled: visible && context !== null,
+    staleTime: PANEL_QUERY_STALE_TIME,
   });
 
   if (context === null) return <UnboundNotice />;
