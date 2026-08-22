@@ -1475,7 +1475,23 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       inaccurately that it pointed nowhere. The scope addition — line numbers
       in the source view — is proposed as **specification version 3, Draft,
       product approval pending**. See Discoveries and blockers.
-- [ ] Milestone 6 — Diff tab, structured unified diff
+- [x] Milestone 6 — Diff tab, structured unified diff. Shipped 2026-08-23:
+      `parseUnifiedDiff.ts` (a pure reader with 26 cases over fixtures
+      captured from real `git diff` output), a rewritten `DiffTab.tsx`
+      (labelled sections, per-hunk disclosures, two `::before` gutters, a
+      pinned header with the file's own add and delete counts, and an
+      explicit notice for every bound and every refusal), `HeaderPath.tsx`
+      (the File tab's two-span path, extracted rather than copied, so J1
+      cannot come back in a second header), the diff palette and its
+      contrast cases in `styles.test.ts`, and `inspector/git.test.ts`
+      against a real repository. 55 new unit cases and six new end-to-end
+      cases; `DiffText.tsx` and `components/diffLines.ts` are deleted, the
+      parser having superseded both. Two gaps in the Changes half were
+      closed while verifying it: a kind letter that gave `C` to both
+      "copied" and "conflicted", and a status list with no render budget.
+      **Its standing hands-on UI pass is still owed** — it has not been
+      driven in a real browser by a person, and every milestone from 3
+      onwards has had one find something the automated suite could not.
 - [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
       workaround retired
@@ -2583,7 +2599,127 @@ Recorded so neither is re-reported as a bug.
   workspace did not answer in time. Try again." with a Retry. Working as
   designed.
 
+## Discoveries from milestone 6
+
+Recorded here rather than in a commit message because each is a trap the
+next milestone can walk into.
+
+- **The `.file-list` class belongs to two tabs, and a hidden tab is still in
+  the DOM.** The end-to-end README search asserted `.file-list li` had
+  exactly one row. It had six the moment the fixture became a real
+  repository, because the Changes tab uses the same markup and WSP-09 keeps
+  a hidden body **mounted** — the whole reason a tab keeps its scroll
+  position. Every panel selector in an end-to-end spec has to be scoped to
+  `[role="tabpanel"]:not([hidden])`, and the ones that are not are latent
+  failures waiting for another tab to have content.
+- **`npx playwright test` runs the last build, not the working tree.** Half
+  an hour went into a Diff tab that rendered its previous version, because
+  `pnpm test:e2e` builds first and running Playwright directly does not.
+  Anything measured against a stale bundle is measured against the last
+  milestone.
+- **A test that waits for a control is not waiting for the content.** The
+  milestone-5 bundle case waited for the `Copy contents` button, which the
+  File tab renders while the read is still in flight; it passed by timing.
+  It now waits for the truncation notice, which exists only once the read
+  has answered. Nothing about the tab changed.
+- **`git status` is not a stable premise for `git diff`.** The design
+  boundary says the server makes no such claim, and the browser now shows
+  what that means: `git_path_not_changed` is rendered as an ordinary state —
+  "this file has no changes in this worktree any more" with a Retry — and
+  not as an error, because a file that was reverted or committed between the
+  list and the fetch is a thing that happens, not a fault.
+- **A hidden hunk body is still findable.** `getByText(...).toHaveCount(0)`
+  passes only if the element is gone; the collapse hides it, so the
+  assertion is `toBeHidden()`. Unmounting it instead would have made the
+  test simpler and the product worse: expanding would re-do the layout every
+  time.
+- **The design document describes an untracked preview the server does not
+  build.** [Inspector and terminal](../../design/inspector-and-terminal.md)
+  said untracked files "use an application-generated `/dev/null`-style
+  unified preview from bounded file content"; the server has always used
+  Git's own `--no-index` comparison against `/dev/null`, which is a
+  different mechanism with the same shape and the same bounds. The sentence
+  is corrected to describe what runs. The call also gained `--no-ext-diff`,
+  which it was the only Git call in this application missing — a user's
+  `diff.external` would otherwise have decided what an untracked file's
+  preview looks like.
+- **The Changes tab's kind letter collided, and its list had no bound.**
+  Both found while verifying that WSP-06's Changes half still held. The
+  letter was the first character of the kind's name, which gives `C` to
+  "copied" and to "conflicted": between those two the distinction really was
+  carried by colour alone, which is the thing WSP-06 forbids. The letters
+  are Git's own now (`?` untracked, `U` unmerged) and each row carries the
+  kind as a word as well. The list painted every path the status returned,
+  where WSP-09 names status lists in the same breath as file listings and
+  diffs; it is bounded at 200 with a notice, and the summary above it still
+  counts every change.
+- **Left undone, deliberately: the change-kind chips are not in the contrast
+  test.** `.change-kind` paints its colours through `color-mix()`, which
+  `styles.test.ts` cannot resolve — its colour reader understands hex and
+  `rgb()`. The chips predate this milestone and are unchanged by it, but
+  they are the one remaining place in the panel where a colour that carries
+  meaning is not measured. Either the test learns `color-mix`, or the chips
+  become resolved tokens like the diff's.
+
 ## Decision and revision log
+
+- 2026-08-23: **A hunk is identified by its own changed lines, not by its
+  position or its header.** The collapse a user sets has to survive a
+  refetch, a reload, and a drag between groups (WSP-04), which means the
+  identity has to be stable across those. An index churns the moment a hunk
+  is added above it: every collapse below would move down one hunk. The
+  header churns for the same reason in different clothes, because
+  `@@ -12,7 +12,9 @@` is rewritten whenever anything above the hunk changes
+  size — so an edit somewhere else in the file would lose a collapse the
+  user set here. The identity is therefore `section:digest:ordinal`, where
+  the digest is a 32-bit FNV-1a of the hunk's `+`/`-` lines and the ordinal
+  distinguishes two hunks making the identical change. The context lines are
+  excluded on purpose: two edits close enough for Git to merge their hunks
+  read as one hunk with more context, and a collapse should survive that.
+  What this identity does NOT survive is an edit to the hunk's own change —
+  which is the case where re-expanding is the honest default, because what
+  the user collapsed is not what is there any more. Rejected: hashing the
+  whole hunk, which churns on the common case to fix the rare one.
+
+- 2026-08-23: **No syntax highlighting inside the diff, stated rather than
+  omitted.** WSP-06 does not ask for it, and consistency with the File tab
+  is a real argument for it. It is declined on three grounds. The diff
+  already paints two backgrounds that carry meaning, and a token colour
+  chosen against the plain code surface is not the same colour against a
+  green or a red wash — so `styles.test.ts` would have to measure eleven
+  `--code-*` tokens against three surfaces in two themes, and several of
+  them would fail, which is the J2 defect re-created deliberately. The
+  reader of a diff is reading the change, and the `+`/`-` prefix plus the
+  wash is what carries it. And a lazy grammar chunk per language, per hunk,
+  inside a bounded render is a cost this tab does not need to pay to be
+  legible. If it is ever added, the contrast matrix is the gate, not the
+  appearance.
+
+- 2026-08-23: **The render budget is applied to what is materialized, and
+  the counts are of the whole change.** The parser walks the entire section
+  either way — the walk is one pass over a string — but stops building line
+  objects at 1,000 lines or 256 KiB, whichever bites first, and names the
+  one that did. So the header's "12 added, 3 deleted" is the file's own
+  change even when the body below it is a bounded portion, and the notice
+  says what portion of what. Counting the painted portion and presenting it
+  as the total is exactly the defect J7 fixed on the File tab. The two
+  bounds are half the File tab's, because a Diff tab paints two sections and
+  should cost what one file preview costs.
+
+- 2026-08-23: **A merge's combined diff is shown as Git wrote it, and said
+  to be.** `git diff` on an unmerged path emits `@@@` headers and two prefix
+  columns, in which "the old side" is not one file. A two-gutter rendering
+  of that would be a confident lie, so the section renders as raw text with
+  a sentence explaining why. The same route carries anything else the parser
+  cannot account for, which is how "degrades to the raw text rather than
+  throwing" is implemented: there is no input for which this tab shows
+  nothing.
+
+- 2026-08-23: **The collapsed-hunk record is bounded at 200 entries.**
+  Identity is content-derived, so editing a file leaves behind the
+  identities of the hunks it used to have, and a device-local record that
+  only ever grows is a defect with a long fuse. The most recent entries are
+  kept, because they are the ones that still name something on screen.
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the
   transcript's.** `components/Markdown.tsx` renders assistant messages: content
