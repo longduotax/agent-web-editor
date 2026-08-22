@@ -179,6 +179,19 @@ function safeError(error: unknown): {
         code: "invalid_path",
         message: "The requested path is not permitted.",
       },
+      // `.git` is excluded from every file route in both modes, whether it
+      // is walked into or asked for by name (H2).
+      path_excluded: {
+        status: 403,
+        code: "path_excluded",
+        message: "The requested path is not available.",
+      },
+      path_ignored: {
+        status: 403,
+        code: "path_ignored",
+        message:
+          "The requested path is hidden by this workspace's ignore rules.",
+      },
       git_unavailable: {
         status: 409,
         code: "git_unavailable",

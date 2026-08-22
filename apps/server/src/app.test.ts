@@ -290,6 +290,49 @@ describe("credential-free project API", () => {
     ]) {
       expect((await list(rejected)).status).toBe(400);
     }
+
+    // The filter used to be applied to entries encountered while walking and
+    // never to the requested root, so a directory with no row to click was
+    // reachable by asking for it (H2). Each of these answered 200.
+    const excluded = await list("?path=.git&depth=1");
+    expect(excluded.status).toBe(403);
+    expect(excluded.body).toEqual({
+      error: {
+        code: "path_excluded",
+        message: "The requested path is not available.",
+      },
+    });
+    expect((await list("?path=.git/config&depth=1")).status).toBe(403);
+    expect((await list("?path=.git&depth=1&showIgnored=true")).status).toBe(
+      403,
+    );
+    const ignoredRoot = await list("?path=node_modules&depth=1");
+    expect(ignoredRoot.status).toBe(403);
+    expect(ignoredRoot.body).toEqual({
+      error: {
+        code: "path_ignored",
+        message:
+          "The requested path is hidden by this workspace's ignore rules.",
+      },
+    });
+    // ...and the opt-in that reveals it in a listing also opens it.
+    expect(
+      (await list("?path=node_modules&depth=1&showIgnored=true")).status,
+    ).toBe(200);
+
+    // Containment itself was never at fault and stays where it was.
+    expect((await list("?path=../../../etc&depth=1")).status).toBe(400);
+
+    const read = async (query: string) => {
+      const response = await server.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}/threads/${thread.id}/file${query}`,
+        headers: { host },
+      });
+      return response.statusCode;
+    };
+    // `.git/config` returned the file, remote URL and all.
+    expect(await read("?path=.git/config")).toBe(403);
     await server.close();
   });
 

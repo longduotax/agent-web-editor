@@ -367,3 +367,42 @@ describe("a tracked file is never ignored", () => {
     expect(tree.ignoredHidden).toBe(false);
   });
 });
+
+describe("the requested root obeys the same rules as any entry", () => {
+  it("refuses `.git` outright, in both modes", async () => {
+    const root = await repository();
+    await mkdir(join(root, ".git", "refs"), { recursive: true });
+    for (const showIgnored of [false, true]) {
+      await expect(
+        listProjectFiles(root, { depth: "1", path: ".git", showIgnored }),
+      ).rejects.toThrow("path_excluded");
+      await expect(
+        listProjectFiles(root, { depth: "1", path: ".git/refs", showIgnored }),
+      ).rejects.toThrow("path_excluded");
+    }
+    await expect(previewProjectFile(root, ".git/secret")).rejects.toThrow(
+      "path_excluded",
+    );
+  });
+
+  it("refuses an ignored directory unless ignored paths were asked for", async () => {
+    const root = await repository();
+    await expect(
+      listProjectFiles(root, { depth: "1", path: "node_modules" }),
+    ).rejects.toThrow("path_ignored");
+    const revealed = await listProjectFiles(root, {
+      depth: "1",
+      path: "node_modules",
+      showIgnored: true,
+    });
+    expect(revealed.entries.map((entry) => entry.path)).toContain(
+      "node_modules/@babel",
+    );
+  });
+
+  it("opens an ignored directory that holds something tracked", async () => {
+    const root = await trackedRepository();
+    const tree = await listProjectFiles(root, { depth: "1", path: "dist" });
+    expect(tree.entries.map((entry) => entry.path)).toEqual(["dist/keep.js"]);
+  });
+});

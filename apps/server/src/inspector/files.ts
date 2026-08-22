@@ -31,6 +31,20 @@ function isContained(root: string, target: string): boolean {
   return target === root || target.startsWith(`${root}${sep}`);
 }
 
+/**
+ * Whether this path is inside the repository's own machinery.
+ *
+ * The traversal has always skipped `.git` while walking, and the filter was
+ * never applied to the path the request itself named — so `path=.git` listed
+ * it, and `path=.git/config` read it, remote URL and all (H2). It is refused
+ * here, at the resolve step every file route goes through, so the requested
+ * root is subject to exactly the rule an entry is. It is not an ignore rule
+ * and the `showIgnored` opt-in does not reveal it.
+ */
+function isGitInternal(relativePath: string): boolean {
+  return relativePath.split("/").includes(".git");
+}
+
 export async function resolveContained(
   rootPath: string,
   rawRelativePath: unknown,
@@ -41,6 +55,7 @@ export async function resolveContained(
     return { root, target: root, relativePath: "" };
   const relativePath = parseRelativePath(rawRelativePath);
   if (isAbsolute(relativePath)) throw new Error("path_escape");
+  if (isGitInternal(relativePath)) throw new Error("path_excluded");
   const lexical = resolve(root, ...relativePath.split("/"));
   if (!isContained(root, lexical)) throw new Error("path_escape");
   const target = await realpath(lexical);
@@ -116,6 +131,15 @@ export async function listProjectFiles(
   const tracked: TrackedIndex | null = showIgnored
     ? null
     : await loadTrackedPaths(root);
+  // The requested root is an entry like any other (H2). An ignored directory
+  // is refused unless the caller opted in — and, as in the walk, a directory
+  // holding something tracked is not ignored at all.
+  const rootIgnored =
+    !showIgnored &&
+    resolved.relativePath !== "" &&
+    isIgnored(baseLayers, resolved.relativePath, true) &&
+    !isTracked(tracked, resolved.relativePath);
+  if (rootIgnored) throw new Error("path_ignored");
 
   function atCapacity(): boolean {
     return (
