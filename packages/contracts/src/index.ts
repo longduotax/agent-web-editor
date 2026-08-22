@@ -10,6 +10,12 @@ export const TerminalIdSchema = uuid.brand<"TerminalId">();
 export const SessionIdSchema = uuid.brand<"SessionId">();
 export const IdempotencyKeySchema = uuid.brand<"IdempotencyKey">();
 export const TimestampSchema = z.iso.datetime({ offset: true });
+// A chat's agent backend. It is chosen once, at creation, and is immutable for
+// the life of the chat: a chat is continued by resuming that backend's own
+// native session, and no transcript or tool history transfers between agents.
+export const RuntimeKindSchema = z.enum(["pi", "codex"]);
+export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
+
 export const RunStateSchema = z.enum([
   "running",
   "completed",
@@ -98,6 +104,7 @@ export const ThreadSummarySchema = z.object({
   runState: RunStateSchema.nullable(),
   unread: z.boolean(),
   runtimeAvailable: z.boolean(),
+  runtime: RuntimeKindSchema,
   workspace: ThreadWorkspaceSummarySchema,
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
@@ -217,6 +224,7 @@ export const StartThreadRequestSchema = z
   .object({
     prompt: z.string().trim().min(1).max(200_000),
     workspace: ThreadWorkspaceRequestSchema,
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -240,6 +248,7 @@ export const RemoveProjectRequestSchema = z
 export const CreateThreadRequestSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -271,6 +280,7 @@ export const ImportThreadRequestSchema = z
   .object({
     runtimeSessionId: SessionIdSchema,
     title: z.string().trim().min(1).max(200).optional(),
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -299,6 +309,7 @@ export const SessionDescriptorSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   preview: z.string().max(500),
   imported: z.boolean(),
+  runtime: RuntimeKindSchema,
 });
 export const SessionsResponseSchema = z.object({
   sessions: z.array(SessionDescriptorSchema),

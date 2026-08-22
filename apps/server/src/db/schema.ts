@@ -65,6 +65,9 @@ export const threads = sqliteTable(
       .notNull()
       .references(() => projects.id),
     title: text("title").notNull(),
+    runtime: text("runtime", { enum: ["pi", "codex"] })
+      .notNull()
+      .default("pi"),
     runtimeSessionId: text("runtime_session_id").notNull(),
     createdAt: text("created_at").notNull(),
     lastActivityAt: text("last_activity_at").notNull(),
@@ -76,6 +79,7 @@ export const threads = sqliteTable(
   (table) => [
     uniqueIndex("threads_project_runtime_unique").on(
       table.projectId,
+      table.runtime,
       table.runtimeSessionId,
     ),
     uniqueIndex("threads_id_project_unique").on(table.id, table.projectId),
@@ -141,6 +145,9 @@ export const threadCreationOperations = sqliteTable(
     workspaceMode: text("workspace_mode", {
       enum: ["shared", "worktree"],
     }).notNull(),
+    runtime: text("runtime", { enum: ["pi", "codex"] })
+      .notNull()
+      .default("pi"),
     baseBranch: text("base_branch"),
     sourceChanges: text("source_changes", {
       enum: ["none", "tracked_and_untracked"],

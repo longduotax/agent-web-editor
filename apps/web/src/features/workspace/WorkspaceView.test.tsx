@@ -70,6 +70,7 @@ function makeSnapshot(id: ThreadId, title: string): ThreadSnapshot {
       runState: null,
       unread: false,
       runtimeAvailable: true,
+      runtime: "pi" as const,
       workspace: { mode: "shared", branchName: null, available: true },
     },
     transcript: [],

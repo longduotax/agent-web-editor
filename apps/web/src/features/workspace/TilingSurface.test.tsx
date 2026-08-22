@@ -83,6 +83,7 @@ const snapshot: ThreadSnapshot = {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared", branchName: null, available: true },
   },
   transcript: [],

@@ -1,6 +1,6 @@
 # Codex agent runtime implementation plan
 
-**Status:** Ready
+**Status:** Active
 
 **Plan version:** 1
 
@@ -171,7 +171,7 @@ app-server is an **external program**, so everything it emits is untrusted.
 Tasks are ordered so each is independently verifiable. Every task is TDD: write
 the failing test, watch it fail, implement, watch it pass, commit.
 
-- [ ] **Task 1 — Runtime kind in the transport contract.** Add
+- [x] **Task 1 — Runtime kind in the transport contract.** Add
       `RuntimeKindSchema = z.enum(["pi", "codex"])` and `RuntimeKind` to
       `packages/contracts/src/index.ts`; add required `runtime` to `ThreadSummary`;
       add optional `runtime` to `StartThreadRequest`, `CreateThreadRequest`, and
@@ -179,7 +179,7 @@ the failing test, watch it fail, implement, watch it pass, commit.
       `packages/contracts/src/index.test.ts` cover accept/reject and the optionality.
       Verify: `pnpm --filter @pi-web/contracts exec vitest run`.
 
-- [ ] **Task 2 — Persist the discriminator.** Add `runtime` to the `threads` and
+- [x] **Task 2 — Persist the discriminator.** Add `runtime` to the `threads` and
       `thread_creation_operations` tables in `apps/server/src/db/schema.ts`; write
       `apps/server/migrations/0008_thread_runtime.sql` adding both columns with
       `DEFAULT 'pi' NOT NULL`, backfilling existing rows to `'pi'`, and replacing
@@ -284,13 +284,17 @@ the failing test, watch it fail, implement, watch it pass, commit.
 
 Focused, per task:
 
+Vitest is configured once at the repository root (`vitest.config.ts` includes
+`apps/**` and `packages/**`), so a `--filter … exec vitest` invocation finds no
+test files. Run focused suites from the root by path:
+
 ```sh
-pnpm --filter @pi-web/contracts exec vitest run
-pnpm --filter @pi-web/codex-adapter exec vitest run
-pnpm --filter @pi-web/server exec vitest run src/db/store.test.ts
-pnpm --filter @pi-web/server exec vitest run src/app.test.ts src/config.test.ts
-pnpm --filter @pi-web/web exec vitest run src/features/workspace
-pnpm --filter @pi-web/web exec vitest run src/features/settings
+pnpm exec vitest run packages/contracts
+pnpm exec vitest run packages/codex-adapter
+pnpm exec vitest run apps/server/src/db/store.test.ts
+pnpm exec vitest run apps/server/src/app.test.ts apps/server/src/config.test.ts
+pnpm exec vitest run apps/web/src/features/workspace
+pnpm exec vitest run apps/web/src/features/settings
 ```
 
 Final, before completion:
@@ -332,8 +336,12 @@ output in Progress:
 
 ## Progress
 
-Not started. Both approvals were granted on 2026-08-22; implementation begins at
-Task 1 and this plan moves to Active with the first production edit.
+Both approvals granted 2026-08-22. Implementation in progress; see the task
+checkboxes above for the current position.
+
+- 2026-08-22: `pnpm install` in the worktree, then `pnpm check` green as a
+  pre-change baseline.
+- 2026-08-22: Tasks 1 and 2 complete. `pnpm check` green (364 unit tests).
 
 ## Discoveries and blockers
 
@@ -347,6 +355,35 @@ Discovered during investigation on 2026-08-22, before drafting:
 - Codex thread ids are UUIDv7, so `SessionIdSchema` needs no change.
 - `suggestTitle` is optional at `apps/server/src/domain/workspace.ts:281` with a
   deterministic fallback, so the Codex adapter can ship without naming.
+
+Discovered while implementing Tasks 1 and 2:
+
+- **The per-package verify commands in this plan were wrong.** Vitest is
+  configured once at the repository root, so `pnpm --filter <pkg> exec vitest`
+  reports "No test files found". Corrected in Verification above.
+- **`threads_project_runtime_unique` was never a named index.** It is the table
+  constraint `UNIQUE(project_id, runtime_session_id)` from `0001_initial.sql`,
+  backed by an autoindex SQLite refuses to drop ("index associated with UNIQUE
+  or PRIMARY KEY constraint cannot be dropped"). Widening the key therefore
+  needs the documented rebuild-and-rename procedure, with foreign keys disabled
+  around it — SQLite only permits that pragma outside a transaction — and a
+  `foreign_key_check` _inside_ the transaction so a violation rolls the rebuild
+  back instead of committing a damaged schema. The plan's stated outcome is
+  unchanged, so this is mechanism, not a material migration change. Verified
+  against a seeded copy of the real schema before writing the migration:
+  references from `runs(thread_id, project_id)` survive the rename intact.
+- **Tasks 1 and 2 cannot land separately.** Making `runtime` required on
+  `ThreadSummary` breaks 30 server tests until persistence supplies it, because
+  `threadDto` parses through `ThreadSummarySchema` at runtime. They were
+  committed together to keep the branch green.
+- **`threadDto` is not statically typed against its schema.** It parses an
+  object literal through `ThreadSummarySchema.parse`, so `tsc` did not flag the
+  missing field — only the tests did. Task 9 should not rely on typecheck to
+  catch DTO drift.
+- **Adding a schema version invalidates hard-coded fixtures.** Three existing
+  migration tests asserted `user_version` 7 or used 8 as "a newer schema";
+  two also downgrade by dropping columns, which SQLite refuses once `runtime`
+  participates in a constraint. All were updated to rebuild instead.
 
 No blockers.
 

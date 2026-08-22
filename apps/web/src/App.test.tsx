@@ -110,6 +110,7 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
       transcript: [],
@@ -182,6 +183,7 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
       transcript: [],
@@ -324,6 +326,7 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
       transcript: [],
@@ -477,6 +480,7 @@ describe("safe and accessible workspace rendering", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -494,6 +498,7 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
       transcript: [],
@@ -938,6 +943,7 @@ describe("inspector follows the focused pane", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -1350,6 +1356,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -1420,6 +1427,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -1534,6 +1542,7 @@ describe("inspector Files tab search", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -1657,6 +1666,7 @@ describe("inspector Changes tab states", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 

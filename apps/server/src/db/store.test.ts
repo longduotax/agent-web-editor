@@ -36,6 +36,7 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/example-project", "Example");
     const thread = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
       "Work",
     );
@@ -66,10 +67,12 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const first = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
     );
     const second = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000002",
     );
     const firstRun = store.createRun(
@@ -111,12 +114,14 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const remaining = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
       "Remaining",
     );
     now = "2026-08-15T12:01:00.000Z";
     const archived = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000002",
       "Archive me",
     );
@@ -188,6 +193,7 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const thread = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
     );
     store.createRun(
@@ -211,6 +217,7 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const thread = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
     );
     store.removeProject(project.id);
@@ -240,6 +247,7 @@ describe("metadata persistence", () => {
       workspaceMode: "worktree",
       baseBranch: "main",
       sourceChanges: "none",
+      runtime: "pi",
     });
     store.nameThreadCreation(
       project.id,
@@ -330,9 +338,14 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const first = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
     );
-    store.createThread(project.id, "10000000-0000-4000-8000-000000000002");
+    store.createThread(
+      project.id,
+      "pi",
+      "10000000-0000-4000-8000-000000000002",
+    );
     const historical = store.createRun(
       project.id,
       first.id,
@@ -342,9 +355,33 @@ describe("metadata persistence", () => {
     store.close();
 
     const before = new Database(join(state, "metadata.sqlite"));
+    // `runtime` participates in the v8 uniqueness constraint, so the threads
+    // table is rebuilt back to its v1 shape rather than dropping columns.
+    before.pragma("foreign_keys = OFF");
     before.exec(
-      "DROP TABLE thread_creation_operations; DROP INDEX threads_worktree_unique; ALTER TABLE threads DROP COLUMN worktree_id; DROP TABLE worktrees; DROP INDEX threads_project_archive_activity_idx; ALTER TABLE threads DROP COLUMN archived_at; DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
+      `DROP TABLE thread_creation_operations;
+       CREATE TABLE threads_v1 (
+         id TEXT PRIMARY KEY NOT NULL,
+         project_id TEXT NOT NULL REFERENCES projects(id),
+         title TEXT NOT NULL,
+         runtime_session_id TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         last_activity_at TEXT NOT NULL,
+         last_completed_run_id TEXT,
+         last_viewed_completed_run_id TEXT,
+         UNIQUE(project_id, runtime_session_id),
+         UNIQUE(id, project_id)
+       );
+       INSERT INTO threads_v1 SELECT id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id FROM threads;
+       DROP TABLE threads;
+       ALTER TABLE threads_v1 RENAME TO threads;
+       CREATE INDEX threads_project_activity_idx ON threads(project_id, last_activity_at DESC);
+       DROP TABLE worktrees;
+       DROP INDEX runs_one_running_per_thread;
+       CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running';
+       PRAGMA user_version = 1;`,
     );
+    before.pragma("foreign_keys = ON");
     expect(before.pragma("user_version", { simple: true })).toBe(1);
     before.close();
 
@@ -357,7 +394,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(join(state, "metadata.sqlite"));
-    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(8);
     expect(
       migrated
         .prepare(
@@ -465,7 +502,7 @@ describe("metadata persistence", () => {
     const state = await stateDirectory();
     const databasePath = join(state, "metadata.sqlite");
     const newer = new Database(databasePath);
-    newer.pragma("user_version = 8");
+    newer.pragma("user_version = 9");
     newer.close();
 
     await expect(MetadataStore.open({ stateDirectory: state })).rejects.toThrow(
@@ -473,7 +510,7 @@ describe("metadata persistence", () => {
     );
 
     const unchanged = new Database(databasePath);
-    expect(unchanged.pragma("user_version", { simple: true })).toBe(8);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(9);
     unchanged.close();
   });
 
@@ -594,7 +631,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(databasePath);
-    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(8);
     expect(
       migrated
         .prepare(
@@ -628,10 +665,12 @@ describe("metadata persistence", () => {
     const project = store.registerProject("/tmp/project");
     const thread = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000001",
     );
     const secondThread = store.createThread(
       project.id,
+      "pi",
       "10000000-0000-4000-8000-000000000002",
     );
     const completed = store.createRun(
@@ -674,6 +713,151 @@ describe("metadata persistence", () => {
     if (recoveredThread === null) throw new Error("thread was not recovered");
     expect(store.isUnread(recoveredThread)).toBe(true);
     expect(store.unreadCount(project.id)).toBe(2);
+    store.close();
+  });
+});
+
+describe("agent backend persistence", () => {
+  it("records the backend a chat was created on", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-22T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/backends");
+    const codex = store.createThread(
+      project.id,
+      "codex",
+      "019fa011-c136-7dc0-8c67-e5f7926bd517",
+      "On Codex",
+    );
+    const pi = store.createThread(
+      project.id,
+      "pi",
+      "10000000-0000-4000-8000-000000000001",
+      "On Pi",
+    );
+    expect(codex.runtime).toBe("codex");
+    expect(pi.runtime).toBe("pi");
+    expect(store.getThread(project.id, codex.id)?.runtime).toBe("codex");
+    store.close();
+  });
+
+  it("keeps one session identifier distinct across backends", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-22T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/collision");
+    const shared = "10000000-0000-4000-8000-000000000009";
+    const pi = store.createThread(project.id, "pi", shared, "Pi side");
+    const codex = store.createThread(project.id, "codex", shared, "Codex side");
+    expect(pi.id).not.toBe(codex.id);
+    expect(store.getThreadByRuntimeSession(project.id, "pi", shared)?.id).toBe(
+      pi.id,
+    );
+    expect(
+      store.getThreadByRuntimeSession(project.id, "codex", shared)?.id,
+    ).toBe(codex.id);
+    // The same backend still owns a session exactly once per project.
+    expect(() =>
+      store.createThread(project.id, "pi", shared, "Duplicate"),
+    ).toThrow();
+    store.close();
+  });
+
+  it("backfills existing chats to Pi when upgrading a populated v7 database", async () => {
+    const state = await stateDirectory();
+    let store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-22T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/legacy");
+    const thread = store.createThread(
+      project.id,
+      "codex",
+      "10000000-0000-4000-8000-000000000021",
+      "Predates the choice",
+    );
+    store.close();
+
+    const before = new Database(join(state, "metadata.sqlite"));
+    // Undo the v8 rebuild: restore the v7 threads table, whose uniqueness key
+    // was a table constraint over (project_id, runtime_session_id) alone.
+    before.pragma("foreign_keys = OFF");
+    before.exec(
+      `CREATE TABLE threads_v7 (
+         id TEXT PRIMARY KEY NOT NULL,
+         project_id TEXT NOT NULL REFERENCES projects(id),
+         title TEXT NOT NULL,
+         runtime_session_id TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         last_activity_at TEXT NOT NULL,
+         last_completed_run_id TEXT,
+         last_viewed_completed_run_id TEXT,
+         archived_at TEXT,
+         worktree_id TEXT REFERENCES worktrees(id),
+         UNIQUE(project_id, runtime_session_id),
+         UNIQUE(id, project_id)
+       );
+       INSERT INTO threads_v7 SELECT id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, archived_at, worktree_id FROM threads;
+       DROP TABLE threads;
+       ALTER TABLE threads_v7 RENAME TO threads;
+       CREATE INDEX threads_project_activity_idx ON threads(project_id, last_activity_at DESC);
+       CREATE INDEX threads_project_archive_activity_idx ON threads(project_id, archived_at, last_activity_at DESC);
+       CREATE UNIQUE INDEX threads_worktree_unique ON threads(worktree_id) WHERE worktree_id IS NOT NULL;
+       ALTER TABLE thread_creation_operations DROP COLUMN runtime;
+       PRAGMA user_version = 7;`,
+    );
+    before.pragma("foreign_keys = ON");
+    expect(before.pragma("user_version", { simple: true })).toBe(7);
+    before.close();
+
+    store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-22T12:01:00.000Z",
+      id: ids(),
+    });
+    const upgraded = store.getThread(project.id, thread.id);
+    expect(upgraded?.runtime).toBe("pi");
+    expect(upgraded?.title).toBe("Predates the choice");
+    store.close();
+
+    const migrated = new Database(join(state, "metadata.sqlite"));
+    expect(migrated.pragma("user_version", { simple: true })).toBe(8);
+    migrated.close();
+  });
+
+  it("offers no way to change a chat's backend once it exists", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => "2026-08-22T12:00:00.000Z",
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/immutable");
+    const thread = store.createThread(
+      project.id,
+      "codex",
+      "10000000-0000-4000-8000-000000000031",
+      "Stays Codex",
+    );
+    store.renameThread(project.id, thread.id, "Renamed");
+    store.archiveThread(project.id, thread.id);
+    store.unarchiveThread(project.id, thread.id);
+    expect(store.getThread(project.id, thread.id)?.runtime).toBe("codex");
+
+    // A setter would make AGB-01 unenforceable, so assert none exists.
+    const surface = [
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(store)),
+    ].filter(
+      (name) => /runtime/i.test(name) && /^(set|update|change)/.test(name),
+    );
+    expect(surface).toEqual([]);
     store.close();
   });
 });

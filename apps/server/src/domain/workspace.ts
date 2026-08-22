@@ -25,6 +25,7 @@ import {
   type Project,
   type ProjectId,
   type Run,
+  type RuntimeKind,
   type ThreadId,
   type ThreadSnapshot,
   type ThreadSummary,
@@ -144,6 +145,7 @@ export class WorkspaceService {
       terminate: () => undefined,
     },
     private readonly worktreeManager = new GitWorktreeManager(),
+    private readonly runtimeKind: RuntimeKind = "pi",
   ) {
     this.executionContexts = new ThreadExecutionContextResolver(store);
   }
@@ -180,6 +182,7 @@ export class WorkspaceService {
       unread: this.store.isUnread(record),
       runtimeAvailable:
         record.worktree_id === null || worktree?.state === "ready",
+      runtime: record.runtime,
       workspace:
         worktree === null
           ? { mode: "shared", branchName: null, available: true }
@@ -259,6 +262,7 @@ export class WorkspaceService {
           projectId,
           idempotencyKey,
           requestHash: hash,
+          runtime: this.runtimeKind,
           workspaceMode: workspace.mode,
           baseBranch:
             workspace.mode === "worktree" ? workspace.baseBranch : null,
@@ -771,7 +775,13 @@ export class WorkspaceService {
           operation,
           hash,
           ThreadIdSchema,
-          () => this.store.createThread(projectId, created.sessionId, title).id,
+          () =>
+            this.store.createThread(
+              projectId,
+              this.runtimeKind,
+              created.sessionId,
+              title,
+            ).id,
         );
         return this.threadDto(this.requireThread(projectId, receipt.response));
       },
@@ -786,7 +796,12 @@ export class WorkspaceService {
       await this.requireProjectRoot(projectId),
     );
     return this.threadDto(
-      this.store.createThread(projectId, created.sessionId, title),
+      this.store.createThread(
+        projectId,
+        this.runtimeKind,
+        created.sessionId,
+        title,
+      ),
     );
   }
 
@@ -835,6 +850,7 @@ export class WorkspaceService {
             () =>
               this.store.createThread(
                 projectId,
+                this.runtimeKind,
                 descriptor.id,
                 title ??
                   descriptor.name ??
@@ -857,6 +873,7 @@ export class WorkspaceService {
     return this.threadDto(
       this.store.createThread(
         projectId,
+        this.runtimeKind,
         descriptor.id,
         title ??
           descriptor.name ??
@@ -877,6 +894,7 @@ export class WorkspaceService {
     return {
       sessions: result.sessions.map((session) => ({
         ...session,
+        runtime: this.runtimeKind,
         imported: imported.has(session.id),
       })),
       diagnostics: result.diagnostics,
