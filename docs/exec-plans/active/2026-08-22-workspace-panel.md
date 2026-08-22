@@ -2375,6 +2375,30 @@ property access rather than rejecting a promise, and both land on the same
 sentence. Pinned in jsdom for all three routes, and end to end for the two that
 are claims about the screen.
 
+**J7 — the line notice described the truncated read as if it were the file.**
+A 69,037-line file, truncated by the read boundary at 2 MiB, showed "Showing the
+first 2000 of **55477** lines. Copy contents takes the whole file." Both
+sentences were false. 55,477 is the line count **of the first 2 MiB**, not of
+the file; and Copy contents copies what reached the browser, which is those
+same 2 MiB. Now the truncation notice says that everything below it is about
+the portion and not about the file, the line notice reads "Showing the first
+2000 of the 55477 lines in the 2 MiB that were read", the copy sentence becomes
+"Copy contents takes those 2 MiB", and the copy announcement (J4) says the same
+thing. Where nothing was truncated the original wording stands, because there
+it was true.
+
+**The same wording was reused elsewhere, with the same defect.** J7 asked for
+that check and it found one: the Files tab's tree and its flat search both say
+"Showing the first 200 of N entries/files", with N taken from the response —
+and the read boundary's own traversal limit can stop that walk early, which is
+exactly what its `truncated` flag reports. **Nothing in the web client was
+reading that flag.** So a directory the walk stopped short of was reported with
+a total that was itself short, in the one place WSP-05 v2 names explicitly: "a
+listing that quietly under-reports what is on disk is not acceptable, in the
+tree or in a search result count". Both now say "Showing 200 entries. The
+workspace stopped listing at its own limit before the end, so this is not all
+of them." when the flag is set, and keep the counted sentence when it is not.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the

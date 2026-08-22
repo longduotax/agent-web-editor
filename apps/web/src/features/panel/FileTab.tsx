@@ -31,10 +31,11 @@ import type { HighlightedLine } from "./syntaxHighlight.js";
 /**
  * How many lines are painted at once.
  *
- * WSP-09's render budget: the copy action still yields the whole file, and
- * the notice below states the true line count, so a bounded view never reads
- * as a complete one. Two thousand lines is past the end of almost every
- * source file and still cheap to paint and to highlight.
+ * WSP-09's render budget: the copy action still yields everything that
+ * reached the browser, and the notice below says what it left out and what
+ * it left it out of, so a bounded view never reads as a complete one. Two
+ * thousand lines is past the end of almost every source file and still cheap
+ * to paint and to highlight.
  */
 export const FILE_PREVIEW_LINE_LIMIT = 2000;
 
@@ -118,7 +119,7 @@ export const FileTab = memo(function FileTab({
   // narration share; a second live region on one surface interrupts the
   // first, so this uses that one.
   const copy = useCallback(
-    (text: string, what: "the file path" | "the file's contents") => {
+    (text: string, what: string) => {
       const failed = () => {
         actions.announce(
           `Could not copy ${what}: the browser refused access to the clipboard.`,
@@ -185,10 +186,17 @@ export const FileTab = memo(function FileTab({
             disabled={file === undefined || file.binary}
             onClick={() => {
               if (file === undefined) return;
-              // The whole file, not the bounded portion painted below: the
-              // budget is about what this panel renders, and copying is how a
-              // reader takes the file somewhere that has no budget.
-              copy(file.content, "the file's contents");
+              // Everything that reached the browser, not the bounded portion
+              // painted below: the budget is about what this panel renders,
+              // and copying is how a reader takes the file somewhere that has
+              // no budget. What reached the browser is the whole file unless
+              // the read was truncated, and the announcement says which (J7).
+              copy(
+                file.content,
+                file.truncated
+                  ? "the 2 MiB that were read"
+                  : "the file's contents",
+              );
             }}
           >
             Copy contents
@@ -211,12 +219,13 @@ export const FileTab = memo(function FileTab({
       {file?.truncated === true && (
         <p className="panel-state">
           This file is larger than the 2 MiB preview limit. Only its first 2 MiB
-          were read.
+          were read, so everything below is about that portion and not about the
+          whole file.
         </p>
       )}
       {shown.hidden > 0 && (
         <p className="panel-state">
-          {`Showing the first ${String(FILE_PREVIEW_LINE_LIMIT)} of ${String(shown.total)} lines. Copy contents takes the whole file.`}
+          {boundedNotice(shown, file?.truncated === true)}
         </p>
       )}
       {file?.binary === true && (
@@ -289,6 +298,23 @@ interface BoundedText {
   text: string;
   total: number;
   hidden: number;
+}
+
+/**
+ * What the tab is showing, and of what (J7).
+ *
+ * The reported sentence was "Showing the first 2000 of 55477 lines. Copy
+ * contents takes the whole file.", under a file of 69,037 lines whose FIRST
+ * 2 MiB hold 55,477 of them. Both halves were false: 55,477 is a count of the
+ * portion the server read, not of the file, and Copy contents copies that
+ * same portion, because 2 MiB is all that ever reached the browser. A bounded
+ * view is honest only if it is honest about what it is bounded from.
+ */
+function boundedNotice(shown: BoundedText, truncated: boolean): string {
+  const first = `Showing the first ${String(FILE_PREVIEW_LINE_LIMIT)}`;
+  return truncated
+    ? `${first} of the ${String(shown.total)} lines in the 2 MiB that were read. Copy contents takes those 2 MiB.`
+    : `${first} of ${String(shown.total)} lines. Copy contents takes the whole file.`;
 }
 
 function boundedLines(content: string): BoundedText {

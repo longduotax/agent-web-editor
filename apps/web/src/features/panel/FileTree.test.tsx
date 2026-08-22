@@ -252,6 +252,33 @@ describe("FileTree", () => {
     expect(api.getFiles.mock.calls.length).toBe(afterExpand);
   });
 
+  it("says a listing stopped short rather than reporting its own count as the total", async () => {
+    // Found while checking whether J7's wording — a bounded portion
+    // described as if it were the whole — was reused elsewhere. It was: the
+    // tree and the flat search both said "of N entries" with N taken from
+    // the response, and the read boundary's `truncated` flag, which says
+    // that N is itself short, was read by nothing. WSP-05 v2 names this
+    // case: a listing must not quietly under-report what is on disk.
+    api.getFiles.mockImplementation(
+      (_project: ProjectId, _thread: ThreadId, options: Listing = {}) =>
+        Promise.resolve({
+          entries: (TREE[options.path ?? ""] ?? []).map((entry) => ({
+            ...entry,
+            size: null,
+          })),
+          truncated: true,
+          ignoredHidden: false,
+        }),
+    );
+    renderBody(<FilesTab tab={filesTab()} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByRole("treeitem", {
+        name: /The workspace stopped listing at its own limit before the end/,
+      }),
+    ).toBeVisible();
+  });
+
   it("gives a directory that fails to load its own row and keeps the tree", async () => {
     const user = userEvent.setup();
     api.getFiles.mockImplementation(

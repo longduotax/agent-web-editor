@@ -4,7 +4,11 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { getFiles } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { useDebouncedValue } from "../../components/useDebouncedValue.js";
-import { FILE_LIST_RENDER_LIMIT, FileTree } from "./FileTree.js";
+import {
+  boundedListingNotice,
+  FILE_LIST_RENDER_LIMIT,
+  FileTree,
+} from "./FileTree.js";
 import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
@@ -189,9 +193,14 @@ export const FilesTab = memo(function FilesTab({
               </li>
             ))}
           </ul>
-          {entries.length > FILE_LIST_RENDER_LIMIT && (
+          {(entries.length > FILE_LIST_RENDER_LIMIT ||
+            matches.data?.truncated === true) && (
             <p className="panel-state" aria-live="polite">
-              {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(entries.length)} files. Search to narrow the list.`}
+              {boundedListingNotice(
+                entries.length,
+                matches.data?.truncated === true,
+                "files",
+              )}
             </p>
           )}
           {matches.error !== null && (

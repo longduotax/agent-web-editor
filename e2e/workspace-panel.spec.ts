@@ -126,6 +126,16 @@ test.beforeAll(async () => {
   await mkdir(state, { mode: 0o700 });
   await mkdir(projectPath);
   await writeFile(join(projectPath, "notes.txt"), "hello\n", "utf8");
+  // The shape that produced J5: a bundle whose whole content is ONE line,
+  // far past the server's 2 MiB read limit, so the 2,000-line budget never
+  // engages and the character count is the only thing that bounds it. The
+  // reporter's file was 4.7 MB with an 878,586-character longest line; this
+  // one is 3 MB, which truncates to the same 2 MiB the server hands over.
+  await writeFile(
+    join(projectPath, "bundle.min.js"),
+    `const bundle="${"payload-".repeat(375_000)}";\n`,
+    "utf8",
+  );
   // One 937-character line, the shape that reproduced F2: the preview's
   // `pre` scrolled horizontally, but its scrollbar sat ~1600px below the
   // visible area of the tab body, so nothing could reach it with a pointer.

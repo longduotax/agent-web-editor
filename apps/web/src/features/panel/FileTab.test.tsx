@@ -397,7 +397,40 @@ describe("FileTab: every state it can be in", () => {
         ),
       ),
     ).toBeVisible();
+    // Nothing was truncated on the way here, so this sentence is true.
+    expect(
+      screen.getByText(/Copy contents takes the whole file/),
+    ).toBeVisible();
     expect(container.querySelector("pre")).not.toHaveTextContent("last line");
+  });
+
+  it("describes a truncated read as the portion it is, not as the file (J7)", async () => {
+    // The reported wording: "Showing the first 2000 of 55477 lines. Copy
+    // contents takes the whole file." — over a file of 69,037 lines whose
+    // first 2 MiB alone hold 55,477 of them. Both sentences were false about
+    // the file, and the second was false about what Copy contents does: the
+    // server handed over 2 MiB, and 2 MiB is what there is to copy.
+    const lines = FILE_PREVIEW_LINE_LIMIT + 40;
+    api.getFile.mockResolvedValue(
+      preview({
+        truncated: true,
+        content: Array.from(
+          { length: lines },
+          (_, index) => `line ${String(index)}`,
+        ).join("\n"),
+      }),
+    );
+    renderTab();
+
+    expect(
+      await screen.findByText(
+        new RegExp(
+          `Showing the first ${String(FILE_PREVIEW_LINE_LIMIT)} of the ${String(lines)} lines in the 2 MiB that were read`,
+        ),
+      ),
+    ).toBeVisible();
+    expect(screen.getByText(/Copy contents takes those 2 MiB/)).toBeVisible();
+    expect(screen.queryByText(/Copy contents takes the whole file/)).toBeNull();
   });
 });
 
