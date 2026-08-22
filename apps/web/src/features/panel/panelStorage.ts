@@ -12,6 +12,7 @@ import {
   panelStateProblems,
 } from "./panelModel.js";
 import type { GroupId, PanelState } from "./panelModel.js";
+import { isEmbeddableAddress } from "./panelTabs.js";
 import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 
 // Device-local persistence for the workspace panel (WSP-04). Nothing here
@@ -235,9 +236,35 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
 // server, not to this record: after a reload the tab re-attaches to a
 // still-running process or reports it gone with a restart action (WSP-07),
 // and a stale id would have it claim a process it does not have.
+//
+// A browser tab comes back with only the addresses WSP-08 allows. A rejected
+// one is cleared from the tab rather than carried in state for the component
+// to refuse later: a `javascript:` address reaching an `iframe` `src` runs
+// on the workspace's own origin, and `history` feeds the same `src` one back
+// press later, so it is filtered too — which is what makes `historyIndex`
+// meaningful again.
 function restoreTab(tab: PersistedTab): PanelTab {
   if (tab.type === "terminal") return { ...tab, terminalId: null };
+  if (tab.type === "browser") {
+    const history = tab.history.filter(isEmbeddableAddress);
+    return {
+      ...tab,
+      url: isEmbeddableAddress(tab.url) ? tab.url : "",
+      history,
+      historyIndex: restoredHistoryIndex(tab.historyIndex, history.length),
+    };
+  }
   return tab;
+}
+
+// -1 is "nowhere in the history", which is the only honest position when the
+// history is empty. Anything else is brought inside the history it indexes,
+// so a stored `historyIndex: 99` beside an empty `history` cannot make back
+// and forward controls claim a page that is not there.
+function restoredHistoryIndex(stored: number, length: number): number {
+  if (length === 0) return -1;
+  if (!Number.isFinite(stored)) return 0;
+  return Math.min(Math.max(Math.trunc(stored), 0), length - 1);
 }
 
 const CHANGES_TAB: NewPanelTab = { type: "changes", context: null };

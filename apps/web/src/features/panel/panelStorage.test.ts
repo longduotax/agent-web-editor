@@ -173,6 +173,89 @@ describe("readPanelState", () => {
     expect(tab.cwd).toBe("/repo/apps");
   });
 
+  // WSP-08 accepts `http` and `https` addresses and nothing else, and the
+  // plan's boundary table says a rejected address is *cleared from tab
+  // state*. That is this module's job: the record is an arbitrary string
+  // under a key any script on the origin can write, and the component that
+  // renders the frame is not the last line of defence for what is stored.
+  function browserPanel(tab: Record<string, unknown>): string {
+    return JSON.stringify({
+      version: PANEL_STATE_VERSION,
+      root: { type: "group", id: "g1" },
+      groups: { g1: { id: "g1", tabIds: ["t1"], activeTabId: "t1" } },
+      tabs: {
+        t1: {
+          id: "t1",
+          type: "browser",
+          context: null,
+          url: "",
+          history: [],
+          historyIndex: -1,
+          ...tab,
+        },
+      },
+      focusedGroupId: "g1",
+      width: 400,
+      open: true,
+    });
+  }
+
+  function restoredBrowserTab(stored: Record<string, unknown>): {
+    url: string;
+    history: string[];
+    historyIndex: number;
+  } {
+    stubStorage({ [PANEL_STORAGE_KEY]: browserPanel(stored) });
+    const tab = onlyTab(readPanelState(ids()));
+    if (tab.type !== "browser") throw new Error("expected a browser tab");
+    return {
+      url: tab.url,
+      history: tab.history,
+      historyIndex: tab.historyIndex,
+    };
+  }
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "file:///etc/passwd",
+    "about:blank",
+    "vbscript:msgbox(1)",
+    "not a url",
+  ])("clears a persisted %s address from the tab", (url) => {
+    expect(restoredBrowserTab({ url }).url).toBe("");
+  });
+
+  it.each(["http://localhost:5173/", "https://example.com/docs"])(
+    "keeps a persisted %s address",
+    (url) => {
+      expect(restoredBrowserTab({ url }).url).toBe(url);
+    },
+  );
+
+  it("clears a rejected address out of the history as well", () => {
+    const restored = restoredBrowserTab({
+      url: "http://localhost:5173/",
+      history: ["javascript:alert(1)", "http://localhost:5173/"],
+      historyIndex: 1,
+    });
+    expect(restored.history).toEqual(["http://localhost:5173/"]);
+    expect(restored.historyIndex).toBe(0);
+  });
+
+  it.each([
+    [{ history: [], historyIndex: 99 }, -1],
+    [{ history: [], historyIndex: 0 }, -1],
+    [{ history: ["http://a.test/", "http://b.test/"], historyIndex: 99 }, 1],
+    [{ history: ["http://a.test/", "http://b.test/"], historyIndex: -3 }, 0],
+    [{ history: ["http://a.test/"], historyIndex: 0.5 }, 0],
+  ])(
+    "makes a persisted history position consistent with its history",
+    (stored, expected) => {
+      expect(restoredBrowserTab(stored).historyIndex).toBe(expected);
+    },
+  );
+
   it("discards unreadable JSON and clears it", () => {
     const { removed } = stubStorage({ [PANEL_STORAGE_KEY]: "{not json" });
     expectDefaultPanel(readPanelState(ids()));

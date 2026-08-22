@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectId, TerminalId, ThreadId } from "@pi-web/contracts";
 
-import { sameTarget, tabNeedsThread, tabTitle } from "./panelTabs.js";
+import {
+  isEmbeddableAddress,
+  sameTarget,
+  tabNeedsThread,
+  tabTitle,
+} from "./panelTabs.js";
 import type { PanelTab, TabContext } from "./panelTabs.js";
 
 const PROJECT_A = "11111111-1111-1111-1111-111111111111" as ProjectId;
@@ -300,6 +305,31 @@ describe("sameTarget", () => {
     };
     const dead: PanelTab = { ...live, id: "t2", terminalId: null };
     expect(sameTarget(live, dead)).toBe(false);
+  });
+});
+
+// WSP-08: the Browser tab accepts any `http` or `https` address and nothing
+// else. This is the check the address field and the persisted record share,
+// so an address that could never be typed cannot be restored either.
+describe("isEmbeddableAddress", () => {
+  it.each(["http://localhost:5173/", "https://example.com/docs?a=1#b"])(
+    "accepts %s",
+    (address) => {
+      expect(isEmbeddableAddress(address)).toBe(true);
+    },
+  );
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "file:///etc/passwd",
+    "about:blank",
+    "ftp://example.com/",
+    "localhost:5173",
+    "",
+    "   ",
+  ])("refuses %s", (address) => {
+    expect(isEmbeddableAddress(address)).toBe(false);
   });
 });
 

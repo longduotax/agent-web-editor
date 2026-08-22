@@ -143,6 +143,23 @@ export function sameTarget(a: NewPanelTab, b: NewPanelTab): boolean {
   }
 }
 
+// The addresses a Browser tab may hold: `http` and `https`, and nothing else
+// (WSP-08). Applied wherever an address enters the tab — including when it
+// is read back from device-local storage, because that record is an
+// arbitrary string under a key any script on the origin can write, and a
+// `javascript:` address that reaches an `iframe` `src` runs on the
+// workspace's own origin.
+export function isEmbeddableAddress(address: string): boolean {
+  try {
+    const { protocol } = new URL(address);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    // Not an absolute address at all: a half-typed one is not embeddable
+    // either, and the tab shows its no-address state.
+    return false;
+  }
+}
+
 // Whether a tab of this type can only exist against a thread's execution
 // scope. Everything that reads the filesystem or Git does; a browser tab
 // does not, which is what lets the `+` menu still offer something when no
