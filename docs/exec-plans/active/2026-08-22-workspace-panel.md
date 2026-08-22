@@ -1462,8 +1462,19 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       already fixed it, the existing case still measures the scrollbar on
       screen at both widths, and the markdown preview joins the `pre` as the
       other bounded scrolling region rather than adding a second one.
-      **Its standing hands-on UI pass is still owed** and is performed by a
-      separate agent.
+      Its standing hands-on UI pass was performed on 2026-08-23 and found
+      eleven items — ten defects, all fixed and pinned, and one scope
+      addition. The defects: a header path that wrapped instead of
+      ellipsising, six of nine light syntax tokens below the AA bar (plus two
+      the report did not list), muted document prose below it too, copy
+      actions with no outcome and a swallowed rejection, a render budget that
+      bounded lines but not characters, a truncated read described as if it
+      were the file, a binary-and-oversized pair of notices that contradicted
+      each other, two tabs on two files with one accessible name, a refused
+      path echoed as a workspace-relative one, and a fragment link told
+      inaccurately that it pointed nowhere. The scope addition — line numbers
+      in the source view — is proposed as **specification version 3, Draft,
+      product approval pending**. See Discoveries and blockers.
 - [ ] Milestone 6 — Diff tab, structured unified diff
 - [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
@@ -2247,11 +2258,13 @@ turned into a control that opens that file in its own File tab.
   never blocked, only waiting on a normal lifecycle step. Its standing
   hands-on UI pass is no longer owed either: it was performed, and the seven
   defects it found are fixed above. **Milestone 5's standing hands-on UI pass
-  IS owed** as of 2026-08-23: the milestone is implemented, its suites are
-  green, and its numbers above come from driving the real repository — but that
-  is a scripted measurement of what someone already thought to measure, which
-  is exactly what the standing pass exists not to be. A separate agent performs
-  it.
+  is no longer owed**: it was performed on 2026-08-23 by a separate agent, and
+  the ten defects it found are fixed and pinned below. One **open product
+  question** comes out of it, and it is a question rather than a blocker: the
+  line-number gutter (J11) is a scope addition the coordinator approved and the
+  user has not seen. It ships as specification version 3, Draft, with product
+  approval **pending**, and the answer changes only whether that revision is
+  approved or reverted — nothing else in the milestone depends on it.
 
 ### 2026-08-23 — milestone 5's standing hands-on UI pass
 
@@ -2521,6 +2534,54 @@ this re-implementing inline parsing. And when nothing matches, the tab says so
 in the panel's live region — "This document has no section called “x”." —
 rather than doing nothing, which was the failure mode the inert rendering was
 trying to avoid and did not.
+
+**J11 — line numbers in the source view. A SCOPE ADDITION, recorded as one.**
+Not a defect: neither version 1 nor version 2 of WSP-05 asks for line numbers,
+and the tab implemented what they describe. The reviewer said so explicitly and
+argued for adding them anyway — they are one of the three things that send a
+reader out of this tab and back into their editor, the user's stated goal for
+this work is a VS-Code-like surface, and milestone 6 is about to put old-side
+and new-side numbers on the Diff tab, which would leave the file view of the
+same file inconsistent with its diff. The coordinator approved the addition;
+**the user has not been asked**, and
+[the specification](../../product-specs/workspace-panel.md) says so: proposed
+version 3, Draft, product approval **pending**, with its own acceptance
+criterion 18, following the lifecycle version 2 used.
+
+The mechanism is the whole of why it is safe. The number is `data-line` on each
+line element and the stylesheet draws it with `content: attr(data-line)` on a
+`::before` — **generated content, which a selection cannot reach and
+`textContent` does not contain**, so the numbers cannot be copied out with the
+code. A number rendered as a text node would be. The gutter's width comes from
+the file's line count rather than from the 2,000-line budget, so a twelve-line
+file does not pay four characters of indent.
+
+The plain-text rendering was rewritten to use the same per-line elements the
+highlighted rendering already used, which is what keeps the upgrade
+geometrically identical: the swap now replaces each line's contents rather than
+the shape of the box around them. That required checking that Shiki's tokenizer
+splits into the same number of lines as `text.split("\n")`, including for text
+with a trailing newline — verified against the real highlighter, which it does
+in every case tried. Measured across the swap in a real browser: same line
+count, same numbers, same first-line position, same `scrollWidth` and
+`scrollHeight`, and the same selection text — with one caveat now written into
+the case, that one text node and a row of spans holding the same characters
+shape to sub-pixel-different widths (191.59375px against 191.625px), so the
+geometry assertions hold to within a pixel rather than exactly.
+
+### The two things the pass checked and found working
+
+Recorded so neither is re-reported as a bug.
+
+- **In development, the first code file opened forces a full page reload.**
+  Vite's dependency optimizer discovers Shiki at that moment and re-optimizes,
+  which reloads the page; panel state survives it, and a production build
+  pre-bundles, so it never happens to a user. A development-server artefact,
+  not a defect.
+- **A recursive ignored-inclusive search over `node_modules` returns 503.**
+  That read legitimately exceeds the deadline, and the tab renders "The
+  workspace did not answer in time. Try again." with a Retry. Working as
+  designed.
 
 ## Decision and revision log
 

@@ -19,6 +19,7 @@
      sentences it uses to tell the truth about a bounded view. 5.96:1 here,
      6.15:1 in dark; `styles.test.ts` keeps it honest. */
   --muted-body: #63636a;
+  --file-gutter-colour: #66666c;
   --faint: #b3b3b8;
   --green: #2f9e44;
   --red: #d1453b;
@@ -124,6 +125,7 @@
     --text-2: #c3c5cb;
     --muted: #8b8d95;
     --muted-body: #9a9ca4;
+    --file-gutter-colour: #8b8d95;
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
@@ -171,6 +173,7 @@
   --text-2: #c3c5cb;
   --muted: #8b8d95;
   --muted-body: #9a9ca4;
+  --file-gutter-colour: #8b8d95;
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
@@ -2384,6 +2387,26 @@ a:focus-visible {
    plain text beside it. */
 .file-preview > pre .file-token {
   font: inherit;
+}
+/* The line-number gutter (J11, WSP-05 version 3).
+   Generated content, and that is the whole mechanism: a selection cannot
+   reach `::before`, and `textContent` does not contain it, so the numbers
+   cannot be copied out with the code. A number rendered as a text node
+   would be. The width comes from the line count, which `FileTab` sets as an
+   inline custom property, so a twelve-line file does not pay four
+   characters of indent.
+   Inline-block rather than a column of its own: the lines are inline
+   elements carrying real newline characters, and a parallel gutter column
+   would have to re-derive their heights to stay aligned. */
+.file-preview > pre .file-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: var(--file-gutter, 4ch);
+  margin-right: 1.5ch;
+  color: var(--file-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* A read that produced no file: an explicit, labelled state with a way out
    (WSP-10), rather than the raw refusal the boundary answered with. */

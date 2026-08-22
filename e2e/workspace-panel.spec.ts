@@ -283,8 +283,13 @@ declare const document: {
   querySelector(selector: string): ProbeElement | null;
   querySelectorAll(selector: string): Iterable<ProbeElement>;
   elementFromPoint(x: number, y: number): ProbeElement | null;
+  createRange(): { selectNodeContents(node: ProbeElement): void };
 };
-declare function getComputedStyle(element: ProbeElement): {
+declare function getComputedStyle(
+  element: ProbeElement,
+  pseudoElement?: string,
+): {
+  content: string;
   display: string;
   fontSize: string;
   color: string;
@@ -301,6 +306,11 @@ declare const window: {
   __sentFrames?: string[];
   innerHeight: number;
   innerWidth: number;
+  getSelection(): {
+    removeAllRanges(): void;
+    addRange(range: unknown): void;
+    toString(): string;
+  } | null;
 };
 declare const WebSocket: {
   prototype: { send: (this: unknown, data: unknown) => void };
@@ -1130,6 +1140,107 @@ test("panel file tab: a long path ellipsises to its file name at every panel wid
     // And none of it is bought with overflow the panel then has to scroll.
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
   }
+});
+
+/**
+ * J11. The source view's lines, and what a copy of them contains.
+ *
+ * The numbers are `::before` content generated from `data-line`, which is
+ * exactly why a selection cannot reach them — and that is a claim only a real
+ * browser can settle, because jsdom renders no pseudo-elements and has no
+ * selection to speak of.
+ */
+function sourceGeometry() {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview pre',
+  );
+  const first = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview .file-line',
+  );
+  if (pre === null || first === null) return null;
+  const rect = first.getBoundingClientRect();
+  const selection = window.getSelection();
+  let selected = "";
+  if (selection !== null) {
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    selected = selection.toString();
+    selection.removeAllRanges();
+  }
+  return {
+    lines: [...document.querySelectorAll(".file-line")].length,
+    firstNumber: getComputedStyle(first, "::before").content,
+    lineX: rect.x,
+    lineY: rect.y,
+    lineWidth: rect.width,
+    preScrollWidth: pre.scrollWidth,
+    preScrollHeight: pre.scrollHeight,
+    // What a copy of the file would carry, which must be the file.
+    selectionStart: selected.slice(0, 20),
+    selectionLength: selected.length,
+    text: (pre.textContent ?? "").slice(0, 20),
+  };
+}
+
+test("panel file tab: the source view is numbered, and the numbers are not part of the text", async ({
+  page,
+}) => {
+  // Held until the plain text has been measured: the upgrade to highlighted
+  // output must be geometrically identical, and that is only a claim about
+  // the two states if both are measured.
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/syntaxHighlight-.*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "export const main = 1;",
+  );
+
+  const plain = await page.evaluate(sourceGeometry);
+  expect(plain).not.toBeNull();
+  if (plain === null) return;
+  // The gutter is drawn, and it is drawn from the attribute.
+  expect(plain.firstNumber).toBe('"1"');
+  // A selection over the whole `pre` yields the file and nothing else: no
+  // "1", no "2", no gutter at all. This is the requirement that rules out
+  // rendering the number as a text node.
+  expect(plain.selectionStart).toBe("export const main = ");
+  expect(plain.text).toBe("export const main = ");
+
+  release();
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+
+  const highlighted = await page.evaluate(sourceGeometry);
+  expect(highlighted).not.toBeNull();
+  if (highlighted === null) return;
+  // The same geometry across the swap: same lines, same numbers, same box,
+  // same first line in the same place. Within a pixel rather than exactly,
+  // because one text node and a row of spans holding the same characters
+  // shape to sub-pixel-different widths — 191.59375 against 191.625,
+  // measured — and no reader can see a thirtieth of a pixel.
+  expect(highlighted.lines).toBe(plain.lines);
+  expect(highlighted.firstNumber).toBe(plain.firstNumber);
+  const within = (after: number, before: number) =>
+    Math.abs(after - before) <= 1;
+  expect(within(highlighted.lineX, plain.lineX)).toBe(true);
+  expect(within(highlighted.lineY, plain.lineY)).toBe(true);
+  expect(within(highlighted.lineWidth, plain.lineWidth)).toBe(true);
+  expect(within(highlighted.preScrollWidth, plain.preScrollWidth)).toBe(true);
+  expect(within(highlighted.preScrollHeight, plain.preScrollHeight)).toBe(true);
+  // And the decoration did not join the text either.
+  expect(highlighted.selectionLength).toBe(plain.selectionLength);
+  expect(highlighted.selectionStart).toBe(plain.selectionStart);
 });
 
 test("panel file tab: a fragment link moves inside the document it is written in", async ({

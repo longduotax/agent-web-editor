@@ -359,6 +359,93 @@ describe("FileTab: syntax highlighting", () => {
   });
 });
 
+describe("FileTab: line numbers in the source view (J11)", () => {
+  it("numbers every line of the plain text, without putting a number in it", async () => {
+    api.getFile.mockResolvedValue(
+      preview({ content: "const a = 1;\nconst b = 2;\nconst c = 3;\n" }),
+    );
+    const { container } = renderTab();
+    await screen.findByText(/const a = 1;/);
+
+    const lines = [...container.querySelectorAll(".file-line")];
+    // "a\nb\nc\n" is four lines, the last of them empty, and that is what a
+    // reader counting in their editor sees too.
+    expect(lines.map((line) => line.getAttribute("data-line"))).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+    ]);
+    // The numbers are drawn by the stylesheet from `data-line`, so the text
+    // of the element is still exactly the file's own text — which is what
+    // Copy contents, a text selection, and every assertion in this file all
+    // read.
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "const a = 1;\nconst b = 2;\nconst c = 3;\n",
+    );
+  });
+
+  it("keeps the same lines, and the same numbers, once highlighting arrives", async () => {
+    // The upgrade replaces the `pre`'s children in place, and the reported
+    // requirement is that the two are geometrically identical. Same line
+    // elements, same numbers, same text is the structural half of that; the
+    // measured half is end to end.
+    highlighter.highlightCode.mockResolvedValue([
+      [{ text: "const a = 1;", color: null, italic: false, bold: false }],
+      [{ text: "const b = 2;", color: null, italic: false, bold: false }],
+    ]);
+    api.getFile.mockResolvedValue(
+      preview({ content: "const a = 1;\nconst b = 2;" }),
+    );
+    const { container } = renderTab();
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".file-line")).toHaveLength(2);
+    });
+    expect(
+      [...container.querySelectorAll(".file-line")].map((line) =>
+        line.getAttribute("data-line"),
+      ),
+    ).toEqual(["1", "2"]);
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "const a = 1;\nconst b = 2;",
+    );
+  });
+
+  it("numbers nothing in the markdown preview", async () => {
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "docs/notes.md",
+        language: "markdown",
+        content: "# The title\n\nA paragraph.\n",
+      }),
+    );
+    const { container } = renderTab({ path: "docs/notes.md" });
+    await screen.findByRole("heading", { name: "The title" });
+
+    expect(container.querySelectorAll(".file-line")).toHaveLength(0);
+  });
+
+  it("sizes the gutter from the line count rather than from a guess", async () => {
+    api.getFile.mockResolvedValue(
+      preview({
+        content: Array.from(
+          { length: 120 },
+          (_, index) => `line ${String(index)}`,
+        ).join("\n"),
+      }),
+    );
+    const { container } = renderTab();
+    await screen.findByText(/line 0/);
+
+    // 120 lines is three digits, and a twelve-line file must not pay for the
+    // four the 2,000-line budget allows.
+    expect(
+      container.querySelector("pre")?.style.getPropertyValue("--file-gutter"),
+    ).toBe("3ch");
+  });
+});
+
 describe("FileTab: every state it can be in", () => {
   it("says it is reading before the file arrives", () => {
     api.getFile.mockReturnValue(new Promise(() => undefined));

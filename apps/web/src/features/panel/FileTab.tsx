@@ -5,7 +5,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
+  type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RelativePathSchema } from "@pi-web/contracts";
@@ -374,11 +376,11 @@ export const FileTab = memo(function FileTab({
             />
           </div>
         ) : (
-          <pre>
+          <pre style={gutterWidth(shown)}>
             {highlighted?.text === shown.text ? (
               <HighlightedText lines={highlighted.lines} />
             ) : (
-              shown.text
+              <PlainText text={shown.text} />
             )}
           </pre>
         ))}
@@ -493,6 +495,74 @@ function boundedLines(content: string): BoundedText {
 }
 
 /**
+ * How wide the number column has to be for this file (J11).
+ *
+ * From the line count rather than from the 2,000-line budget: a twelve-line
+ * file should not pay four characters of indent for numbers it will never
+ * reach. Two is the floor, because a one-character gutter reads as an
+ * accident.
+ */
+function gutterWidth(shown: BoundedText): CSSProperties {
+  const digits = Math.max(2, String(Math.max(1, shown.total)).length);
+  return { "--file-gutter": `${String(digits)}ch` } as CSSProperties;
+}
+
+/**
+ * One numbered line of the source view.
+ *
+ * The number is NOT here. It is `data-line`, which the stylesheet draws
+ * through `content: attr(data-line)` on a `::before` — so it is generated
+ * content, which a selection cannot reach and `textContent` does not
+ * contain. A number rendered as a text node would be copied out with the
+ * code, which is the one thing a line-number gutter must never do.
+ *
+ * The trailing newline is a real character of the file and stays one, which
+ * is why the line is an inline element rather than a block: a block would
+ * add a break of its own and double every line.
+ */
+function Line({
+  number,
+  last,
+  children,
+}: {
+  number: number;
+  last: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <span className="file-line" data-line={number}>
+      {children}
+      {last ? null : "\n"}
+    </span>
+  );
+}
+
+/**
+ * The file's text before the highlighter answers, or when it never does.
+ *
+ * Split into the SAME line elements the highlighted rendering uses, which is
+ * what keeps the upgrade geometrically identical: the swap replaces each
+ * line's contents, not the shape of the box around it. Shiki's tokenizer
+ * splits on the same newlines, so the two always produce the same number of
+ * lines (verified against the real highlighter, including for text with a
+ * trailing newline).
+ */
+function PlainText({ text }: { text: string }): JSX.Element {
+  const lines = text.split("\n");
+  return (
+    <>
+      {lines.map((line, index) => (
+        // Lines have no identity of their own — the array is the file — so
+        // the index is the honest key here.
+        <Line key={index} number={index + 1} last={index === lines.length - 1}>
+          {line}
+        </Line>
+      ))}
+    </>
+  );
+}
+
+/**
  * The same text, with the highlighter's colours on it.
  *
  * A token that takes the preview's own colour is rendered as bare text
@@ -503,9 +573,11 @@ function HighlightedText({ lines }: { lines: HighlightedLine[] }): JSX.Element {
   return (
     <>
       {lines.map((tokens, lineIndex) => (
-        // Lines have no identity of their own — the array is the file — so
-        // the index is the honest key here.
-        <span className="file-line" key={lineIndex}>
+        <Line
+          key={lineIndex}
+          number={lineIndex + 1}
+          last={lineIndex === lines.length - 1}
+        >
           {tokens.map((token, index) =>
             token.color === null && !token.italic && !token.bold ? (
               token.text
@@ -523,8 +595,7 @@ function HighlightedText({ lines }: { lines: HighlightedLine[] }): JSX.Element {
               </span>
             ),
           )}
-          {lineIndex < lines.length - 1 ? "\n" : null}
-        </span>
+        </Line>
       ))}
     </>
   );

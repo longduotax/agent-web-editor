@@ -384,6 +384,41 @@ describe("the syntax palette clears WCAG AA on the surface it is painted on", ()
   });
 });
 
+// --- J11: the source view's line-number gutter ---------------------------
+
+describe("the File tab's line numbers", () => {
+  const gutter = declarationsFor(".file-preview > pre .file-line::before");
+
+  it("draws each number from the line's own attribute, not from its text", () => {
+    // The whole of why the numbers cannot be selected into a copy of the
+    // file: generated content is not part of the document's text, so a
+    // selection cannot reach it and `textContent` does not contain it. A
+    // number rendered as a text node would be copied with the code.
+    expect(gutter.content).toBe("attr(data-line)");
+    expect(gutter["user-select"]).toBe("none");
+  });
+
+  it("reserves a width the line count decides", () => {
+    // A 12-line file should not pay for a four-digit gutter, and the 2,000
+    // line budget means four digits is the most any file can need.
+    expect(gutter.width).toContain("--file-gutter");
+  });
+
+  it("paints the numbers above the AA bar on the code surface", () => {
+    // They are text a reader reads, not decoration.
+    for (const theme of ["light", "dark"] as const) {
+      const background = resolve(
+        declarationsFor(".file-preview pre").background ?? "",
+        themeTokens(theme),
+      );
+      const colour = resolve(gutter.color ?? "", themeTokens(theme));
+      expect(
+        `${theme} ${String(contrast(colour, background) >= AA_NORMAL)}`,
+      ).toBe(`${theme} true`);
+    }
+  });
+});
+
 // --- J1: the File tab's header path --------------------------------------
 
 describe("the File tab's header path", () => {

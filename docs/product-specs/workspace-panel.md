@@ -2,13 +2,29 @@
 
 **Current version:** None
 
-**Proposed version:** 2
+**Proposed version:** 3
 
-**Proposal status:** Approved
+**Proposal status:** Draft
 
 **Implementation status:** In progress
 
-**Product approval:** Approved for specification version 2 — the bounded
+**Product approval:** Pending for specification version 3 — the line-number
+gutter in the File tab's source view, drafted 2026-08-23 from the milestone-5
+hands-on pass at a real repository. It is a **scope addition, not a defect
+fix**: nothing in version 1 or 2 requires line numbers, and the reviewer who
+found it said so. The coordinator approved adding it, on the reasoning that
+line numbers are one of the three things that push a reader out of this tab and
+back into their editor, that the user's stated goal for this work is a
+VS-Code-like surface, and that milestone 6 is about to put line numbers on the
+diff side, where a file view without them would read as inconsistent. **The
+user has not been asked.** It is recorded here rather than added silently so
+that the question is in front of them, and version 3 stays Draft until they
+answer. It is implemented ahead of that approval on the coordinator's
+instruction, exactly as version 2 was, and the same rule applies: a discrepancy
+between this document and what the user actually wants resolves in favour of
+the user.
+
+**Specification version 2 remains approved** — the bounded
 Files-tab revision below (navigable tree, ignore rules honoured by default, flat
 search, accessible naming), drafted 2026-08-22 after a hands-on pass at a real
 repository — by the user on 2026-08-23. The approval is of **the behaviour as
@@ -476,6 +492,95 @@ Continuing the numbering of the version 1 list above.
     no horizontal overflow of the page.
 17. Opening a file from the tree with the keyboard leaves focus on the tab it
     opened, and no action that hides a tab body leaves focus on `<body>`.
+
+## Proposed revision (version 3) — the source view is numbered
+
+**Proposal status:** Draft. **Product approval is pending**: the coordinator
+approved this scope addition on 2026-08-23 and the user has not been asked. See
+the Product approval field above, which states the reasoning and the fact that
+it is a scope addition rather than a defect fix.
+
+**Scope.** This revision adds one paragraph and one acceptance criterion to
+[WSP-05's File-tab rules](#wsp-05--files-and-file-tabs-revised-by-version-2).
+It reopens nothing else: WSP-01 through WSP-04 and WSP-06 through WSP-10 are
+untouched, as are the non-goals — a gutter is a decoration on a read-only view,
+adds no editing affordance, and is not a step towards one.
+
+**Why.** It originated in the standing hands-on UI pass of milestone 5, on
+2026-08-23, where it was reported explicitly **not** as a defect: version 1 and
+version 2 both describe a source view without line numbers, and the tab
+implemented what they describe. The reviewer's judgement, which the coordinator
+accepted, is that line numbers are one of the three things that send a reader
+out of this tab and back into their editor; that the user's stated goal for this
+work is a VS-Code-like surface, and this is one of the places it visibly is not
+one; and that milestone 6 puts old-side and new-side line numbers on the Diff
+tab (WSP-06), so a file view without them would be inconsistent with the diff
+view of the same file.
+
+### WSP-05 — the source view's line numbers (added by version 3)
+
+A File tab's **source view** shows a line number against every line it paints.
+The markdown **preview** does not: a rendered document has paragraphs, not
+lines, and numbering them would number something the file does not contain.
+
+- The numbers are **not part of the file's text**. Copying the file, or
+  selecting part of it and copying that, yields the file's own characters and
+  no numbers.
+- The numbers agree with the file: line 1 is the file's first line, and the
+  numbering is unaffected by whether highlighting has arrived.
+- The gutter costs the view nothing it already had. The horizontal scrollbar
+  stays reachable at every panel width (the finding that closed against
+  version 1), the scroll offset still survives a tab switch and a drag
+  (WSP-09), the plain-text-then-highlight upgrade stays geometrically the
+  same, and the line and character bounds still apply — a bounded view is
+  numbered up to its bound and says what it left out, as it already does.
+
+### Acceptance criterion added by version 3
+
+Continuing the numbering of the lists above.
+
+18. A File tab's source view renders a line number against every painted line,
+    in both themes and at the panel's minimum width; the markdown preview
+    renders none; a selection over the whole file yields the file's characters
+    with no numbers in them; the numbering is identical before and after
+    highlighting arrives, as is the geometry of the text; and the horizontal
+    scrollbar remains on screen with the gutter present.
+
+## Findings against the milestone-5 File tab
+
+The standing hands-on UI pass of milestone 5, on 2026-08-23, drove the File tab
+in a real browser against a real repository and reported eleven items, every one
+measured: ten defects and one scope addition. The scope addition is proposed as
+version 3 above. **Nine of the ten defects were defects against what versions 1
+and 2 already require** — a path that wrapped instead of ellipsising, a light
+syntax palette six of whose nine tokens were below the WCAG AA bar on the
+surface they are painted on, muted document prose below it too, copy actions
+with no outcome and a swallowed rejection, a render budget that bounded lines
+but not characters and so painted 2,097,096 of them into one element, a
+truncated read described as if it were the file, a binary-and-oversized pair of
+notices that contradicted each other, two tabs on two files that computed the
+same accessible name, and a refused path echoed as though it were a
+workspace-relative one. All are fixed, and their measurements, mechanisms and
+reasoning are in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section.
+
+The tenth changed no requirement but did change a **sentence this
+specification's behaviour depends on**: an in-document `#fragment` link was
+rendered inert and told the reader it "does not point anywhere the workspace can
+open", which is true of the workspace and false of the link. WSP-05 requires a
+preview's links to be answered honestly and does not say a fragment must be
+inert, so making it scroll to its heading is inside the contract rather than a
+change to it.
+
+One item was **checked and confirmed working** rather than fixed, and is
+recorded so it is not re-reported: in development, the first code file opened
+makes Vite's dependency optimizer discover Shiki and forces a full page reload.
+Panel state survives it, and a production build pre-bundles, so it is a
+development-server artefact and not a defect. So is a 503 from a recursive
+ignored-inclusive search over `node_modules`: that read legitimately exceeds the
+deadline, and the tab says "The workspace did not answer in time. Try again."
+with a Retry, which is the specified behaviour.
 
 ## Findings against version 2
 
