@@ -157,7 +157,63 @@ declare const document: {
 declare function getComputedStyle(element: ProbeElement): {
   boxShadow: string;
   opacity: string;
+  position: string;
 };
+declare const window: { __sentFrames?: string[] };
+declare const WebSocket: {
+  prototype: { send: (this: unknown, data: unknown) => void };
+};
+
+/**
+ * Records every frame the page sends on any WebSocket.
+ *
+ * Installed before the app loads, because the terminal's socket is opened
+ * the moment its tab is mounted. F3 is about a frame that must NOT be sent.
+ */
+function recordSentFrames(): void {
+  const frames: string[] = [];
+  window.__sentFrames = frames;
+  const original = WebSocket.prototype.send;
+  WebSocket.prototype.send = function send(data: unknown): void {
+    if (typeof data === "string") frames.push(data);
+    original.call(this, data);
+  };
+}
+
+/** How many `resize` frames the page has sent so far. */
+async function resizeFrameCount(page: Page): Promise<number> {
+  const frames = await page.evaluate(() => window.__sentFrames ?? []);
+  return frames.filter((frame) => {
+    const parsed: unknown = JSON.parse(frame);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as { type?: unknown }).type === "resize"
+    );
+  }).length;
+}
+
+/**
+ * F3. The height of the group the terminal is in, and of the terminal.
+ *
+ * The split-refusal announcement was an ordinary flex item of the `.panel`
+ * column, so posting it shortened every group by its own height — measured
+ * 1383px -> 1357px -> 1383px across one refusal, with a `resize rows:73`
+ * to the running shell on the way down and a `rows:75` on the way back up
+ * five seconds later. A message telling the user that nothing happened must
+ * not itself be the thing that happens.
+ */
+function announcementGeometry() {
+  const group = document.querySelector(".panel-group");
+  const surface = document.querySelector(".terminal-surface");
+  const announcement = document.querySelector(".panel-announcement");
+  return {
+    groupHeight: group === null ? -1 : group.clientHeight,
+    surfaceHeight: surface === null ? -1 : surface.clientHeight,
+    announcementPosition:
+      announcement === null ? "" : getComputedStyle(announcement).position,
+  };
+}
 
 /** The docked edge's rendered elevation, in whichever theme is active. */
 function panelEdge() {
@@ -519,4 +575,51 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
     expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
   }
+});
+
+// F3. A regression from the D8 fix: the announcement it added is an
+// ordinary flex item, so announcing "nothing happened" relaid out the panel
+// and resized the running shell — twice, once on the way in and once when
+// the message cleared.
+test("panel announcement: a refused chord changes no geometry and sends no resize", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Terminal");
+  await expect(page.getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // Leave the terminal alone in its group, so the split chord has nothing
+  // to split and must refuse.
+  await page.getByRole("tab", { name: "Changes" }).click();
+  await panelChord(page, "Backspace");
+  await expect(page.getByRole("tab")).toHaveCount(1);
+
+  // Let the terminal settle: what follows must add nothing to either count.
+  await page.waitForTimeout(1000);
+  const before = await page.evaluate(announcementGeometry);
+  const resizesBefore = await resizeFrameCount(page);
+
+  await panelChord(page, "ArrowRight");
+  await expect(page.getByRole("status")).toHaveText(
+    "Nothing to split — this group has one tab.",
+  );
+
+  // Visible, and out of flow: the group is exactly as tall as it was.
+  const during = await page.evaluate(announcementGeometry);
+  expect(during.groupHeight).toBe(before.groupHeight);
+  expect(during.surfaceHeight).toBe(before.surfaceHeight);
+  expect(during.announcementPosition).toBe("absolute");
+
+  // And again after it clears itself, five seconds later.
+  await expect(
+    page.getByText("Nothing to split — this group has one tab."),
+  ).toHaveCount(0, { timeout: 10_000 });
+  const after = await page.evaluate(announcementGeometry);
+  expect(after.groupHeight).toBe(before.groupHeight);
+  expect(after.surfaceHeight).toBe(before.surfaceHeight);
+
+  expect(await resizeFrameCount(page)).toBe(resizesBefore);
 });
