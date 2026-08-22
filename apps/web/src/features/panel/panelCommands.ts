@@ -10,10 +10,23 @@ import {
 import type { PanelState } from "./panelModel.js";
 
 // The keyboard half of WSP-10: every panel command is a pure state
-// transform, so the chords and the (later) drag gestures drive exactly the
-// same operations and cannot drift apart. A command with nothing to act on
+// transform, so the chords and the drag gestures drive exactly the same
+// operations and cannot drift apart. A command with nothing to act on
 // returns the state it was given, by reference — and, where the user could
 // reasonably expect something to happen, says why it did not.
+//
+// `panel-move-tab` walks a tab LEFT or RIGHT through the panel: one place
+// along its own strip, and into the adjacent group once it is at that end.
+// It is one command rather than two because the panel's chord group has no
+// key left to spend. That group holds Alt, which on macOS composes alternate
+// characters, so it is restricted to keys that report the same `event.key`
+// under every layout — the arrows, Home, End, PageUp, PageDown, Backspace,
+// Delete, Enter, and Space, of which eleven are already bound and `Delete`
+// is the only one free. `Insert` is absent from Mac keyboards, and both
+// `Tab` and `Escape` are taken by the operating system in this combination.
+// Two dedicated reorder chords would therefore have had to invent a key
+// somebody cannot press; walking the tab is the same gesture a tab strip
+// already suggests, and it reaches both actions WSP-10 asks for.
 
 /** What a chord did, and anything the user needs told about it. */
 export interface PanelCommandResult {
@@ -107,13 +120,33 @@ export function applyPanelCommand(
     case "panel-move-tab": {
       const active = activeTabOf(state);
       if (active === null) return unchanged(state);
+      const strip = state.groups[active.groupId]?.tabIds ?? [];
+      const at = strip.indexOf(active.tabId);
+      const step = command.direction === "next" ? 1 : -1;
+      const within = at + step;
+      // One place along its own strip — WSP-10's "reordering within a
+      // strip", which had no keyboard route at all until this chord grew
+      // one. The index is already the post-removal index `moveTab` wants:
+      // stepping one place either way moves the tab past exactly one
+      // neighbour whichever side it leaves from.
+      if (at >= 0 && within >= 0 && within < strip.length)
+        return applied(moveTab(state, active.tabId, active.groupId, within));
+      // Off the end of the strip, so the tab leaves the group — entering the
+      // next one from the side it left this one, which is the position a
+      // user can predict. An index carried over from another strip would
+      // mean nothing.
       const groups = leafIds(state.root);
       const target = neighbour(groups, active.groupId, command.direction);
       if (target === null || target === active.groupId) return unchanged(state);
-      // Appended at the end of the target strip: an index carried over from
-      // another strip would mean nothing to the user.
       const length = state.groups[target]?.tabIds.length ?? 0;
-      return applied(moveTab(state, active.tabId, target, length));
+      return applied(
+        moveTab(
+          state,
+          active.tabId,
+          target,
+          command.direction === "next" ? 0 : length,
+        ),
+      );
     }
     case "panel-split": {
       const active = activeTabOf(state);

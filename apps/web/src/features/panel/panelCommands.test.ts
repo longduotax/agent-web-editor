@@ -141,6 +141,55 @@ describe("applyPanelCommand", () => {
     expect(panelStateProblems(moved)).toEqual([]);
   });
 
+  // WSP-10 requires a keyboard route for reordering within a strip, which
+  // the pass of 2026-08-22 found had none: the move chords jumped straight
+  // to another group.
+  it("moves the active tab one place along its own strip", () => {
+    const makeId = ids();
+    const state = panelWith(3, makeId);
+    const group = leafIds(state.root)[0] ?? "";
+    const strip = state.groups[group]?.tabIds ?? [];
+    const active = strip[2];
+
+    const left = applyPanelCommand(
+      state,
+      { type: "panel-move-tab", direction: "previous" },
+      makeId,
+    ).state;
+    expect(left.groups[group]?.tabIds).toEqual([strip[0], active, strip[1]]);
+    // Still one group: a reorder is not a move between groups.
+    expect(leafIds(left.root)).toHaveLength(1);
+
+    const right = applyPanelCommand(
+      left,
+      { type: "panel-move-tab", direction: "next" },
+      makeId,
+    ).state;
+    expect(right.groups[group]?.tabIds).toEqual(strip);
+    expect(panelStateProblems(right)).toEqual([]);
+  });
+
+  it("enters the next group from the side it left the last one", () => {
+    const makeId = ids();
+    const split = applyPanelCommand(
+      panelWith(3, makeId),
+      { type: "panel-split", edge: "right" },
+      makeId,
+    ).state;
+    const [first, second] = leafIds(split.root);
+    const moved = applyPanelCommand(
+      split,
+      { type: "panel-move-tab", direction: "previous" },
+      makeId,
+    ).state;
+    // Moving LEFT out of the second group lands at the END of the first,
+    // which is the edge it crossed.
+    const tabId = split.groups[second ?? ""]?.activeTabId;
+    expect(moved.groups[first ?? ""]?.tabIds.at(-1)).toBe(tabId);
+    // And the emptied group is gone with it.
+    expect(leafIds(moved.root)).toHaveLength(1);
+  });
+
   it("does not move a tab when there is only one group", () => {
     const makeId = ids();
     const state = panelWith(2, makeId);

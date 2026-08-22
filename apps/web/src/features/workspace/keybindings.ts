@@ -164,15 +164,19 @@ export const WORKSPACE_KEYBINDINGS: readonly KeyBinding[] = [
     keyLabel: "⌫",
     command: { type: "panel-close-tab" },
   },
+  // One place along the strip, and into the next group once the tab is at
+  // that end of it — so both of WSP-10's "reordering within a strip" and
+  // "moving a tab to another group" are reachable without a second pair of
+  // keys this group does not have to spend. See panelCommands.ts.
   {
-    label: "Move panel tab to the next group",
+    label: "Move panel tab right",
     group: "shift-primary-alt",
     key: "End",
     keyLabel: "End",
     command: { type: "panel-move-tab", direction: "next" },
   },
   {
-    label: "Move panel tab to the previous group",
+    label: "Move panel tab left",
     group: "shift-primary-alt",
     key: "Home",
     keyLabel: "Home",
