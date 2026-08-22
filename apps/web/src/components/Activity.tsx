@@ -141,30 +141,86 @@ function formattedInput(input: string): string {
   }
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${String(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return remainingSeconds === 0
-    ? `${String(minutes)}m`
-    : `${String(minutes)}m ${String(remainingSeconds)}s`;
+/**
+ * A duration at second granularity, always rounded **up**.
+ *
+ * Rounding to nearest would let the label claim less time than actually
+ * elapsed -- a 1.4s step reading "1s" -- and a duration that undersells itself
+ * is the exact failure this label is recovering from. Rounding up costs at
+ * most a second of overstatement and can never understate. Every unit down to
+ * the second is printed, because dropping the seconds off "1h 1m 1s" would
+ * understate too.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1_000) return "<1s";
+  const total = Math.ceil(ms / 1_000);
+  const hours = Math.floor(total / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const seconds = total % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${String(hours)}h`);
+  if (minutes > 0) parts.push(`${String(minutes)}m`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${String(seconds)}s`);
+  return parts.join(" ");
+}
+
+function instant(value: string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * How long one step took, or `null` when the transcript cannot say.
+ *
+ * A step that is still running has no completion time; a step that arrived
+ * without a matching call has no start. Neither is reported as a duration --
+ * an absent number is honest, a zero is not.
+ */
+function stepDurationMs(item: ToolActivity): number | null {
+  const start = instant(item.timestamp);
+  const end = instant(item.completedAt);
+  return start === null || end === null ? null : Math.max(0, end - start);
+}
+
+/**
+ * The wall-clock span a group of steps occupied: from the earliest moment any
+ * of them was known to exist to the latest moment any of them was known to
+ * have finished.
+ *
+ * This used to be max-minus-min over the steps' single timestamps, which for
+ * the common case of one long tool call is always zero -- a 45-second `sleep`
+ * summarised itself as "<1s". A step's own elapsed time only became
+ * representable once the contract started carrying its completion time.
+ */
+function runSpanMs(items: readonly ToolActivity[]): number | null {
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (const item of items) {
+    const start = instant(item.timestamp);
+    const end = instant(item.completedAt);
+    // A still-running step at least establishes that the run reached it, and
+    // a step with no call behind it at least establishes that it finished.
+    const first = start ?? end;
+    const last = end ?? start;
+    if (first === null || last === null) continue;
+    starts.push(first);
+    ends.push(last);
+  }
+  if (starts.length === 0 || ends.length === 0) return null;
+  return Math.max(0, Math.max(...ends) - Math.min(...starts));
 }
 
 function runLabel(items: readonly ToolActivity[]): string {
-  const timestamps = items
-    .map((item) => item.timestamp)
-    .filter((value): value is string => value !== null)
-    .map((value) => new Date(value).getTime())
-    .filter((value) => Number.isFinite(value));
-  // Always name the duration slot: a bare "Worked" next to a sibling group's
-  // "Worked for 27s" reads as a different kind of row rather than as the same
-  // row with an unknown duration.
-  if (timestamps.length < 2) return "Worked for <1s";
-  const duration = Math.max(...timestamps) - Math.min(...timestamps);
-  return duration <= 0
-    ? "Worked for <1s"
-    : `Worked for ${formatDuration(duration)}`;
+  const span = runSpanMs(items);
+  // Never a bare "Worked": beside a sibling group's "Worked for 27s" that
+  // reads as a different kind of row rather than as the same row with an
+  // unknown duration. But naming a duration the transcript does not support
+  // is worse than naming none, so the slot is filled with what is actually
+  // known -- how many steps ran.
+  if (span === null)
+    return `Worked (${String(items.length)} ${items.length === 1 ? "step" : "steps"})`;
+  return `Worked for ${formatDuration(span)}`;
 }
 
 export function displayTranscript(
@@ -240,6 +296,26 @@ export function ActivityStep({
   );
 }
 
+/**
+ * The detail footer, where a step's own elapsed time joins `cwd` and `exit`.
+ *
+ * Per-step timing stays out of the collapsed summary row on purpose: putting
+ * "1s" beside every trivial read buys noise, while the one number a user
+ * actually goes looking for -- which step ate the minute -- is worth a click.
+ */
+function footer(item: ToolActivity) {
+  const elapsed = stepDurationMs(item);
+  if (item.cwd === null && item.exitCode === null && elapsed === null)
+    return null;
+  return (
+    <footer>
+      {item.cwd !== null && <span>cwd {item.cwd}</span>}
+      {item.exitCode !== null && <span>exit {String(item.exitCode)}</span>}
+      {elapsed !== null && <span>took {formatDuration(elapsed)}</span>}
+    </footer>
+  );
+}
+
 export function Activity({
   item,
   projectPath,
@@ -262,12 +338,7 @@ export function Activity({
           <pre>{item.output}</pre>
         </section>
       )}
-      {(item.cwd !== null || item.exitCode !== null) && (
-        <footer>
-          {item.cwd !== null && <span>cwd {item.cwd}</span>}
-          {item.exitCode !== null && <span>exit {String(item.exitCode)}</span>}
-        </footer>
-      )}
+      {footer(item)}
     </ActivityStep>
   );
 }

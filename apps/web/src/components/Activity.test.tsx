@@ -6,7 +6,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TranscriptItem } from "@pi-web/contracts";
 
-import { Activity, ActivityGroup, displayTranscript } from "./Activity.js";
+import {
+  Activity,
+  ActivityGroup,
+  displayTranscript,
+  formatDuration,
+} from "./Activity.js";
 
 afterEach(() => {
   cleanup();
@@ -22,6 +27,7 @@ const runningRead: TranscriptItem = {
   cwd: null,
   exitCode: null,
   timestamp: "2026-08-16T00:00:00.000Z",
+  completedAt: null,
 };
 
 const completedRead: TranscriptItem = {
@@ -29,7 +35,22 @@ const completedRead: TranscriptItem = {
   id: "result",
   status: "completed",
   output: "# Runtime design\n\nDetails",
-  timestamp: "2026-08-16T00:00:01.000Z",
+  completedAt: "2026-08-16T00:00:01.000Z",
+};
+
+// N1: the shape that produced "Worked for <1s" for a 45-second wait -- one
+// tool call, alone in its group, whose start and end are 45s apart.
+const longSleep: TranscriptItem = {
+  id: "sleep",
+  kind: "tool",
+  name: "bash",
+  status: "completed",
+  input: '{"command":"sleep 45 && ls","timeout":60}',
+  output: "README.md\n",
+  cwd: "/workspace",
+  exitCode: 0,
+  timestamp: "2026-08-16T00:00:00.000Z",
+  completedAt: "2026-08-16T00:00:45.054Z",
 };
 
 describe("agent tool activity", () => {
@@ -50,6 +71,22 @@ describe("agent tool activity", () => {
     expect(
       screen.getByText("# Runtime design", { exact: false }),
     ).toBeVisible();
+  });
+
+  it("reports a step's own elapsed time in its details, and omits it while the step is still running", async () => {
+    const user = userEvent.setup();
+    const view = render(<Activity item={longSleep} projectPath="/workspace" />);
+
+    await user.click(screen.getByText("sleep 45 && ls"));
+    expect(screen.getByText("took 46s")).toBeInTheDocument();
+
+    view.rerender(
+      <Activity
+        item={{ ...longSleep, status: "running", completedAt: null }}
+        projectPath="/workspace"
+      />,
+    );
+    expect(screen.queryByText(/^took /)).toBeNull();
   });
 
   it("omits empty assistant shells without guessing tool-call identity", () => {
@@ -143,7 +180,7 @@ describe("worked-for run grouping", () => {
       />,
     );
 
-    const summary = screen.getByText("Worked for <1s");
+    const summary = screen.getByText("Worked for 1s");
     expect(summary.closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("Working…")).toBeNull();
   });
@@ -172,17 +209,100 @@ describe("worked-for run grouping", () => {
     );
   });
 
-  it("keeps the duration slot filled when tool timestamps do not establish a duration", () => {
+  // N1: the bug this whole group of tests exists for. A single tool call is
+  // the *common* case, and the old label -- max minus min over one timestamp
+  // -- could only ever be zero for it, so every single-step run reported
+  // "<1s" no matter how long it took. A verifier watched a real 45-second
+  // sleep and read "Worked for <1s" without anyone noticing.
+  it("reports the real duration of a run that is one long tool call", () => {
+    render(<ActivityGroup items={[longSleep]} projectPath="/workspace" />);
+
+    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
+    expect(screen.queryByText("Worked for <1s")).toBeNull();
+  });
+
+  it("spans from the first step's start to the last step's finish", () => {
     render(
       <ActivityGroup
-        items={[{ ...completedRead, timestamp: null }]}
+        items={[
+          completedRead,
+          { ...longSleep, timestamp: "2026-08-16T00:00:02.000Z" },
+        ]}
+        projectPath="/workspace"
+      />,
+    );
+
+    // 00:00:00.000 (first call issued) to 00:00:45.054 (last result) -- not
+    // the 45.054s of the slow step alone, and not the 44s between the two
+    // steps' start times.
+    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
+  });
+
+  it("names how many steps ran when the transcript carries no timing at all", () => {
+    render(
+      <ActivityGroup
+        items={[
+          { ...completedRead, timestamp: null, completedAt: null },
+          { ...runningRead, id: "second", timestamp: null },
+        ]}
         projectPath="/workspace"
       />,
     );
 
     // Never a bare "Worked": beside a sibling "Worked for 27s" that reads as
-    // a different kind of row instead of an unknown duration.
-    expect(screen.getByText("Worked for <1s")).toBeInTheDocument();
-    expect(screen.queryByText("Worked")).toBeNull();
+    // a different kind of row instead of an unknown duration. And never an
+    // invented duration either -- an unknown number is not "<1s".
+    expect(screen.getByText("Worked (2 steps)")).toBeInTheDocument();
+    expect(screen.queryByText(/Worked for/)).toBeNull();
+  });
+
+  it("does not let a still-running step shorten the span", () => {
+    render(
+      <ActivityGroup
+        items={[longSleep, { ...runningRead, id: "next" }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("Worked for 46s")).toBeInTheDocument();
+  });
+});
+
+/** Reads a rendered label back into the number of seconds it claims. */
+function labelSeconds(label: string): number {
+  const unit: Record<string, number> = { h: 3_600, m: 60, s: 1 };
+  let total = 0;
+  for (const match of label.matchAll(/(\d+)([hms])/g))
+    total += Number(match[1]) * (unit[match[2] ?? "s"] ?? 1);
+  return total;
+}
+
+describe("duration formatting", () => {
+  // The label must never claim less time than actually elapsed, so every
+  // value rounds up and every unit down to the second is printed.
+  it.each([
+    [0, "<1s"],
+    [600, "<1s"],
+    [999, "<1s"],
+    [1_000, "1s"],
+    [1_400, "2s"],
+    [45_054, "46s"],
+    [59_000, "59s"],
+    [59_001, "1m"],
+    [60_000, "1m"],
+    [90_000, "1m 30s"],
+    [3_600_000, "1h"],
+    [3_660_000, "1h 1m"],
+    [3_661_000, "1h 1m 1s"],
+  ])("formats %ims as %s", (ms, expected) => {
+    expect(formatDuration(ms)).toBe(expected);
+  });
+
+  it("never names a duration shorter than the time that passed", () => {
+    const understated: number[] = [];
+    for (let ms = 1_000; ms < 4_000_000; ms += 997) {
+      if (labelSeconds(formatDuration(ms)) * 1_000 < ms) understated.push(ms);
+    }
+    expect(understated).toEqual([]);
   });
 });

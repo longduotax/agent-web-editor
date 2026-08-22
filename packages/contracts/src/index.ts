@@ -131,7 +131,22 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
     output: z.string().max(1_000_000),
     cwd: z.string().max(500).nullable(),
     exitCode: z.number().int().nullable(),
+    /**
+     * When the step *started* -- the moment the agent issued the call.
+     *
+     * A tool step is the only transcript item that occupies a span rather
+     * than an instant, and the two ends arrive as two separate entries in the
+     * native session history. Carrying only one of them made a step's own
+     * elapsed time unrepresentable, which is how a 45-second shell command
+     * came to be summarised as "Worked for <1s".
+     */
     timestamp: TimestampSchema.nullable(),
+    /**
+     * When the step finished. `null` while it is still running, and
+     * `undefined` on a transcript produced before this field existed, so a
+     * reader must treat both as "no completion time" rather than as zero.
+     */
+    completedAt: TimestampSchema.nullable().optional(),
   }),
   z.object({
     id: z.string().min(1).max(200),

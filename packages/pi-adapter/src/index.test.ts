@@ -842,6 +842,12 @@ describe("PiAgentRuntime session open boundary", () => {
         output: "first result\n",
         cwd: "/project",
         exitCode: 0,
+        // N1: a result entry carries the moment the step *finished*. The step
+        // keeps the timestamp of the call that started it, so a reader can
+        // subtract the two -- writing the result's time over the call's used
+        // to leave a step's own elapsed time unrepresentable.
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:02.000Z",
       },
       {
         id: "result-2",
@@ -852,6 +858,8 @@ describe("PiAgentRuntime session open boundary", () => {
         output: "second result\n",
         cwd: "/project",
         exitCode: 0,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
       },
       {
         id: "bash",
@@ -861,10 +869,92 @@ describe("PiAgentRuntime session open boundary", () => {
         input: "false",
         output: "failed",
         exitCode: 1,
+        // A bashExecution is one entry with one instant: it stands for both
+        // ends rather than being inflated into a duration.
+        timestamp: "2026-01-01T00:00:03.000Z",
+        completedAt: "2026-01-01T00:00:03.000Z",
       },
     ]);
     expect(snapshot.diagnostics).toEqual([
       "An unsupported native message was omitted.",
+    ]);
+  });
+
+  // N1: the shape behind "a 45-second run reports Worked for <1s" -- one tool
+  // call, whose duration is the whole run's duration. Both ends of it have to
+  // survive translation or the transcript cannot express it at all.
+  it("carries both ends of a long single tool call, and leaves a running one open-ended", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "assistant",
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "slept",
+                name: "bash",
+                arguments: { command: "sleep 45 && ls" },
+              },
+            ],
+          },
+        },
+        {
+          id: "slept-result",
+          type: "message",
+          timestamp: "2026-01-01T00:00:45.054Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "slept",
+            toolName: "bash",
+            content: [{ type: "text", text: "README.md\n" }],
+            isError: false,
+            details: { exitCode: 0 },
+          },
+        },
+        {
+          id: "assistant-2",
+          type: "message",
+          timestamp: "2026-01-01T00:00:46.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "running",
+                name: "bash",
+                arguments: { command: "sleep 60" },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    const tools = snapshot.transcript.filter((item) => item.kind === "tool");
+    expect(tools).toMatchObject([
+      {
+        status: "completed",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:45.054Z",
+      },
+      {
+        status: "running",
+        timestamp: "2026-01-01T00:00:46.000Z",
+        completedAt: null,
+      },
     ]);
   });
 });

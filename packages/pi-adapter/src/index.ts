@@ -483,15 +483,24 @@ function translateToolCall(
     cwd: toolMetadata(parsed.data.arguments).cwd,
     exitCode: null,
     timestamp,
+    completedAt: null,
   });
   return item.success ? item.data : null;
 }
 
+/**
+ * A tool result is a separate history entry from the tool call that produced
+ * it, so its own timestamp is the step's *completion* time. Overwriting the
+ * call's timestamp with it -- which is what replacing the item in place used
+ * to do -- discarded the only record of when the step began and left the
+ * duration of a single-step run unrepresentable.
+ */
 function translateToolResult(
   id: string,
-  timestamp: string | null,
+  completedAt: string | null,
   raw: unknown,
   inputs: ReadonlyMap<string, string>,
+  starts: ReadonlyMap<string, string | null>,
 ): { item: TranscriptItem; toolCallId: string } | null {
   const parsed = toolResultMessageSchema.safeParse(raw);
   if (!parsed.success) return null;
@@ -505,7 +514,8 @@ function translateToolResult(
     output: textFromContent(parsed.data.content),
     cwd: metadata.cwd,
     exitCode: metadata.exitCode,
-    timestamp,
+    timestamp: starts.get(parsed.data.toolCallId) ?? completedAt,
+    completedAt,
   });
   return item.success
     ? { item: item.data, toolCallId: parsed.data.toolCallId }
@@ -532,7 +542,12 @@ function translateBashExecution(
     output: parsed.data.output.slice(0, 1_000_000),
     cwd: null,
     exitCode,
+    // A bashExecution entry is a single history record: it reports the shell
+    // command after the fact and carries no separate start time, so the one
+    // instant it does carry stands for both ends of a zero-width span rather
+    // than being invented into a duration.
     timestamp,
+    completedAt: timestamp,
   });
   return item.success ? item.data : null;
 }
@@ -567,6 +582,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
   const diagnostics: string[] = [];
   const toolInputs = new Map<string, string>();
   const toolIndexes = new Map<string, number | null>();
+  const toolStarts = new Map<string, string | null>();
   for (const raw of parseNativeHistory(manager.getBranch())) {
     const parsed = baseEntrySchema.safeParse(raw);
     if (!parsed.success) {
@@ -580,6 +596,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
         timestamp,
         parsed.data.message,
         toolInputs,
+        toolStarts,
       );
       if (result !== null) {
         const callIndex = toolIndexes.get(result.toolCallId);
@@ -589,6 +606,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
           transcript[callIndex] = result.item;
           toolIndexes.delete(result.toolCallId);
         }
+        toolStarts.delete(result.toolCallId);
         continue;
       }
       const bash = translateBashExecution(
@@ -642,9 +660,11 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
                 if (toolIndexes.has(call.data.id)) {
                   toolIndexes.set(call.data.id, null);
                   toolInputs.delete(call.data.id);
+                  toolStarts.delete(call.data.id);
                 } else {
                   toolIndexes.set(call.data.id, toolIndex);
                   toolInputs.set(call.data.id, tool.input);
+                  toolStarts.set(call.data.id, tool.timestamp);
                 }
               }
             });
