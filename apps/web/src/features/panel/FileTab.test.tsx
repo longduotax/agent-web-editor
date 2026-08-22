@@ -394,6 +394,43 @@ describe("FileTab: every state it can be in", () => {
     expect(await screen.findByText(/not a regular file/)).toBeVisible();
   });
 
+  it("neither shows nor copies a path that is not a workspace-relative one (J10)", async () => {
+    // Reachable only by editing the persisted panel record, and containment
+    // holds — the read boundary refuses it and the tab shows the refusal
+    // with a Retry. What it must not do is echo the raw spelling in the
+    // place that means "the workspace-relative path of what you are
+    // looking at", or hand that spelling to the clipboard.
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    api.getFile.mockRejectedValue(
+      new ApiClientError(400, "bad_request", "The request is malformed."),
+    );
+    const { container } = renderTab({ path: "../../../etc/hosts" });
+
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeVisible();
+    const header = container.querySelector(".file-preview > header");
+    expect(header?.textContent).not.toContain("../../../etc/hosts");
+    expect(header?.textContent).toContain("not a workspace path");
+    expect(screen.getByRole("button", { name: "Copy path" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Copy path" }));
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("shows the tab's own path while the read is still in flight", () => {
+    // The ordinary case for the same code: a well-formed workspace-relative
+    // path is shown before the server answers, because it IS one — the
+    // validation is the same rule the read boundary applies, not a guess.
+    api.getFile.mockReturnValue(new Promise(() => undefined));
+    const { container } = renderTab({ path: "src/main.ts" });
+
+    expect(
+      container.querySelector(".file-preview > header .file-path"),
+    ).toHaveTextContent("src/main.ts");
+    expect(screen.getByRole("button", { name: "Copy path" })).toBeEnabled();
+  });
+
   it("falls back to the retryable error notice for anything else", async () => {
     api.getFile.mockRejectedValue(new Error("the workspace did not answer"));
     renderTab();

@@ -7,6 +7,7 @@ import {
   type JSX,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { RelativePathSchema } from "@pi-web/contracts";
 
 import { ApiClientError, getFile } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
@@ -182,13 +183,37 @@ export const FileTab = memo(function FileTab({
 
   if (context === null) return <UnboundNotice />;
 
-  const path = file?.path ?? tab.path;
+  // What this tab may present AS a workspace-relative path (J10).
+  //
+  // The server's answer first, because it is normalized and authoritative.
+  // Before it arrives — and it may never arrive — the tab's own record is
+  // all there is, and that record is device-local storage: any script on the
+  // origin can write it, and a tab restored at `../../../etc/hosts` was
+  // observed rendering exactly that in the header, with Copy path ready to
+  // put it on the clipboard. Containment held (the read boundary refused it,
+  // and the tab showed the refusal with a Retry) but the header still said
+  // "this is where you are". So the record is validated against
+  // `RelativePathSchema` — the SAME rule the read boundary parses with,
+  // imported rather than restated, so the two cannot drift — and anything it
+  // rejects is not shown as a path and not copied as one.
+  const requested = RelativePathSchema.safeParse(tab.path).success
+    ? tab.path
+    : null;
+  const path = file?.path ?? requested;
   return (
     <div className="file-preview">
       <header>
         {/* The workspace-relative path the server returned. An absolute
             server path is never shown, and never copied. */}
-        <HeaderPath path={path} />
+        {path === null ? (
+          <span className="file-path">
+            <span className="file-path-name">
+              This tab&apos;s path is not a workspace path.
+            </span>
+          </span>
+        ) : (
+          <HeaderPath path={path} />
+        )}
         <div className="file-actions">
           {markdown && (
             <button
@@ -204,7 +229,9 @@ export const FileTab = memo(function FileTab({
           )}
           <button
             type="button"
+            disabled={path === null}
             onClick={() => {
+              if (path === null) return;
               copy(path, "the file path");
             }}
           >
@@ -288,7 +315,7 @@ export const FileTab = memo(function FileTab({
           <div className="file-markdown markdown">
             <FilePreviewMarkdown
               source={shown.text}
-              path={path}
+              path={file.path}
               onOpenFile={openFile}
             />
           </div>

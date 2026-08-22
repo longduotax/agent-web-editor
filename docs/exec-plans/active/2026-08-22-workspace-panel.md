@@ -2455,6 +2455,23 @@ first 2 MiB were examined." The size is still worth naming, because it is why
 Copy contents is disabled for a file the reader may believe is small enough to
 copy.
 
+**J10 — a refused path was echoed as if it were a workspace-relative one.** A
+tab restored at `../../../etc/hosts` is correctly refused by the read boundary
+("The request is malformed.", with a Retry) and **containment holds** — but the
+header rendered the raw spelling in the place that means "the
+workspace-relative path of what you are looking at", and Copy path was ready to
+put it on the clipboard. Only reachable by editing the persisted panel record,
+which is device-local storage any script on the origin can write.
+
+The tab now validates its own record against `RelativePathSchema` — the same
+schema the read boundary parses with, imported from `@pi-web/contracts` rather
+than restated, so the two cannot drift — and shows the server's normalized
+answer when it has one, the validated record while the read is in flight, and
+"This tab's path is not a workspace path." with Copy path disabled when the
+record is not one. The request is still issued and still refused by the server:
+the boundary stays the authority on what may be read, and this is only about
+what may be displayed and copied as a path.
+
 ## Decision and revision log
 
 - 2026-08-23: **A previewed markdown file gets its own renderer, not the
