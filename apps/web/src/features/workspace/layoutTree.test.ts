@@ -179,6 +179,11 @@ describe("layoutTree", () => {
       l = splitPane(l, "pane-1", "row", make);
       const result = setSplitSizes(l, "split-does-not-exist", [0.2, 0.8]);
       expect(result).toEqual(l);
+      // By identity, not just by value: a miss walks the whole tree and must
+      // hand back the very tree it was given, because every pane is memoised
+      // on its own node. Deep equality here would pass equally against an
+      // implementation that rebuilt every node it visited.
+      expect(result).toBe(l);
     });
 
     it("normalizes sizes to sum to 1, clamping to a sane minimum", () => {

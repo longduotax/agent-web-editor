@@ -22,6 +22,7 @@ import {
   updateTab,
 } from "./panelModel.js";
 import type { GroupId, PanelState, TabPatch } from "./panelModel.js";
+import { sameTarget } from "./panelTabs.js";
 import type { NewPanelTab, TabContext, TabId } from "./panelTabs.js";
 
 const PROJECT = "11111111-1111-1111-1111-111111111111" as ProjectId;
@@ -763,6 +764,54 @@ describe("updateTab", () => {
 
     expect(next).not.toBe(state);
     expect(next.tabs[fileId]).toBe(state.tabs[fileId]);
+  });
+});
+
+// The rule D2 broke, asserted against the operations rather than against a
+// hand-built state: whatever the user does, the panel never ends up holding
+// two tabs that render the same content.
+describe("no operation produces two tabs addressing the same thing", () => {
+  function duplicateTargets(state: PanelState): number {
+    const tabs = Object.values(state.tabs);
+    return tabs.filter((tab, at) =>
+      tabs.slice(at + 1).some((other) => sameTarget(tab, other)),
+    ).length;
+  }
+
+  it("holds across a long session of every operation", () => {
+    const make = ids();
+    let state = createEmptyPanel(make);
+    const step = (next: PanelState): void => {
+      state = next;
+      expect(duplicateTargets(state)).toBe(0);
+      assertPanelInvariants(state);
+    };
+
+    step(openTab(state, changesTab(), make));
+    step(openTab(state, fileTab("a.ts"), make));
+    step(openTab(state, fileTab("a.ts"), make)); // the dedupe itself
+    step(openTab(state, { type: "changes", context: null }, make)); // migrated
+    step(openTab(state, terminalTab(), make));
+    step(openTab(state, terminalTab(), make));
+
+    const [first, second, third] = Object.keys(state.tabs);
+    if (first === undefined || second === undefined || third === undefined)
+      throw new Error("expected several tabs");
+    const group = onlyGroupId(state);
+
+    step(splitGroupWithTab(state, second, group, "right", make));
+    const other = state.focusedGroupId ?? group;
+    step(moveTab(state, third, other, 0));
+    step(activateTab(state, first));
+    step(updateTab(state, first, { view: "source" }));
+    // The one legitimate way a tab gains a context, and the one that can
+    // create a duplicate: the migrated Changes tab binds to the scope the
+    // first Changes tab already covers.
+    for (const id of Object.keys(state.tabs))
+      if (state.tabs[id]?.context === null)
+        step(bindTabContext(state, id, context()));
+    step(closeTab(state, first));
+    step(openTab(state, fileTab("a.ts"), make));
   });
 });
 
