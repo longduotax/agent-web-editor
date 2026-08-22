@@ -243,6 +243,39 @@ export const StartThreadResponseSchema = z.object({
 export const BrowseProjectRequestSchema = z
   .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();
+/* Adding a project by typing or pasting its path, as the second route in
+   beside the native folder picker. The picker is the better path when it
+   works; this one exists because it is the only one that still works when
+   the picker does not -- it opens as a separate OS window that can land
+   behind the browser or on another desktop, and until now a failure there
+   left no way to add a project at all.
+   `.trim()` because a pasted path routinely carries a trailing newline or a
+   leading space from a terminal. The cost is that a directory whose name
+   really does end in a space cannot be added THIS way; it can still be added
+   with the picker, and that trade is worth one keystroke of forgiveness on
+   every ordinary paste.
+   The NUL check is structural, not security theatre: this server is loopback
+   only and Pi already runs with the user's own permissions, so a path from
+   this field grants nothing the picker did not. But a NUL byte truncates a
+   path in every C API underneath us, so a string containing one never means
+   what it appears to mean and is refused rather than silently reinterpreted.
+   Absoluteness is checked on the server with node:path, not here: "absolute"
+   is spelled differently on Windows and a regex in a shared contract would
+   get one of the two platforms wrong. */
+export const AddProjectRequestSchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4096)
+      .refine((value) => !value.includes("\u0000"), {
+        message: "A project path cannot contain a NUL byte.",
+      }),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export const UpdateProjectRequestSchema = z
   .object({
     sidebarExpanded: z.boolean(),

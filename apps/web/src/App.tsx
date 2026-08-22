@@ -30,6 +30,7 @@ import {
 
 import {
   archiveThread,
+  addProjectByPath,
   browseProject,
   discoverSessions,
   getArchivedThreads,
@@ -114,6 +115,28 @@ function Sidebar({
     onSuccess: async (result) => {
       if (result.outcome === "selected")
         await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+  // The path fallback's own state. Kept beside `browse` rather than inside a
+  // child component so both routes invalidate the same query and so the
+  // disclosure can close itself on success.
+  // The disclosure is left UNCONTROLLED and closed through the DOM node.
+  // Driving `open` from React state means React owns a value the browser also
+  // writes (a click on the summary), and the two desynchronise the moment one
+  // of them moves without the other -- which is exactly what happens in an
+  // environment that does not fire `toggle`. `<details>` already remembers
+  // its own state; the only thing this needs is to shut it once.
+  const pathFormRef = useRef<HTMLDetailsElement>(null);
+  const [pathDraft, setPathDraft] = useState("");
+  const addByPath = useMutation({
+    mutationFn: addProjectByPath,
+    onSuccess: async () => {
+      // Clear and collapse: the project's row appearing in the list below is
+      // the confirmation, and a field still holding the path that worked
+      // invites a second submit that would only report "already registered".
+      setPathDraft("");
+      if (pathFormRef.current !== null) pathFormRef.current.open = false;
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
   // A failed browse used to survive every navigation and clear only on a
@@ -231,8 +254,22 @@ function Sidebar({
         // apparently vanished from both lists at once.
         queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
       ]);
+      // `/new`, not `/projects/:id`. The bare project route redirects to
+      // `lastOpenedThreadId ?? threads[0]`, which put an ARBITRARY OTHER
+      // THREAD under the reader's eyes with nothing said about it: the undo
+      // toast names what was archived and never mentions that the pane now
+      // shows something else. An unfocused pane got this right already --
+      // it keeps the thread and swaps its composer for "This thread is
+      // archived. Restore it to keep working." with a Restore button -- and
+      // the asymmetry existed only because the focused pane was navigated
+      // out from under itself before it could render that.
+      //
+      // `/new` carries no thread id, so WorkspaceView's route effect does
+      // not re-point the pane, and the focused pane reaches the same
+      // ArchivedNotice the unfocused one shows. One path, one explanation,
+      // and the way back (Restore) is in the pane either way.
       if (selectedThreadId === variables.threadId)
-        void navigate(`/projects/${variables.projectId}`);
+        void navigate(`/projects/${variables.projectId}/new`);
     },
     // Recorded per thread rather than read off the mutation, which only ever
     // holds the most recent call's error and is the exact hole NEW-R3-1 fell
@@ -368,6 +405,68 @@ function Sidebar({
         >
           {browse.isPending ? "Opening…" : "Browse…"}
         </button>
+        {/* The second route in, and the reason it exists: the button above
+            hands off to a native OS folder chooser, which is the better way
+            when it works and was the ONLY way. That dialog opens as a
+            separate window; it can land behind the browser or on another
+            desktop, and when it fails outright the app could say so and
+            offer nothing else. Adding a project is the first thing anyone
+            does and it had no second path.
+
+            Folded into a closed <details> so the common case is unchanged:
+            one uppercase label and one primary button, exactly as before.
+            The fallback is one word away for the reader who needs it and
+            invisible to the reader who does not. */}
+        <details className="add-project-path" ref={pathFormRef}>
+          <summary>Or enter a path</summary>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const path = pathDraft.trim();
+              if (path === "" || addByPath.isPending) return;
+              addByPath.mutate(path);
+            }}
+          >
+            <input
+              type="text"
+              value={pathDraft}
+              // Not a `required` field with browser validation: the submit
+              // button is disabled until there is something to send, which
+              // says the same thing without a popup.
+              aria-label="Project directory path"
+              placeholder="/absolute/project/path"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              onChange={(event) => {
+                setPathDraft(event.target.value);
+                addByPath.reset();
+              }}
+            />
+            <button
+              type="submit"
+              disabled={pathDraft.trim() === "" || addByPath.isPending}
+            >
+              {addByPath.isPending ? "Adding…" : "Add"}
+            </button>
+          </form>
+          {/* Said before it is asked, because the new-chat pane already
+              handles a non-repository directory and a reader who does not
+              know that will assume this field wants a repository. */}
+          <p className="add-project-path-note">
+            The full path to the directory. It does not have to be a Git
+            repository.
+          </p>
+          {addByPath.error !== null && (
+            <ErrorNotice
+              error={addByPath.error}
+              onDismiss={() => {
+                addByPath.reset();
+              }}
+            />
+          )}
+        </details>
       </div>
       {/* The folder chooser is a separate OS window, which on macOS can open
           behind the browser or on another Space. All the sidebar used to say
@@ -455,7 +554,7 @@ function Sidebar({
                 {project.unreadCount > 0 && (
                   <span
                     className="unread-dot"
-                    aria-label={`${String(project.unreadCount)} unread completions`}
+                    aria-label={`${String(project.unreadCount)} unread completion${project.unreadCount === 1 ? "" : "s"}`}
                   >
                     ●
                   </span>

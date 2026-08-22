@@ -18,6 +18,7 @@ import {
   FileTreeResponseSchema,
   GitDiffResponseSchema,
   GitStatusResponseSchema,
+  ProjectMutationResponseSchema,
   ProjectsResponseSchema,
   StartThreadResponseSchema,
 } from "@pi-web/contracts";
@@ -1109,34 +1110,193 @@ describe("credential-free project API", () => {
     await server.close();
   });
 
-  it("rejects browser-supplied paths without registering a project", async () => {
-    const paths = await directories();
-    const config = parseConfig({
-      argv: [],
-      environment: { PI_WEB_STATE_DIR: paths.state },
+  // REPLACES "rejects browser-supplied paths without registering a project".
+  //
+  // That test guarded a posture that has since cost more than it bought: with
+  // the native chooser as the ONLY way in, a dialog that failed to open, or
+  // opened behind the window, left no way to add a project at all -- and
+  // adding a project is the first thing anyone must do. The path route is a
+  // fallback beside the chooser, not a replacement for it.
+  //
+  // It grants nothing: this server is loopback-only, has no client
+  // authentication by design, and Pi already runs with the user's own
+  // permissions, so a path typed into the sidebar reaches exactly what a path
+  // chosen in the OS dialog reaches. The origin and CSRF checks that guard
+  // every other mutation guard this one unchanged (see the 403 cases above).
+  //
+  // NOTE: `docs/product-specs/initial-workspace.md` still says the sidebar
+  // presents "a single Browse control rather than a path text field". That
+  // spec is approved and is NOT edited here; the change is flagged for
+  // approval rather than made quietly.
+  describe("adding a project by path", () => {
+    const key = (n: number) =>
+      `00000000-0000-4000-8000-00000000000${String(n)}`;
+    const add = async (
+      server: Awaited<ReturnType<typeof buildServer>>,
+      path: string,
+      idempotencyKey: string,
+    ) =>
+      await server.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { host, origin, "x-pi-web-request": "1" },
+        payload: { path, idempotencyKey },
+      });
+    const start = async (state: string) =>
+      await buildServer({
+        config: parseConfig({
+          argv: [],
+          environment: { PI_WEB_STATE_DIR: state },
+        }),
+        runtime: new FakeRuntime(),
+        logger: false,
+      });
+
+    it("registers an absolute path and lists it", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, paths.project, key(1));
+      expect(added.statusCode).toBe(200);
+      const project = ProjectMutationResponseSchema.parse(added.json()).project;
+      expect(project.displayName).toBe("project");
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      const workspace = ProjectsResponseSchema.parse(listed.json());
+      expect(workspace.projects.map((entry) => entry.id)).toEqual([project.id]);
+      await server.close();
     });
-    const server = await buildServer({
-      config,
-      runtime: new FakeRuntime(),
-      logger: false,
+
+    it("replays the same idempotency key instead of registering twice", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const first = await add(server, paths.project, key(1));
+      const replay = await add(server, paths.project, key(1));
+      expect(replay.statusCode).toBe(200);
+      expect(
+        ProjectMutationResponseSchema.parse(replay.json()).project.id,
+      ).toBe(ProjectMutationResponseSchema.parse(first.json()).project.id);
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      expect(ProjectsResponseSchema.parse(listed.json()).projects).toHaveLength(
+        1,
+      );
+      await server.close();
     });
-    const rejected = await server.inject({
-      method: "POST",
-      url: "/api/projects",
-      headers: { host, origin, "x-pi-web-request": "1" },
-      payload: {
-        path: paths.project,
-        idempotencyKey: "00000000-0000-4000-8000-000000000001",
-      },
+
+    it("reports a directory that is already registered", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      await add(server, paths.project, key(1));
+      const again = await add(server, paths.project, key(2));
+      expect(again.statusCode).toBe(409);
+      expect(again.json()).toEqual({
+        error: {
+          code: "project_already_registered",
+          message: "This directory is already registered.",
+        },
+      });
+      await server.close();
     });
-    expect(rejected.statusCode).toBe(404);
-    const listed = await server.inject({
-      method: "GET",
-      url: "/api/projects",
-      headers: { host },
+
+    // The four honest refusals. Each says which of the four things is wrong,
+    // because "unavailable or inaccessible" for all of them sends someone
+    // hunting a permissions problem when they have made a typo.
+    it("says a path does not exist rather than failing generically", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const missing = await add(
+        server,
+        join(paths.project, "no-such-directory"),
+        key(1),
+      );
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toEqual({
+        error: {
+          code: "project_path_not_found",
+          message: "There is nothing at that path.",
+        },
+      });
+      await server.close();
     });
-    const workspace = ProjectsResponseSchema.parse(listed.json());
-    expect(workspace.projects).toEqual([]);
-    await server.close();
+
+    it("refuses a relative path", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const relative = await add(server, "some/relative/path", key(1));
+      expect(relative.statusCode).toBe(400);
+      expect(relative.json()).toEqual({
+        error: {
+          code: "project_path_relative",
+          message:
+            "Enter the full path to the directory, starting from the root.",
+        },
+      });
+      await server.close();
+    });
+
+    it("refuses a file that is not a directory", async () => {
+      const paths = await directories();
+      const file = join(paths.project, "README.md");
+      await writeFile(file, "not a directory\n");
+      const server = await start(paths.state);
+      const notDirectory = await add(server, file, key(1));
+      expect(notDirectory.statusCode).toBe(400);
+      expect(notDirectory.json()).toEqual({
+        error: {
+          code: "project_not_directory",
+          message: "That path is a file, not a directory.",
+        },
+      });
+      await server.close();
+    });
+
+    it("refuses an empty path and a path containing a NUL byte", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      for (const path of ["", "   ", `${paths.project}\u0000/etc`]) {
+        const refused = await add(server, path, key(1));
+        expect(refused.statusCode).toBe(400);
+        expect(refused.json()).toEqual({
+          error: {
+            code: "invalid_request",
+            message: "The request is malformed.",
+          },
+        });
+      }
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      expect(ProjectsResponseSchema.parse(listed.json()).projects).toEqual([]);
+      await server.close();
+    });
+
+    it("trims a pasted path's surrounding whitespace", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, `  ${paths.project}\n`, key(1));
+      expect(added.statusCode).toBe(200);
+      await server.close();
+    });
+
+    // A directory with no Git repository in it is a PROJECT, not an error:
+    // the new-chat pane already says so and offers the shared-checkout mode.
+    it("accepts a directory that is not a Git working tree", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, paths.project, key(1));
+      expect(added.statusCode).toBe(200);
+      expect(
+        ProjectMutationResponseSchema.parse(added.json()).project.gitAvailable,
+      ).toBe(false);
+      await server.close();
+    });
   });
 });

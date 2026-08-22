@@ -88,6 +88,29 @@ async function parseProjectRoot(path: unknown): Promise<string | null> {
   }
 }
 
+/**
+ * Distinguishes "there is nothing at that path" from "there is something and
+ * we could not look at it".
+ *
+ * The difference did not matter while a native folder picker was the only way
+ * in -- an OS chooser does not hand back paths that do not exist -- but a
+ * person typing a path mistypes it, and "unavailable or inaccessible" sends
+ * them looking for a permissions problem they do not have.
+ */
+function missingPathError(cause: unknown): Error {
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? cause.code
+      : undefined;
+  const symptom =
+    code === "ENOENT" || code === "ENOTDIR"
+      ? "project_path_not_found"
+      : code === "EACCES" || code === "EPERM"
+        ? "project_not_readable"
+        : "project_unavailable";
+  return new Error(symptom, { cause });
+}
+
 function runDto(record: RunRecord): Run {
   return RunSchema.parse({
     id: record.id,
@@ -620,26 +643,92 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * The single gate every project path passes through, whether the OS folder
+   * picker chose it or a person typed it. It is deliberately ONE function:
+   * the typed route is a second door into the same room, not a second room
+   * with its own weaker lock.
+   *
+   * The failures used to collapse into one `project_unavailable`, which was
+   * tolerable when the only caller was a picker (the OS does not hand back
+   * paths that do not exist) and is not tolerable now that a person can
+   * mistype. A typo and a permissions problem are different problems with
+   * different next steps, so they get different codes.
+   */
   private async canonicalProject(path: string): Promise<string> {
+    // A NUL byte truncates a path in every C API beneath this one, so the
+    // string would not mean what it appears to mean. Refused, not trimmed.
+    if (path.includes("\u0000")) throw new Error("project_path_invalid");
+    // Relative paths are refused rather than resolved: they would resolve
+    // against the SERVER's working directory, which is not a place the person
+    // typing has any reason to be thinking about, and the project they got
+    // would not be the one they meant.
+    if (!isAbsolute(path)) throw new Error("project_path_relative");
     let canonical: string;
     try {
       canonical = await realpath(path);
-    } catch {
-      throw new Error("project_unavailable");
+    } catch (cause) {
+      throw missingPathError(cause);
     }
     let info: Awaited<ReturnType<typeof stat>>;
     try {
       info = await stat(canonical);
-    } catch {
-      throw new Error("project_unavailable");
+    } catch (cause) {
+      throw missingPathError(cause);
     }
     if (!info.isDirectory()) throw new Error("project_not_directory");
     try {
       await access(canonical, constants.R_OK | constants.X_OK);
     } catch {
-      throw new Error("project_unavailable");
+      throw new Error("project_not_readable");
     }
     return canonical;
+  }
+
+  /**
+   * Registers a project from a path supplied by the person using the app,
+   * rather than by the native folder picker.
+   *
+   * Same shape as {@link browseProject}: serialized on the `"process"` lane,
+   * replayed from a receipt when the same idempotency key comes back, and
+   * validated by the same {@link canonicalProject}. The request hash carries
+   * the path, so re-sending the same key with a DIFFERENT path is a conflict
+   * rather than a silent no-op that returns the first project.
+   */
+  public async addProjectByPath(
+    path: string,
+    idempotencyKey: string,
+  ): Promise<Project> {
+    const operation = "add-project-path";
+    const hash = canonicalRequestHash(operation, { path });
+    return await this.serialized(
+      "process",
+      idempotencyKey,
+      operation,
+      hash,
+      ProjectSchema,
+      async () => {
+        const prior = this.store.readReceipt(
+          "process",
+          idempotencyKey,
+          operation,
+          hash,
+          ProjectIdSchema,
+        );
+        if (prior !== null)
+          return await this.projectDto(this.requireProject(prior));
+        const canonical = await this.canonicalProject(path);
+        const receipt = this.store.withReceipt(
+          "process",
+          idempotencyKey,
+          operation,
+          hash,
+          ProjectIdSchema,
+          () => this.store.registerProject(canonical).id,
+        );
+        return await this.projectDto(this.requireProject(receipt.response));
+      },
+    );
   }
 
   public async registerSelectedProject(path: string): Promise<Project> {

@@ -15,7 +15,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
 import type {
@@ -26,6 +26,7 @@ import type {
 } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  addProjectByPath: vi.fn(),
   archiveThread: vi.fn(),
   unarchiveThread: vi.fn(),
   getArchivedThreads: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("./api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { ApiClientError } from "./api/client.js";
 import { Markdown } from "./components/Markdown.js";
 import { Status } from "./components/Status.js";
 import { App, Composer } from "./App.js";
@@ -1131,6 +1133,163 @@ describe("the panel does not follow the focused pane", () => {
 // endpoint, undo must PREVENT the archive rather than reverse it: the row
 // leaves the list immediately, the call is deferred behind the toast, and a
 // failure puts the row back with an error the user can see.
+// NEW-5, the single worst thing left in the product: the only way to add a
+// project was a native OS folder dialog. If it failed to open, opened behind
+// the window, or landed on another desktop, there was no way in at all -- and
+// adding a project is the first thing every reader must do.
+describe("adding a project without the native folder chooser", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+
+  function renderEmptySidebar() {
+    api.getWorkspace.mockResolvedValue({
+      projects: [],
+      threads: [],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  const pathField = () =>
+    screen.getByRole("textbox", { name: "Project directory path" });
+  const disclosure = () =>
+    screen.getByText("Or enter a path").closest<HTMLDetailsElement>("details");
+
+  it("keeps Browse primary and folds the path field into a closed disclosure", async () => {
+    renderEmptySidebar();
+    await screen.findByRole("button", { name: "Browse…" });
+    // The common case is unchanged: the disclosure is closed, so the sidebar
+    // still reads as one label and one primary button.
+    expect(disclosure()?.open).toBe(false);
+    // Browse keeps the accent fill; the path route's submit does not, so two
+    // routes to the same place do not both look like the main one.
+    expect(
+      screen.getByRole("button", { name: "Browse…" }).className,
+    ).not.toContain("add-project-path");
+  });
+
+  it("registers a typed path and clears the field", async () => {
+    api.addProjectByPath.mockResolvedValue({
+      project: {
+        id: projectId,
+        displayName: "sandbox",
+        displayPath: "/Users/someone/sandbox",
+        available: true,
+        gitAvailable: true,
+        sidebarExpanded: true,
+        unreadCount: 0,
+        lastOpenedThreadId: null,
+      },
+    });
+    renderEmptySidebar();
+    await screen.findByRole("button", { name: "Browse…" });
+    fireEvent.click(screen.getByText("Or enter a path"));
+
+    // Nothing to submit until there is a path.
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    fireEvent.change(pathField(), {
+      target: { value: "/Users/someone/sandbox" },
+    });
+    expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => {
+      // First argument only: react-query hands the mutation context as a
+      // second argument, which is not part of this contract.
+      expect(api.addProjectByPath.mock.calls[0]?.[0]).toBe(
+        "/Users/someone/sandbox",
+      );
+    });
+    // The field empties rather than holding a path whose only remaining
+    // outcome is "already registered".
+    await waitFor(() => {
+      expect(disclosure()?.open).toBe(false);
+    });
+    expect(pathField()).toHaveValue("");
+  });
+
+  it("reports the server's reason for a bad path and offers a dismiss", async () => {
+    api.addProjectByPath.mockRejectedValue(
+      new ApiClientError(
+        404,
+        "project_path_not_found",
+        "There is nothing at that path.",
+      ),
+    );
+    renderEmptySidebar();
+    await screen.findByRole("button", { name: "Browse…" });
+    fireEvent.click(screen.getByText("Or enter a path"));
+    fireEvent.change(pathField(), { target: { value: "/nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("There is nothing at that path.");
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Dismiss this message" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  // NEW-4. The dot's only accessible name read "1 unread completions".
+  it("counts unread completions in the singular when there is one", async () => {
+    for (const [count, label] of [
+      [1, "1 unread completion"],
+      [2, "2 unread completions"],
+    ] as const) {
+      api.getWorkspace.mockResolvedValue({
+        projects: [
+          {
+            id: projectId,
+            displayName: "Example project",
+            displayPath: "/example",
+            available: true,
+            sidebarExpanded: true,
+            unreadCount: count,
+            lastOpenedThreadId: null,
+          },
+        ],
+        threads: [],
+        diagnostics: [],
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/"]}>
+            <App />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByLabelText(label)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("has no axe violations with the path field open", async () => {
+    renderEmptySidebar();
+    await screen.findByRole("button", { name: "Browse…" });
+    fireEvent.click(screen.getByText("Or enter a path"));
+    const results = await axe.run(document.body, {
+      runOnly: ["wcag2a", "wcag2aa"],
+    });
+    expect(results.violations).toEqual([]);
+  });
+});
+
 describe("sidebar archive", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
@@ -1228,6 +1387,91 @@ describe("sidebar archive", () => {
       expect(api.archiveThread).toHaveBeenCalledTimes(1);
     });
     expect(api.archiveThread).toHaveBeenCalledWith(projectId, threadId);
+  });
+
+  // NEW-6. Archiving the FOCUSED pane's thread used to send the app to
+  // `/projects/:id`, which redirects to `lastOpenedThreadId ?? threads[0]` --
+  // so an unrelated conversation appeared under the reader's eyes and nothing
+  // said why. The undo toast names what was archived and never mentions the
+  // substitution. An unfocused pane already did the right thing: it keeps the
+  // thread and swaps its composer for the archived notice.
+  //
+  // `/new` carries no thread id, so WorkspaceView's route effect does not
+  // re-point the pane and the focused pane reaches that same notice.
+  it("does not swap the focused pane onto an unrelated thread when its own is archived", async () => {
+    api.archiveThread.mockResolvedValue({ archived: true as const });
+    const seen: string[] = [];
+    function LocationProbe() {
+      seen.push(useLocation().pathname);
+      return null;
+    }
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: secondThreadId,
+        },
+      ],
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Archive me",
+          runState: null,
+          unread: false,
+        },
+        {
+          id: secondThreadId,
+          projectId,
+          title: "Somebody else's conversation",
+          runState: null,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("link", { name: "Archive me" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Archive me" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(seen.at(-1)).toBe(`/projects/${projectId}/new`);
+    });
+    // The bare project route is what redirects onto another thread. It is
+    // never visited, so that redirect never runs.
+    expect(seen).not.toContain(`/projects/${projectId}`);
+    expect(seen).not.toContain(
+      `/projects/${projectId}/threads/${secondThreadId}`,
+    );
   });
 
   it("restores the row and surfaces an error when the archive fails, instead of reporting success", async () => {
@@ -1985,6 +2229,108 @@ describe("shell layout and light-mode palette", () => {
     // And the affordances the tester measured at 2.91:1 draw on it.
     for (const selector of [".thread-actions-button", ".archived-toggle"])
       expect(ruleBody(css, selector)).toMatch(/color:\s*var\(--glyph\)/);
+  });
+
+  // THE STATES NOBODY EVER AUDITED. Three rounds of contrast walks were all
+  // run on an idle thread with a healthy server, and every one of them
+  // reported "one failure left". Auditing the same page DURING A RUN took the
+  // count from 2 to 6: "Working", the steer hint, the Stop button and the
+  // spinner had never been measured by anyone, because they do not exist
+  // while nothing is happening -- which is to say, they only exist in the
+  // state this app is for.
+  //
+  // The shape of both bugs was the same and is worth naming: a colour tuned
+  // as a SIGNAL (a 6px dot, a red fill) was reused as INK. A signal only has
+  // to clear 3:1; ink has to clear 4.5:1. So the tokens are split, and this
+  // test measures each ink against the background its own selectors actually
+  // paint -- including the tint mixed from the signal colour, which is where
+  // both failures were hiding.
+  it("keeps transient-state text above WCAG AA on the tints it actually paints on", async () => {
+    const css = await readStyles();
+    const card = token(css, "card");
+
+    /** `percent`% of `color` composited over `over`, as `color-mix` does. */
+    const tint = (color: string, percent: number, over: string): string => {
+      const parse = (value: string) =>
+        [0, 2, 4].map((i) =>
+          parseInt(value.replace("#", "").slice(i, i + 2), 16),
+        );
+      const [a, b] = [parse(color), parse(over)];
+      return `#${[0, 1, 2]
+        .map((i) =>
+          Math.round(
+            ((a[i] ?? 0) * percent) / 100 +
+              ((b[i] ?? 0) * (100 - percent)) / 100,
+          )
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")}`;
+    };
+
+    // NEW-1. "Working" in the pane header and the steering hint are WORDS,
+    // and they took --run, a 3.39:1 dot colour.
+    const runInk = token(css, "run-ink");
+    for (const surface of ["card", "hover", "active"]) {
+      const ratio = contrast(runInk, token(css, surface));
+      expect(
+        ratio,
+        `--run-ink (${runInk}) on --${surface} is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const selector of [
+      ".pane-head .status.run",
+      ".composer.steering .composer-actions > span:first-child",
+    ])
+      expect(ruleBody(css, selector)).toMatch(/color:\s*var\(--run-ink\)/);
+    // The dot and the spinner rim keep the signal colour: they are non-text
+    // indicators at 3:1, and darkening them would flatten the one moving mark
+    // in the app to satisfy a rule about words.
+    expect(ruleBody(css, ".pane-head .status .sdot.run")).toMatch(
+      /background:\s*var\(--run\)/,
+    );
+
+    // NEW-2. Every failure surface paints a tint of --fail behind --fail.
+    // The Stop button -- the one control anybody reaches for under time
+    // pressure -- was the worst of them at 3.54:1.
+    const fail = token(css, "fail");
+    const failInk = token(css, "fail-ink");
+    const failSurfaces: [string, number][] = [
+      [".error-notice", 8],
+      [".error-notice-dismiss:hover", 14],
+      [".composer-actions .stop", 18],
+    ];
+    for (const [selector, percent] of failSurfaces) {
+      const background = tint(fail, percent, card);
+      const ratio = contrast(failInk, background);
+      expect(
+        ratio,
+        `--fail-ink (${failInk}) on ${selector}'s ${String(percent)}% tint (${background}) is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(4.5);
+      // And the old token would still fail there, so this is a real change
+      // rather than a rename.
+      expect(contrast(fail, background)).toBeLessThan(4.5);
+    }
+    for (const selector of [
+      ".error-notice-retry",
+      ".error-notice-dismiss",
+      ".composer-actions .stop",
+      ".run-failure-body",
+      ".diagnostic.error",
+    ])
+      expect(ruleBody(css, selector)).toMatch(/color:\s*var\(--fail-ink\)/);
+    // `.error-notice` has two top-level rules and the cascading one is the
+    // second, so it is matched by the pair it sets rather than by name.
+    expect(css).toMatch(
+      /color:\s*var\(--fail-ink\);\s*background:\s*color-mix\(in srgb, var\(--fail\) 8%, var\(--card\)\);/,
+    );
+
+    // NEW-8. WCAG 2.2 2.5.8: a pointer target is at least 24x24 CSS px, and
+    // the ✕ laid out at 22.4.
+    const dismiss = ruleBody(css, ".error-notice-dismiss");
+    const size = /width:\s*([\d.]+)rem/.exec(dismiss)?.[1];
+    expect(Number(size) * 16).toBeGreaterThanOrEqual(24);
+    expect(dismiss).toMatch(new RegExp(`height:\\s*${String(size)}rem`));
   });
 
   // F5/S6. Two measures, and the split is the point: narrowing the shared

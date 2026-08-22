@@ -40,9 +40,44 @@
   --send-bg: #1d1d1f;
   --send-fg: #ffffff;
   --run: #c07d16;
+  /* The same colour SAID IN WORDS. --run is a signal colour tuned for a 6px
+     pulsing dot and a spinner rim, which only have to clear 3:1 as non-text
+     indicators; at 3.39:1 on white it is not a text colour, and the two
+     places that painted words with it -- the pane header's "Working" and the
+     composer's "Enter to steer this run" hint -- were the last two AA text
+     failures in light mode. They are also the only two that appear ONLY
+     while a run is in flight, which is why three rounds of contrast audits
+     on idle routes never saw them.
+
+     Same reasoning that split --amber off --run: darken the ink, leave the
+     signal alone. 5.92:1 on --card, 5.38:1 on --hover, 5.01:1 on --active.
+     Dark mode already clears AA at --run (7.47:1 on --card), so there it is
+     the same value and the token costs nothing. */
+  --run-ink: #8a5a0f;
   --wait: #2f6feb;
   --done: #1e7b34;
   --fail: #d1453b;
+  /* --fail said in words, for the same reason as --run-ink, and it is the
+     bigger of the two: --fail is legible on white (4.54:1) but every place
+     the app paints failure TEXT it first paints a tint of --fail behind it,
+     which drags the ratio under AA -- the Stop button on its 18% tint is
+     3.55:1, the least legible control on screen, and every .error-notice is
+     4.07:1 on its 8% tint.
+
+     #ad3228 measured against the backgrounds these actually paint on:
+     6.43:1 on --card, 5.76:1 on the 8% tint, 5.32:1 on the 14% hover tint,
+     5.04:1 on the Stop button's 18% tint. Backgrounds, dots and borders keep
+     --fail: the red fill is a signal and dulling it would flatten the one
+     alarming colour in the design to fix a legibility problem in the ink. */
+  --fail-ink: #ad3228;
+  /* The sidebar's unread bullet. --accent is 3.87:1 on the --active row fill
+     it usually sits on -- fine for a 3:1 status indicator, which is why this
+     is not filed as a failure, but it is the same accent-blue-on-light that
+     keeps turning up in whole-page audits. A dedicated token darkens the one
+     glyph without moving --accent app-wide (which is the open question N3 is
+     parked on): 5.28:1 on --active, 6.23:1 on the sidebar, 5.67:1 on
+     --hover. */
+  --unread: #255bc4;
   /* A settled run that did not succeed and did not fail: the user stopped
      it, or the project went away. Deliberately NOT amber -- amber is --run,
      the colour of a run still GOING -- and deliberately not green. --muted is
@@ -148,9 +183,19 @@
     --send-bg: #ececee;
     --send-fg: #16171a;
     --run: #d6a53a;
+    /* Dark already clears AA at the signal colour (7.47:1 on --card), so the
+       ink is the signal. The token exists so the selectors do not have to
+       branch per theme. */
+    --run-ink: var(--run);
     --wait: #6aa0ff;
     --done: #4ec06f;
     --fail: #e0645c;
+    /* Dark has the same tint problem as light and had never been measured
+       either: --fail is 3.91:1 on the Stop button's 18% tint here. Lightened
+       rather than darkened, because the ground is dark: 5.96:1 on --card,
+       5.41:1 on the 8% tint, 4.72:1 on the 18% tint. */
+    --fail-ink: #e77a72;
+    --unread: var(--accent);
     --focus-ring: var(--accent);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
@@ -184,9 +229,12 @@
   --send-bg: #ececee;
   --send-fg: #16171a;
   --run: #d6a53a;
+  --run-ink: var(--run);
   --wait: #6aa0ff;
   --done: #4ec06f;
   --fail: #e0645c;
+  --fail-ink: #e77a72;
+  --unread: var(--accent);
   --focus-ring: var(--accent);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
@@ -344,6 +392,77 @@ a:focus-visible {
   font-size: 0.72rem;
   line-height: 1.4;
 }
+/* The typed-path fallback. Collapsed, it is one line of muted 11.5px text
+   under the primary button -- the sidebar's common case is unchanged and
+   Browse is still the only thing with weight on it. Everything below only
+   exists once the reader opens it. */
+.add-project-path {
+  margin-top: 0.45rem;
+}
+.add-project-path > summary {
+  width: fit-content;
+  padding: 0.15rem 0.2rem;
+  border-radius: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.add-project-path > summary:hover {
+  color: var(--text-2);
+}
+.add-project-path > summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.add-project-path form {
+  display: flex;
+  margin-top: 0.4rem;
+  gap: 0.35rem;
+}
+.add-project-path input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background: var(--page);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+.add-project-path input:focus-visible {
+  border-color: var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+/* Overrides `.add-project button`, which is the full-width accent primary.
+   Two routes to the same place must not both look like the main one. */
+.add-project-path button {
+  width: auto;
+  flex: none;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background: var(--surface-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-project-path button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.add-project-path-note {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.add-project-path .error-notice {
+  margin-top: 0.5rem;
+}
 .project-list {
   flex: 1;
   overflow: auto;
@@ -393,7 +512,7 @@ a:focus-visible {
   background: var(--surface-3);
 }
 .icon-button.danger:hover {
-  color: var(--red);
+  color: var(--fail-ink);
 }
 .project-link {
   display: grid;
@@ -409,9 +528,14 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* --unread, not --blue: the row this sits on is --active when the project is
+   selected, where --accent is 3.87:1. It clears 1.4.11's 3:1 as a status
+   indicator either way, so this is not a failure being closed -- it is the
+   accent-on-light problem N3 tracks, removed from the one place it can be
+   removed without moving --accent app-wide. */
 .unread-dot {
   margin: 0.2rem;
-  color: var(--blue);
+  color: var(--unread);
   font-size: 0.7rem;
 }
 .thread-list {
@@ -662,7 +786,7 @@ a:focus-visible {
    Archived section. Nothing in this menu claims it today; the class stays so
    a genuinely destructive item can opt in by name rather than by position. */
 .thread-context-menu button.destructive:not(:disabled) {
-  color: var(--fail);
+  color: var(--fail-ink);
 }
 .thread-context-menu button:disabled {
   color: var(--muted);
@@ -875,8 +999,9 @@ a:focus-visible {
 .pane-head .status .sdot.archived {
   background: var(--archived);
 }
+/* The word "Working", not the dot beside it: --run-ink, not --run. */
 .pane-head .status.run {
-  color: var(--run);
+  color: var(--run-ink);
 }
 .pane-head .status.wait {
   color: var(--wait);
@@ -885,7 +1010,7 @@ a:focus-visible {
   color: var(--done);
 }
 .pane-head .status.fail {
-  color: var(--fail);
+  color: var(--fail-ink);
 }
 .pane-head .status.stop {
   color: var(--stop);
@@ -955,8 +1080,9 @@ a:focus-visible {
   color: var(--text);
   background: var(--hover);
 }
+/* Hover paints --hover behind it, where --fail is 4.13:1. */
 .pane-head .acts .icon-btn.danger:hover {
-  color: var(--fail);
+  color: var(--fail-ink);
 }
 .pane-head .ico {
   width: 0.875rem;
@@ -1407,7 +1533,7 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  color: var(--fail);
+  color: var(--fail-ink);
   font-weight: 600;
 }
 .worked-failed::before {
@@ -1518,8 +1644,16 @@ a:focus-visible {
   color: var(--done);
   font-weight: 700;
 }
+/* The "◌" is arguably a non-text indicator at 3:1, and it measured 3.39:1 --
+   so this could have been left alone. It is not, because of the company it
+   keeps: the same column paints ✓ in --done (5.90:1) and ✗ in --red (4.54:1),
+   and the RUNNING mark being the one below AA is an inconsistency, not a
+   design decision. Motion is carried by the rotation, not by the brightness,
+   so darkening costs nothing here.
+   The two marks that genuinely are signals rather than glyphs -- the pane
+   header's 6px pulsing dot and .status-spinner's border arc -- keep --run. */
 .activity-running .activity-state {
-  color: var(--run);
+  color: var(--run-ink);
 }
 .activity-running .activity-state > span {
   animation: spin 1.2s linear infinite;
@@ -1617,7 +1751,7 @@ a:focus-visible {
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
 .diagnostic.error {
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 /* A failed run's reason, sat between the transcript and the composer on the
@@ -1637,7 +1771,7 @@ a:focus-visible {
   gap: 0.45rem;
   align-items: baseline;
   margin: 0 auto;
-  color: var(--fail);
+  color: var(--fail-ink);
   font-size: 0.78rem;
   overflow-wrap: anywhere;
 }
@@ -1796,8 +1930,9 @@ a:focus-visible {
 .composer.steering .composer-input {
   border-color: color-mix(in srgb, var(--run) 55%, var(--hairline-2));
 }
+/* The hint sentence. The ring above stays --run: it is a border, not text. */
 .composer.steering .composer-actions > span:first-child {
-  color: var(--run);
+  color: var(--run-ink);
 }
 .composer-input {
   width: 100%;
@@ -1856,9 +1991,13 @@ a:focus-visible {
   background: var(--accent);
   cursor: pointer;
 }
+/* The one control a reader reaches for under time pressure, and it was the
+   least legible thing on screen: --fail on an 18% tint of itself is 3.55:1.
+   The tint stays (it is what makes the button read as the interrupt) and the
+   ink darkens: 5.04:1 on that exact background. */
 .composer-actions .stop {
   border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 18%, var(--card));
 }
 .composer-actions .send {
@@ -2761,7 +2900,7 @@ a:focus-visible {
   gap: 0.6rem;
   border-style: solid;
   border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 .error-notice-message {
@@ -2769,7 +2908,8 @@ a:focus-visible {
   flex: 1;
   overflow-wrap: anywhere;
 }
-/* Inherits --fail, so it is legible in both themes without a second colour. */
+/* Inherits --fail-ink from .error-notice, so it is legible in both themes
+   without a second colour. */
 .error-notice-link {
   font-weight: 600;
   text-underline-offset: 0.15em;
@@ -2779,7 +2919,7 @@ a:focus-visible {
   padding: 0.25rem 0.6rem;
   border: 1px solid color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
   border-radius: 0.35rem;
-  color: var(--fail);
+  color: var(--fail-ink);
   background: transparent;
   font-size: 0.76rem;
   font-weight: 600;
@@ -2789,17 +2929,20 @@ a:focus-visible {
   background: color-mix(in srgb, var(--fail) 14%, var(--card));
 }
 /* Same size as the Retry button's hit area, without its weight: dismissing is
-   the lesser action even on the notices that offer nothing else. */
+   the lesser action even on the notices that offer nothing else. 1.55rem, not
+   1.4rem: 1.4rem laid out at 22.4px, under the 24x24 CSS px floor WCAG 2.2
+   2.5.8 sets for a pointer target, and there is no inline exception to fall
+   back on -- the ✕ is not in a sentence and has no larger equivalent. */
 .error-notice-dismiss {
   display: grid;
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 1.55rem;
+  height: 1.55rem;
   flex: none;
   place-items: center;
   padding: 0;
   border: 0;
   border-radius: 0.3rem;
-  color: var(--fail);
+  color: var(--fail-ink);
   background: transparent;
   font-size: 0.8rem;
   line-height: 1;

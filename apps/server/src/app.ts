@@ -8,6 +8,7 @@ import type { RawData } from "ws";
 import {
   ArchiveThreadRequestSchema,
   UnarchiveThreadRequestSchema,
+  AddProjectRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
   ImportThreadRequestSchema,
@@ -142,7 +143,33 @@ function safeError(error: unknown): {
       project_not_directory: {
         status: 400,
         code: "project_not_directory",
-        message: "The selected item is not a directory.",
+        message: "That path is a file, not a directory.",
+      },
+      // A typo, and by far the likeliest failure now that a path can be
+      // typed. It has to say THAT, not "unavailable or inaccessible", which
+      // sends the reader hunting a permissions problem they do not have.
+      project_path_not_found: {
+        status: 404,
+        code: "project_path_not_found",
+        message: "There is nothing at that path.",
+      },
+      // Distinct from not-found on purpose: the directory is there and the
+      // fix is a permissions one, not a spelling one.
+      project_not_readable: {
+        status: 403,
+        code: "project_not_readable",
+        message: "That directory exists, but its contents cannot be read.",
+      },
+      project_path_relative: {
+        status: 400,
+        code: "project_path_relative",
+        message:
+          "Enter the full path to the directory, starting from the root.",
+      },
+      project_path_invalid: {
+        status: 400,
+        code: "project_path_invalid",
+        message: "That is not a usable path.",
       },
       project_unavailable: {
         status: 400,
@@ -329,6 +356,24 @@ export async function buildServer(
       body.idempotencyKey,
       async () => await directoryPicker.chooseDirectory(),
     );
+  });
+  // The second way in. `/browse` calls a native OS folder chooser, which is
+  // the better route when it works and the only route there was: the dialog
+  // opens as a separate window that can land behind the browser or on another
+  // desktop, and when it failed the app said so and offered nothing else.
+  // Adding a project is the first thing anyone must do and it had no
+  // alternative.
+  //
+  // Nothing is relaxed here. The path goes through the same
+  // `canonicalProject` gate the picker's result does, and this server is
+  // loopback-only running with the user's own permissions -- a path typed
+  // into this field reaches nothing the picker could not have chosen. It
+  // shells out to nothing.
+  server.post("/api/projects", async (request) => {
+    const body = AddProjectRequestSchema.parse(request.body);
+    return {
+      project: await workspace.addProjectByPath(body.path, body.idempotencyKey),
+    };
   });
   server.patch("/api/projects/:projectId", async (request) => {
     const params = projectParamsSchema.parse(request.params);

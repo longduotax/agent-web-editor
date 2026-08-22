@@ -33,6 +33,20 @@ export class ApiClientError extends Error {
   }
 }
 
+// `fetch` rejects with a bare `TypeError: Failed to fetch` when it never got
+// a reply -- the workspace server stopped, was restarted, or the machine went
+// to sleep. That string is the browser's, not ours, and it reached the reader
+// verbatim inside a `role="alert"`: a developer sentence in the one place a
+// non-developer most needs a next step. Everything else in this app maps a
+// failure to a sentence with an action in it; this was the one hole.
+//
+// Mapped here rather than in `ErrorNotice` so every caller gets it -- queries
+// and mutations alike -- and so the code is a real code the UI can branch on
+// instead of a message match.
+export const NETWORK_UNREACHABLE = "network_unreachable";
+const NETWORK_UNREACHABLE_MESSAGE =
+  "Can't reach the Pi workspace server — it may have stopped or be restarting. Your text is safe here; retry once it is back.";
+
 async function request<T>(
   path: string,
   schema: z.ZodType<T>,
@@ -44,10 +58,24 @@ async function request<T>(
     headers.set("Content-Type", "application/json");
     headers.set("X-Pi-Web-Request", "1");
   }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers,
+    });
+  } catch (cause) {
+    // An abort is the caller's own doing (a cancelled query, a navigation)
+    // and must keep its identity so react-query does not report it as a
+    // failure.
+    if (cause instanceof DOMException && cause.name === "AbortError")
+      throw cause;
+    throw new ApiClientError(
+      0,
+      NETWORK_UNREACHABLE,
+      NETWORK_UNREACHABLE_MESSAGE,
+    );
+  }
   const value: unknown = await response.json().catch(() => undefined);
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(value);
@@ -81,6 +109,17 @@ export async function browseProject() {
   return await request("/api/projects/browse", BrowseProjectResponseSchema, {
     method: "POST",
     body: body({ idempotencyKey: commandId() }),
+  });
+}
+// The fallback route in, for when the native folder chooser cannot be used --
+// it fails to open, opens behind the window, or lands on another desktop.
+// Returns the same `{ project }` shape as every other project mutation; the
+// browse route's `cancelled` outcome has no meaning here, because a typed
+// path is either a project or an error.
+export async function addProjectByPath(path: string) {
+  return await request("/api/projects", ProjectMutationResponseSchema, {
+    method: "POST",
+    body: body({ path, idempotencyKey: commandId() }),
   });
 }
 export async function removeProject(projectId: ProjectId) {
