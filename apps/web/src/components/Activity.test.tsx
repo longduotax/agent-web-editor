@@ -10,6 +10,7 @@ import {
   Activity,
   ActivityGroup,
   displayTranscript,
+  failedStepCount,
   formatDuration,
 } from "./Activity.js";
 
@@ -35,6 +36,20 @@ const completedRead: TranscriptItem = {
   id: "result",
   status: "completed",
   output: "# Runtime design\n\nDetails",
+  completedAt: "2026-08-16T00:00:01.000Z",
+};
+
+// G6: the shape of the run that reported a green "Done" with nothing to show
+// for it -- a tool call that failed, whose error is correct once you expand
+// the step and invisible until you do.
+const failedRead: TranscriptItem = {
+  ...runningRead,
+  id: "failed",
+  name: "bash",
+  status: "failed",
+  input: '{"command":"cat /nonexistent/path/xyz.txt"}',
+  output: "cat: /nonexistent/path/xyz.txt: No such file or directory",
+  exitCode: 1,
   completedAt: "2026-08-16T00:00:01.000Z",
 };
 
@@ -202,6 +217,89 @@ describe("worked-for run grouping", () => {
     const summary = screen.getByText("2 steps · 1s");
     expect(summary.closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("Working…")).toBeNull();
+  });
+
+  // G6: both tool calls failed and the collapsed summary read exactly
+  // "Worked for <1s" -- no count, no badge, no colour. The failures were
+  // marked correctly, but only inside a disclosure nobody had opened, so a
+  // run that got nothing done looked identical to one that did everything.
+  it("names the failure count in the collapsed summary", () => {
+    render(
+      <ActivityGroup
+        items={[failedRead, { ...failedRead, id: "second" }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("2 steps · 1s")).toBeInTheDocument();
+    expect(screen.getByText("2 failed")).toBeInTheDocument();
+  });
+
+  it("says nothing about failures when there were none", () => {
+    render(
+      <ActivityGroup
+        items={[completedRead, { ...completedRead, id: "second" }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
+  it("counts only the steps that failed", () => {
+    render(
+      <ActivityGroup
+        items={[completedRead, failedRead, { ...completedRead, id: "third" }]}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("1 failed")).toBeInTheDocument();
+  });
+
+  it("opens a settled group that contains a failure", () => {
+    render(<ActivityGroup items={[failedRead]} projectPath="/workspace" />);
+
+    expect(screen.getByText("1 step · 1s").closest("details")).toHaveAttribute(
+      "open",
+    );
+    expect(
+      screen.getByText("cat /nonexistent/path/xyz.txt"),
+    ).toBeInTheDocument();
+  });
+
+  // The auto-expansion rides ON the live rule rather than against it: a group
+  // that opened because it was live must not slam shut at the moment its
+  // contents matter most.
+  it("stays open when a run with failures settles", () => {
+    const view = render(
+      <ActivityGroup items={[runningRead]} live projectPath="/workspace" />,
+    );
+    expect(screen.getByText("Working…").closest("details")).toHaveAttribute(
+      "open",
+    );
+
+    view.rerender(
+      <ActivityGroup
+        items={[completedRead, failedRead]}
+        live={false}
+        projectPath="/workspace"
+      />,
+    );
+
+    expect(screen.getByText("2 steps · 1s").closest("details")).toHaveAttribute(
+      "open",
+    );
+    expect(screen.getByText("1 failed")).toBeInTheDocument();
+  });
+
+  it("counts failures without needing a duration", () => {
+    expect(
+      failedStepCount([
+        { ...failedRead, timestamp: "", completedAt: null },
+        completedRead,
+      ]),
+    ).toBe(1);
   });
 
   it("lets the user fold a live group away, and keeps it folded while it runs", async () => {

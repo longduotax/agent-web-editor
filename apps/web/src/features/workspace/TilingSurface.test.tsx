@@ -568,8 +568,19 @@ describe("TilingSurface", () => {
       expect(columnChildren).toMatch(/max-width:\s*100%/);
       expect(ruleBody(css, ".transcript-column")).toMatch(/min-width:\s*0/);
 
-      // Wide content scrolls or wraps inside its own box.
-      expect(ruleBody(css, ".markdown table")).toMatch(/overflow-x:\s*auto/);
+      // Wide content scrolls or wraps inside its own box. A table's scroll
+      // container is a wrapper element, not the table itself (Markdown.tsx):
+      // `display: block` on a <table> makes a scroll box whose anonymous
+      // inner table still shrink-to-fits the SAME width, so wide columns
+      // compressed instead of overflowing and the scrollbar never appeared.
+      // The wrapper is capped at the measure; the table inside it takes its
+      // max-content width and overflows, which is what produces the scroll.
+      const tableScroll = ruleBody(css, ".markdown-table-scroll");
+      expect(tableScroll).toMatch(/overflow-x:\s*auto/);
+      expect(tableScroll).toMatch(/max-width:\s*100%/);
+      expect(ruleBody(css, ".markdown-table-scroll > table")).toMatch(
+        /width:\s*max-content/,
+      );
       expect(
         ruleBody(
           css,

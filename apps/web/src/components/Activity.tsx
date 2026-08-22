@@ -236,6 +236,19 @@ function runLabel(items: readonly ToolActivity[]): string {
   return span === null ? steps : `${steps} · ${formatDuration(span)}`;
 }
 
+/**
+ * How many of a group's steps failed.
+ *
+ * The collapsed summary is what a reader actually sees while skimming a
+ * thread, and a run in which every tool call failed used to summarise itself
+ * identically to one in which every call succeeded -- the failures were
+ * correctly marked, but only inside the disclosure nobody had opened. The
+ * count belongs where the skim happens.
+ */
+export function failedStepCount(items: readonly ToolActivity[]): number {
+  return items.filter((item) => item.status === "failed").length;
+}
+
 export function displayTranscript(
   items: readonly TranscriptItem[],
 ): TranscriptItem[] {
@@ -376,18 +389,25 @@ export function ActivityGroup({
    */
   live?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(live);
+  const failed = failedStepCount(items);
+  // A settled group that contains a failure opens itself, and stays open when
+  // the run that produced it settles. This rides ON the live rule rather than
+  // against it: `live` still decides at every flip, and `failed` only ever
+  // widens the answer from "closed" to "open", so a group that opened because
+  // it was live does not slam shut on the one occasion its contents matter
+  // most. A hand-collapse still survives until the next flip.
+  const [expanded, setExpanded] = useState(live || failed > 0);
   const wasLive = useRef(live);
   useEffect(() => {
     if (wasLive.current === live) return;
     wasLive.current = live;
-    setExpanded(live);
-  }, [live]);
+    setExpanded(live || failed > 0);
+  }, [live, failed]);
   const label = live ? "Working…" : runLabel(items);
 
   return (
     <details
-      className="worked-group"
+      className={`worked-group${failed > 0 ? " has-failures" : ""}`}
       open={expanded}
       onToggle={(event) => {
         setExpanded(event.currentTarget.open);
@@ -395,6 +415,15 @@ export function ActivityGroup({
     >
       <summary className="worked">
         <span>{label}</span>
+        {failed > 0 && (
+          // Same red `!` token the failed steps inside already carry, so the
+          // collapsed row and the expanded rows say the same thing in the
+          // same alphabet.
+          <span className="worked-failed">
+            <span aria-hidden="true">!</span>
+            {`${String(failed)} failed`}
+          </span>
+        )}
         <span className="chev" aria-hidden="true">
           ›
         </span>

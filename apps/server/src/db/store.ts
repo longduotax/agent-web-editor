@@ -737,11 +737,18 @@ export class MetadataStore {
     threadId: ThreadId,
     title: string,
   ): ThreadRecord {
+    // `last_activity_at` is deliberately NOT touched. The sidebar orders
+    // threads by it (`ORDER BY t.last_activity_at DESC`), so bumping it here
+    // made renaming a thread move it to the top of the list -- a thread
+    // nobody had worked in since yesterday jumped ahead of one that was
+    // running, because its title was corrected. A rename is not activity: it
+    // is a correction to how a thread is labelled, and the ordering the user
+    // has learned should survive it.
     this.sqlite
       .prepare(
-        "UPDATE threads SET title = ?, last_activity_at = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL",
+        "UPDATE threads SET title = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL",
       )
-      .run(title, this.now(), threadId, projectId);
+      .run(title, threadId, projectId);
     const thread = this.getThread(projectId, threadId);
     if (thread === null) throw new Error("thread_not_found");
     return thread;

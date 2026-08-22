@@ -18,7 +18,7 @@ import {
   type PtyFactory,
   type PtyProcess,
 } from "../terminal/manager.js";
-import { WorkspaceService } from "./workspace.js";
+import { fallbackTitle, WorkspaceService } from "./workspace.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -1135,5 +1135,77 @@ describe("run coordination", () => {
     );
     await context.service.close();
     context.store.close();
+  });
+});
+
+// G14. Titles were slugged by deleting every character that is not a letter
+// or a digit and keeping the first seven words. That is exactly the wrong
+// class to remove from a developer's prompt: it turned a filename into three
+// words, and it silently deleted the `&&` from a shell command, changing the
+// meaning of the thing the title names. The sidebar title is the only handle
+// a thread has.
+describe("the fallback thread title", () => {
+  it("keeps a filename whole", () => {
+    expect(
+      fallbackTitle(
+        "Create a file called LOCAL-CHECKOUT-PROOF.txt containing the single line proof.",
+      ),
+    ).toBe("Create a file called LOCAL-CHECKOUT-PROOF.txt containing…");
+  });
+
+  it("keeps a shell operator that changes what the command does", () => {
+    expect(
+      fallbackTitle(
+        "Run the shell command: sleep 40 && ls. Reply with the single word done.",
+      ),
+    ).toBe("Run the shell command: sleep 40 && ls");
+  });
+
+  it("does not end on a dangling word where punctuation used to be", () => {
+    const title = fallbackTitle(
+      "Explore this repository before changing anything: run ls -la, run git log --oneline -5, and summarise.",
+    );
+    expect(title).toBe(
+      "Explore this repository before changing anything: run ls…",
+    );
+    expect(title).not.toMatch(/anything run$/);
+  });
+
+  it("cuts on a word boundary and never exceeds the column's budget", () => {
+    for (const prompt of [
+      "Refactor packages/pi-adapter/src/index.ts so the naming path is testable, then add tests",
+      "Read the file /definitely/not/here/missing.md and also run the shell command: cat /nonexistent/path/xyz.txt.",
+      "supercalifragilisticexpialidociousandthensomemoreletterspastthelimitxxxxxxxxxxxxxx",
+    ]) {
+      const title = fallbackTitle(prompt);
+      expect(title.length).toBeLessThanOrEqual(60);
+      // A truncated title says so, and does not say so twice.
+      expect(title.endsWith("…")).toBe(true);
+      expect(title).not.toMatch(/[\s,;:-]…$/);
+    }
+  });
+
+  it("takes a short first sentence whole, without its full stop", () => {
+    expect(fallbackTitle("Fix the flaky terminal test.")).toBe(
+      "Fix the flaky terminal test",
+    );
+    expect(fallbackTitle("Why does the build fail?")).toBe(
+      "Why does the build fail",
+    );
+  });
+
+  it("treats a line break as a break, not as a character to delete", () => {
+    expect(fallbackTitle("Update the changelog\n\n- one\n- two")).toBe(
+      "Update the changelog",
+    );
+  });
+
+  it("still names an empty prompt", () => {
+    expect(fallbackTitle("   \n\t ")).toBe("New coding task");
+    expect(fallbackTitle("")).toBe("New coding task");
+  });
+
+  it("capitalises the first character", () => {
+    expect(fallbackTitle("fix the flaky test")).toBe("Fix the flaky test");
   });
 });

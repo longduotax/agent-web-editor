@@ -108,17 +108,123 @@ const browseReceiptSchema = z.discriminatedUnion("outcome", [
 const removedReceiptSchema = z.object({ removed: z.literal(true) });
 const viewedReceiptSchema = z.object({ viewed: z.literal(true) });
 
-function fallbackTitle(prompt: string): string {
-  const words = prompt
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 7);
-  const value = words.join(" ").slice(0, 60).trim();
+const TITLE_LIMIT = 60;
+// A prompt's first clause is rarely this short, and when it is, it is
+// something like "Hi." or "Ok." rather than a title. Below this a sentence
+// boundary is ignored and the truncator takes over.
+const TITLE_SENTENCE_FLOOR = 12;
+// Words that carry no meaning at the end of a truncated title. Dropping the
+// last one turns "Create a file called LOCAL-CHECKOUT-PROOF.txt containing
+// the…" into "…containing…", which says the same thing without the dangle.
+const TITLE_TRAILING_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "but",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "then",
+  "to",
+  "with",
+]);
+
+/**
+ * The thread title used when the model-based namer is unavailable.
+ *
+ * This used to strip every character that is not a letter or a digit, which
+ * is exactly the wrong class to remove from a developer's prompt: it turned
+ * `LOCAL-CHECKOUT-PROOF.txt` into `LOCAL CHECKOUT PROOF` (no longer a
+ * filename), and it silently deleted the `&&` from `sleep 40 && ls`, changing
+ * the meaning of the command the title names. The sidebar title is the only
+ * handle a thread has, so identifiers are the part worth keeping.
+ *
+ * Punctuation is now kept and the length is managed by truncation instead:
+ *
+ *  1. whitespace collapses to single spaces (a newline is a break, not a
+ *     character to delete);
+ *  2. if the first sentence or line ends inside the limit, that is the title
+ *     -- `Run the shell command: sleep 40 && ls. Reply with…` becomes
+ *     `Run the shell command: sleep 40 && ls`, a complete clause with its
+ *     operator intact;
+ *  3. otherwise it is cut at the last word boundary that fits, a dangling
+ *     stopword or separator is dropped, and an ellipsis marks the cut.
+ *
+ * A `.` inside a filename is not a sentence end: a terminator only counts
+ * when whitespace or the end of the prompt follows it, which is what keeps
+ * `PROOF.txt` whole.
+ */
+export function fallbackTitle(prompt: string): string {
+  const text = collapse(prompt);
+  if (text === "") return "New coding task";
+  // A line break is a break, not a character to delete: a prompt whose first
+  // line is a summary followed by a list or a code block has already told us
+  // where its title ends.
+  const line = collapse(prompt.split(/[\r\n]/u, 1)[0] ?? "");
+  const source = line.length >= TITLE_SENTENCE_FLOOR ? line : text;
+  const sentence = firstSentence(source);
+  const value =
+    sentence ??
+    (source.length <= TITLE_LIMIT
+      ? trimTail(source)
+      : truncateOnWord(source, TITLE_LIMIT));
   if (value === "") return "New coding task";
   return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+}
+
+function collapse(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The first sentence, without its terminator, or null when there is none that
+ * makes a usable title.
+ *
+ * A terminator only counts when whitespace or the end of the string follows
+ * it, which is what keeps `PROOF.txt` whole -- the `.` there is followed by a
+ * letter, so it is part of an identifier and not the end of anything.
+ */
+function firstSentence(text: string): string | null {
+  const match = /[.!?]+(?=\s|$)/u.exec(text);
+  if (match === null) return null;
+  const sentence = text.slice(0, match.index).trim();
+  return sentence.length < TITLE_SENTENCE_FLOOR || sentence.length > TITLE_LIMIT
+    ? null
+    : sentence;
+}
+
+/** `text` cut to `limit` characters on a word boundary, ellipsis included. */
+function truncateOnWord(text: string, limit: number): string {
+  if (text.length <= limit) return trimTail(text);
+  // One character of the budget belongs to the ellipsis.
+  const window = text.slice(0, limit - 1);
+  const lastSpace = window.lastIndexOf(" ");
+  // A single word longer than the whole limit has no boundary to cut on, so
+  // it is cut mid-word rather than thrown away.
+  const head = lastSpace === -1 ? window : window.slice(0, lastSpace);
+  const trimmed = dropTrailingStopword(trimTail(head));
+  return trimmed === "" ? "New coding task" : `${trimmed}…`;
+}
+
+/** Drops trailing separators that would sit awkwardly before an ellipsis. */
+function trimTail(text: string): string {
+  return text.replace(/[\s,;:.!?-]+$/u, "");
+}
+
+function dropTrailingStopword(text: string): string {
+  const space = text.lastIndexOf(" ");
+  if (space === -1) return text;
+  const last = text.slice(space + 1).toLowerCase();
+  return TITLE_TRAILING_STOPWORDS.has(last) ? text.slice(0, space) : text;
 }
 
 export class WorkspaceService {

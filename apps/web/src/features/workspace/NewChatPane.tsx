@@ -52,6 +52,59 @@ function starterPrompts(
   ];
 }
 
+/**
+ * A branch name short enough to survive the 200px select, with both ends
+ * intact.
+ *
+ * Every worktree thread creates a branch `pi/<slug>-<hash>`, so this list
+ * grows by one long, machine-generated name per thread and never shrinks.
+ * Head truncation (the browser's default) makes them indistinguishable --
+ * they all begin `pi/` and the slug is the prompt's first words, which for
+ * threads started from the same starter prompt are identical. The trailing
+ * hash is the only part that tells two of them apart, so it is the part that
+ * must survive: the middle goes, not the tail.
+ *
+ * Exported for the test that pins that property.
+ */
+export function shortBranchLabel(branch: string, max = 24): string {
+  if (branch.length <= max) return branch;
+  // Long enough for `-` plus the 8-character hash the worktree manager
+  // appends, so a `pi/*` name keeps the field that disambiguates it.
+  const tail = branch.slice(-9);
+  return `${branch.slice(0, Math.max(1, max - tail.length - 1))}…${tail}`;
+}
+
+/**
+ * Splits the branch list into the branches a person made and the ones this
+ * app made behind them.
+ *
+ * Order is preserved inside each part; only the partition is new.
+ */
+export function partitionBranches(branches: readonly string[]): {
+  project: string[];
+  generated: string[];
+} {
+  const project: string[] = [];
+  const generated: string[] = [];
+  for (const branch of branches)
+    (branch.startsWith("pi/") ? generated : project).push(branch);
+  return { project, generated };
+}
+
+function BranchOptions({ branches }: { branches: readonly string[] }) {
+  return (
+    <>
+      {branches.map((branch) => (
+        // `value` is always the real branch; only the label is shortened,
+        // and `title` keeps the full name one hover away.
+        <option key={branch} value={branch} title={branch}>
+          {shortBranchLabel(branch)}
+        </option>
+      ))}
+    </>
+  );
+}
+
 export interface NewChatPaneProps {
   projectId: ProjectId;
   paneId: PaneId;
@@ -138,6 +191,8 @@ export function NewChatPane(props: NewChatPaneProps) {
   const project = workspace.data?.projects.find(
     (candidate) => candidate.id === projectId,
   );
+  const currentBranch = preflight.data?.currentBranch ?? null;
+  const branchGroups = partitionBranches(preflight.data?.branches ?? []);
   const send = (value: string) => {
     // `requestSubmit()` with no argument ignores the disabled submit button,
     // so Enter still reaches this while a thread is being created. That used
@@ -275,7 +330,9 @@ export function NewChatPane(props: NewChatPaneProps) {
                 </dd>
                 <dt>Local checkout</dt>
                 <dd>
-                  The directory you added. Pi edits the same files you do.
+                  The directory you added. Pi writes to the same files you have
+                  open, on the branch you have checked out. Nothing is copied
+                  first and there is no undo.
                 </dd>
                 <dt>Clean start</dt>
                 <dd>
@@ -401,7 +458,12 @@ export function NewChatPane(props: NewChatPaneProps) {
               <span className="sr-only">Base branch</span>
               <select
                 aria-label="Base branch"
-                value={baseBranch}
+                // In shared mode this control does not apply, and a greyed
+                // select still DISPLAYING a branch reads as "it will use
+                // master" rather than "branch does not apply". The shared
+                // option states the fact instead: whatever is checked out
+                // now is what Pi works on, and it is not a choice made here.
+                value={mode === "shared" ? "current" : baseBranch}
                 disabled={mode === "shared"}
                 onChange={(event) => {
                   setBaseBranch(event.target.value);
@@ -409,11 +471,25 @@ export function NewChatPane(props: NewChatPaneProps) {
                   setCreationKey(commandId());
                 }}
               >
-                {(preflight.data?.branches ?? []).map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
+                {mode === "shared" ? (
+                  <option value="current">
+                    {currentBranch === null
+                      ? "Whatever is checked out"
+                      : `Already on ${currentBranch}`}
                   </option>
-                ))}
+                ) : (
+                  <>
+                    <BranchOptions branches={branchGroups.project} />
+                    {branchGroups.generated.length > 0 && (
+                      // Grouped, not hidden: these are real branches a user
+                      // may legitimately want to branch from again. They just
+                      // must not bury the handful of branches a person named.
+                      <optgroup label="Previous Pi runs">
+                        <BranchOptions branches={branchGroups.generated} />
+                      </optgroup>
+                    )}
+                  </>
+                )}
               </select>
             </label>
           </div>
@@ -446,9 +522,30 @@ export function NewChatPane(props: NewChatPaneProps) {
             </div>
           )}
           {mode === "shared" && (
-            <p className="new-chat-note warning">
-              Pi will work directly in the existing checkout and see its current
-              files.
+            // The old note read "Pi will work directly in the existing
+            // checkout and see its current files." Every word of that was
+            // about READING. Verified against the server: a shared thread
+            // resolves its execution root to the project's own canonical
+            // path (ThreadExecutionContextResolver.resolve, worktree_id
+            // null) and Pi's tools run there with the user's permissions,
+            // no approval step and no sandbox -- so it edits, creates and
+            // deletes files in the directory the user has open, on whatever
+            // branch is checked out, with their uncommitted work in place.
+            // That is the defining property of the mode and the one
+            // irreversible choice on this screen, so it is what the note
+            // says first.
+            // `status`, not `alert`: it appears in response to the user's own
+            // choice, so it should be announced, but politely -- and not
+            // `note`, which is silent on appearance.
+            <p className="new-chat-note warning" role="status">
+              <strong>Pi writes to your project directory.</strong> It edits,
+              creates and deletes files in{" "}
+              {project?.displayPath ?? "this project"}
+              {currentBranch === null
+                ? ""
+                : ` on your current branch, ${currentBranch},`}{" "}
+              alongside your uncommitted changes. Nothing is copied first and
+              there is no undo.
             </p>
           )}
           <div className="composer-input new-chat-input">

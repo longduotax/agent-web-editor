@@ -54,6 +54,10 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   restoreScrollGeometry();
+  // Drafts are real localStorage keys and outlive the render. A test that
+  // leaves one behind hands it to the next test's composer, which reads its
+  // draft in a `useState` initialiser.
+  localStorage.clear();
 });
 
 // jsdom has no layout, so scrollHeight/clientHeight are always 0 and any
@@ -186,7 +190,9 @@ describe("ThreadPane", () => {
 
     await screen.findByRole("heading", { name: "Example thread" });
 
-    await user.click(screen.getByRole("button", { name: "Split" }));
+    await user.click(
+      screen.getByRole("button", { name: "Split right into a new chat" }),
+    );
     expect(onSplit).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByRole("button", { name: "Collapse" }),
@@ -657,6 +663,61 @@ describe("a pane whose thread is archived", () => {
       screen.getByRole("textbox", { name: "Message Pi" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+  });
+
+  // SF3. Every piece of per-thread state in this component -- the archived
+  // latch, the steer echoes, the restore mutation -- belonged to the thread
+  // the pane was showing, and none of it was keyed to the thread. The latch
+  // only ever goes true, so a pane rebound from a listed thread onto one the
+  // listing has not caught up with declared a live, brand-new thread Archived
+  // and took its composer away.
+  it("does not carry the archived latch across a rebind to another thread", async () => {
+    const otherThreadId = "20000000-0000-4000-8000-000000000002" as ThreadId;
+    const otherSnapshot: ThreadSnapshot = {
+      ...snapshot,
+      thread: {
+        ...snapshot.thread,
+        id: otherThreadId,
+        title: "Second thread",
+      },
+    };
+    api.getSnapshot.mockImplementation((_projectId: ProjectId, id: ThreadId) =>
+      Promise.resolve(id === threadId ? snapshot : otherSnapshot),
+    );
+    // The listing knows the first thread and not the second one.
+    api.getWorkspace.mockResolvedValue(listed);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const pane = (id: ThreadId) => (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ThreadPane
+            projectId={projectId}
+            threadId={id}
+            focused
+            onFocus={vi.fn()}
+            onClose={vi.fn()}
+            onSplit={vi.fn()}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const view = render(pane(threadId));
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    view.rerender(pane(otherThreadId));
+
+    await screen.findByRole("heading", { name: "Second thread" });
+    expect(
+      screen.getByRole("textbox", { name: "Message Pi" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "This thread is archived. Restore it to keep working.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("resolves while the retry ladder is still running, instead of sitting on Loading", async () => {
@@ -1179,7 +1240,11 @@ describe("live streaming", () => {
     expect(composer).toHaveValue("");
   });
 
-  it("hands the echo over to server truth without duplicating the message", async () => {
+  // Named for what it actually exercises. It settles the run in the same step
+  // that delivers the persisted message, so the run-settled sweep clears the
+  // echo whether or not retirement is wired in at all; the mid-run test below
+  // is the one that pins the handover.
+  it("clears the echo when the run settles, leaving one copy on screen", async () => {
     api.getSnapshot.mockResolvedValue(running);
     api.steer.mockResolvedValue({ run: running.currentRun });
     const user = userEvent.setup();
@@ -1213,6 +1278,232 @@ describe("live streaming", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Stop and reply BANANA")).toHaveLength(1);
     });
+  });
+
+  // BL1, end to end. "keep going" is the vocabulary of steering, and the
+  // second time you say it is the time it matters. The earlier prompt was
+  // never a pending echo, so nothing had consumed it.
+  it("keeps the echo when an earlier turn in this thread used the same words", async () => {
+    const earlier: ThreadSnapshot = {
+      ...running,
+      transcript: [
+        {
+          id: "pi-earlier",
+          kind: "message",
+          role: "user",
+          text: "keep going",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "pi-answer",
+          kind: "message",
+          role: "assistant",
+          text: "On it.",
+          timestamp: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    };
+    api.getSnapshot.mockResolvedValue(earlier);
+    api.steer.mockResolvedValue({ run: earlier.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "keep going",
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalled();
+    });
+    expect(screen.getAllByText("keep going")).toHaveLength(2);
+
+    // A tool step lands, as one does every few seconds during a run. The
+    // transcript changed, but Pi still has not persisted the steer, so both
+    // copies must still be on screen.
+    api.getSnapshot.mockResolvedValue({
+      ...earlier,
+      transcript: [
+        ...earlier.transcript,
+        {
+          id: "pi-progress",
+          kind: "message",
+          role: "assistant",
+          text: "Still working.",
+          timestamp: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await screen.findByText("Still working.");
+    expect(screen.getAllByText("keep going")).toHaveLength(2);
+  });
+
+  // BL2. `SteerRequestSchema` is `z.string().trim()` and the server hands Pi
+  // the PARSED value, so echoing the raw textarea contents meant the echo
+  // could never match what came back -- two identical bubbles for the rest of
+  // the run. This also covers the real handover, which happens while the run
+  // is still going: Pi drains its steering queue at the end of the TURN.
+  it("echoes what the server will store, and hands over mid-run", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "fix the test");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(composer).toHaveValue("fix the test\n");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "fix the test",
+      );
+    });
+
+    // Pi persisted it at the end of the turn in flight. The run is STILL
+    // running -- this is the ordinary case, not the settled one.
+    api.getSnapshot.mockResolvedValue({
+      ...running,
+      transcript: [
+        {
+          id: "pi-1a2b3c4d",
+          kind: "message",
+          role: "user",
+          text: "fix the test",
+          timestamp: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("fix the test")).toHaveLength(1);
+    });
+  });
+
+  // SF1. Pi neither persists nor flushes a queued steer when the turn it was
+  // queued into is aborted (`agent-loop.js:106-111`), so the words are gone
+  // from the transcript AND from the composer, with no notice. The composer
+  // clearing is this app's promise that the message was accepted.
+  it("returns an undelivered steer to the composer when the run is stopped", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "wait, use pnpm",
+    );
+    await user.keyboard("{Enter}");
+    await screen.findByText("wait, use pnpm");
+
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runState: "interrupted" },
+      currentRun: null,
+      lastRun: {
+        ...running.currentRun,
+        state: "interrupted",
+        endedAt: "2026-01-01T00:00:05.000Z",
+        failureCode: "user_stop",
+        failureMessage: "Stopped by the user.",
+      },
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+        "wait, use pnpm",
+      );
+    });
+    expect(screen.getByText(/never delivered/)).toBeInTheDocument();
+  });
+
+  // Nit 5. The outcome notice is about the run that just ended; once the user
+  // has sent the next message it is describing history above an already
+  // cleared composer.
+  it("drops the previous run's outcome notice as soon as the next message is sent", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      lastRun: {
+        ...running.currentRun,
+        state: "interrupted",
+        endedAt: "2026-01-01T00:00:05.000Z",
+        failureCode: "user_stop",
+        failureMessage: "Stopped by the user.",
+      },
+    });
+    api.prompt.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByText("Stopped by the user.");
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "next thing please",
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Stopped by the user."),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  // The mirror of the test above, and the one that matters: `lastRun`
+  // includes the run IN FLIGHT, so dismissing by its id on every send
+  // pre-dismissed the outcome of the run being steered. Stopping it then
+  // produced no notice at all. Found in the running app, not here.
+  it("still reports the outcome of a run that was steered before it was stopped", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Pi" }),
+      "use pnpm not npm",
+    );
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalled();
+    });
+
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runState: "interrupted" },
+      currentRun: null,
+      lastRun: {
+        ...running.currentRun,
+        state: "interrupted",
+        endedAt: "2026-01-01T00:00:05.000Z",
+        failureCode: "user_stop",
+        failureMessage: "Stopped by the user.",
+      },
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    expect(await screen.findByText(/Stopped by the user\./)).toBeVisible();
   });
 
   it("says it is steering before the keystroke, not only on the submit button", async () => {

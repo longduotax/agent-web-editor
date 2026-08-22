@@ -22,7 +22,20 @@
   --faint: #b3b3b8;
   --green: #1e7b34;
   --red: #d1453b;
-  --amber: #c07d16;
+  /* WARNING TEXT, and only warning text. It was #c07d16 -- the same value as
+     --run -- which is 3.39:1 on white and 3.13:1 on its own 8% tint: the
+     least legible text in light mode, and it is the local-checkout warning.
+     #8a5a0f measures 5.92:1 on --card, 5.30:1 on the 8% tint every warning
+     callout paints behind itself, 5.38:1 on --hover and 5.01:1 on --active --
+     so it clears AA on every background it lands on by margin, not by a
+     hundredth.
+
+     It is deliberately NOT shared with --run any more. --run is the colour of
+     a run in progress (a 6px pulsing dot, a spinner rim, a "Working" label);
+     darkening that to satisfy a text rule would dull the one moving signal in
+     the app to fix a sentence somewhere else. The two just happened to be the
+     same hex, which is how a status colour ended up carrying a warning. */
+  --amber: #8a5a0f;
   --accent: #2f6feb;
   --send-bg: #1d1d1f;
   --send-fg: #ffffff;
@@ -321,6 +334,16 @@ a:focus-visible {
   color: var(--send-fg);
   background: var(--accent);
 }
+/* Explains the disabled "Opening…" button above it: the app is waiting on a
+   window it does not own and cannot raise. Quiet, not an alert -- nothing has
+   gone wrong yet. */
+.add-project-waiting {
+  margin: 0;
+  padding: 0 0.8rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
 .project-list {
   flex: 1;
   overflow: auto;
@@ -526,15 +549,68 @@ a:focus-visible {
   color: var(--text);
   background: var(--active);
 }
+/* One column, not three. The field used to share the row with Save and
+   Cancel, which took 115px of a 227px row and left the input at 95px -- about
+   twelve characters of a title that is routinely fifty. The buttons are worth
+   less than the text they were crowding, so they moved to a second line and
+   the field takes the whole width. */
 .thread-rename {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.3rem;
   padding: 0.3rem;
 }
+/* A wrapping textarea rather than a one-line input: at this width a long
+   title is fully visible across two or three short lines instead of scrolling
+   past a slot. `resize: none` because it sizes itself (useAutoGrow) and a
+   drag handle inside a sidebar row would fight the list. */
+.thread-rename textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  /* The outline is drawn as an inset shadow rather than a border ON PURPOSE.
+     useAutoGrow sets `height = scrollHeight`, which measures content plus
+     padding but not borders; against `box-sizing: border-box` a real 1px
+     border therefore eats 2px off the content box and clips the last line by
+     a sliver. The composer textareas never hit this because their border sits
+     on the wrapper. A shadow contributes nothing to the box, so the field
+     grows to exactly the height its text needs. */
+  border: 0;
+  border-radius: 0.35rem;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+  background: var(--card);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  resize: none;
+}
+.thread-rename textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.thread-rename-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+/* Enter and Escape both already worked and neither was written down
+   anywhere. The buttons stay for the pointer; this is for everyone else. */
+.thread-rename-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .thread-rename .error-notice {
-  grid-column: 1 / -1;
+  margin: 0;
 }
 .thread-context-menu {
   position: fixed;
@@ -1220,11 +1296,65 @@ a:focus-visible {
 .transcript-column :is(details, summary, pre, table) {
   min-width: 0;
 }
-/* Wide tabular content scrolls in its own box rather than widening the column. */
-.markdown table {
-  display: block;
-  overflow-x: auto;
+/* Wide tabular content scrolls in its own box rather than widening the column.
+   The scroll container is a real wrapper element (see Markdown.tsx), not the
+   table itself: `display: block` on a <table> makes the element a scroll box
+   but leaves the anonymous table inside it shrink-to-fit against the SAME
+   width, so a wide table compressed its columns and wrapped every cell
+   instead of ever overflowing. A wrapper plus `width: max-content` on a table
+   that is still `display: table` is what actually produces the overflow, and
+   therefore the scrollbar -- the same arrangement `pre` already has.
+
+   This is D1's constraint working, not fighting it: the wrapper is bounded by
+   the transcript measure and the table scrolls inside it, so no table can
+   widen the reading column. */
+.markdown-table-scroll {
   max-width: 100%;
+  margin-bottom: 1.4em;
+  overflow-x: auto;
+}
+.markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.markdown-table-scroll > table {
+  width: max-content;
+  max-width: none;
+  /* The actual finding: the table parsed correctly and rendered as ragged
+     tab-separated text -- `border-collapse: separate`, `td` border `0px
+     none`, `th` background transparent -- with nothing tying a cell to its
+     column. Everything else in this renderer is styled; tables were the one
+     thing left bare. */
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.45;
+}
+.markdown :is(th, td) {
+  padding: 0.34rem 0.7rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+/* A heavier rule under the header than between rows, so the head reads as a
+   head rather than as the first row in bold. */
+.markdown th {
+  border-bottom: 2px solid var(--hairline-2);
+  color: var(--text);
+  background: var(--hover);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.markdown tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+/* The first and last cells sit flush with the reading column's left edge and
+   with the table's right edge; the padding is there to separate columns from
+   each other, not to inset the block from the text above it. */
+.markdown :is(th, td):first-child {
+  padding-left: 0;
+}
+.markdown :is(th, td):last-child {
+  padding-right: 0;
 }
 .u-row {
   display: flex;
@@ -1267,6 +1397,23 @@ a:focus-visible {
 }
 .worked:hover {
   color: var(--text-2);
+}
+/* The failure count, carried in the COLLAPSED summary. `.worked` is --muted
+   and stays that way; this one span takes the failure colour, so a run that
+   got nothing done can no longer be mistaken at a glance for one that did.
+   The separator is a pseudo-element rather than text so a screen reader hears
+   "2 steps, 41s, 2 failed" and not a middle dot. */
+.worked-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--fail);
+  font-weight: 600;
+}
+.worked-failed::before {
+  content: "·";
+  color: var(--muted);
+  font-weight: 400;
 }
 .worked .chev {
   transition: transform 0.12s ease;
@@ -2641,6 +2788,31 @@ a:focus-visible {
 .error-notice-retry:hover {
   background: color-mix(in srgb, var(--fail) 14%, var(--card));
 }
+/* Same size as the Retry button's hit area, without its weight: dismissing is
+   the lesser action even on the notices that offer nothing else. */
+.error-notice-dismiss {
+  display: grid;
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3rem;
+  color: var(--fail);
+  background: transparent;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.error-notice-dismiss:hover {
+  background: color-mix(in srgb, var(--fail) 14%, var(--card));
+}
+.error-notice-dismiss:focus-visible,
+.error-notice-retry:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
 .conversation-empty {
   display: grid;
   max-width: 32rem;
@@ -3038,8 +3210,29 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.76rem;
 }
+/* A callout, not a caption. This is the app's most consequential warning --
+   the one irreversible choice on the screen -- and it was 12.2px of amber
+   text with `background: rgba(0,0,0,0)` and `border: 0px none`, so it carried
+   no more visual weight than the "Starts from committed master" hint it sits
+   in place of. The tint and the left rule are what say "read this"; the
+   contrast fix (see --amber) is what makes it readable once you do.
+
+   Slightly larger than a plain note as well: 0.8rem, because it is the one
+   line here that a user must not skim. */
 .new-chat-note.warning {
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--amber);
+  border-radius: 0.25rem;
   color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, var(--card));
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.new-chat-note.warning strong {
+  font-weight: 650;
+}
+.new-chat-note.warning p {
+  margin: 0;
 }
 @media (max-width: 480px) {
   .transcript,

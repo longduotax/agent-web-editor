@@ -42,6 +42,7 @@ import {
   unarchiveThread,
 } from "./api/client.js";
 import { ErrorNotice } from "./components/ErrorNotice.js";
+import { ThreadRenameForm } from "./components/ThreadRenameForm.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
@@ -115,6 +116,23 @@ function Sidebar({
         await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
+  // A failed browse used to survive every navigation and clear only on a
+  // reload or a successful browse -- a red block in the primary navigation,
+  // for an action the user had already abandoned, reading as "something is
+  // broken with my project". Moving anywhere in the workspace is enough to
+  // say they have moved on. Read through a ref so this effect depends on the
+  // ROUTE only: putting the mutation's own error in the dependency list would
+  // fire the moment the error arrived and clear the notice before it painted.
+  const browseRef = useRef(browse);
+  useEffect(() => {
+    browseRef.current = browse;
+  });
+  useEffect(() => {
+    const current = browseRef.current;
+    // Never while the dialog is still open: resetting a pending mutation
+    // re-arms the Browse button behind a chooser that is still on screen.
+    if (!current.isPending && current.error !== null) current.reset();
+  }, [selectedProjectId, selectedThreadId]);
   const [discoveringProjectId, setDiscoveringProjectId] = useState<
     ProjectId | undefined
   >(undefined);
@@ -351,7 +369,27 @@ function Sidebar({
           {browse.isPending ? "Opening…" : "Browse…"}
         </button>
       </div>
-      {browse.error !== null && <ErrorNotice error={browse.error} />}
+      {/* The folder chooser is a separate OS window, which on macOS can open
+          behind the browser or on another Space. All the sidebar used to say
+          was a disabled button reading "Opening…" forever, so the app looked
+          hung when in fact it was waiting on a dialog the user could not see.
+          Saying where the dialog went is the whole fix: there is no cancel to
+          offer -- the app cannot close someone else's window, and re-arming
+          the button would only open a second dialog behind the first. */}
+      {browse.isPending && (
+        <p className="add-project-waiting" role="status">
+          A folder chooser is open in a separate window. It may be behind this
+          one, or on another desktop.
+        </p>
+      )}
+      {browse.error !== null && (
+        <ErrorNotice
+          error={browse.error}
+          onDismiss={() => {
+            browse.reset();
+          }}
+        />
+      )}
       {/* One notice per failed archive, naming its thread: with several
           archives in flight an unlabelled message cannot say which one
           failed, and the row silently reappearing explains nothing. */}
@@ -365,7 +403,14 @@ function Sidebar({
           }}
         />
       ))}
-      {unarchive.error !== null && <ErrorNotice error={unarchive.error} />}
+      {unarchive.error !== null && (
+        <ErrorNotice
+          error={unarchive.error}
+          onDismiss={() => {
+            unarchive.reset();
+          }}
+        />
+      )}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
@@ -545,10 +590,18 @@ function Sidebar({
                           }}
                         >
                           {editing ? (
-                            <form
-                              className="thread-rename"
-                              onSubmit={(event) => {
-                                event.preventDefault();
+                            <ThreadRenameForm
+                              value={renamingThread.title}
+                              label={`Rename ${thread.title}`}
+                              pending={rename.isPending}
+                              error={rename.error}
+                              onChange={(title) => {
+                                setRenamingThread({
+                                  ...renamingThread,
+                                  title,
+                                });
+                              }}
+                              onSubmit={() => {
                                 const title = renamingThread.title.trim();
                                 if (title !== "")
                                   rename.mutate({
@@ -557,43 +610,10 @@ function Sidebar({
                                     title,
                                   });
                               }}
-                            >
-                              <input
-                                aria-label={`Rename ${thread.title}`}
-                                autoFocus
-                                maxLength={200}
-                                value={renamingThread.title}
-                                onFocus={(event) => {
-                                  event.currentTarget.select();
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key !== "Escape") return;
-                                  event.stopPropagation();
-                                  setRenamingThread(null);
-                                }}
-                                onChange={(event) => {
-                                  setRenamingThread({
-                                    ...renamingThread,
-                                    title: event.target.value,
-                                  });
-                                }}
-                              />
-                              <button type="submit" disabled={rename.isPending}>
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                disabled={rename.isPending}
-                                onClick={() => {
-                                  setRenamingThread(null);
-                                }}
-                              >
-                                Cancel
-                              </button>
-                              {rename.error !== null && (
-                                <ErrorNotice error={rename.error} />
-                              )}
-                            </form>
+                              onCancel={() => {
+                                setRenamingThread(null);
+                              }}
+                            />
                           ) : (
                             <>
                               <Link

@@ -1074,7 +1074,9 @@ describe("the panel does not follow the focused pane", () => {
     ).not.toBeInTheDocument();
 
     // Split: the fresh pane owns no thread and takes focus.
-    await user.click(screen.getByRole("button", { name: "Split" }));
+    await user.click(
+      screen.getByRole("button", { name: "Split right into a new chat" }),
+    );
     expect(
       await screen.findByRole("region", { name: "New chat" }),
     ).toBeInTheDocument();

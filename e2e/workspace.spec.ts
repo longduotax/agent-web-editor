@@ -140,9 +140,19 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   await browse.click();
-  await expect(page.getByRole("alert")).toHaveText(
+  const browseFailure = page.getByRole("alert");
+  await expect(browseFailure).toContainText(
     "The folder browser could not be opened.",
   );
+  // G10: the notice used to have no way out. It is not tied to a retryable
+  // mutation, so it carries a dismiss, and navigating away clears it too.
+  await expect(
+    browseFailure.getByRole("button", { name: "Dismiss this message" }),
+  ).toBeVisible();
+  await browseFailure
+    .getByRole("button", { name: "Dismiss this message" })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 
   await projectLink.hover();
   await page
@@ -152,6 +162,23 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await page
     .getByRole("combobox", { name: "Execution location" })
     .selectOption("shared");
+  // G7: the note used to say only that Pi would SEE the existing files. This
+  // mode's defining property is that it WRITES to the user's own directory,
+  // and it is the one irreversible choice on this screen.
+  await expect(
+    page.getByText("Pi writes to your project directory"),
+  ).toBeVisible();
+  // The base branch control does not apply here, and it used to sit greyed
+  // out still displaying a branch, which reads as "it will use that one".
+  await expect(
+    page.getByRole("combobox", { name: "Base branch" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "Base branch" }),
+    // "Already on <branch>" where there is one, and this where there is not.
+    // Either way it states a fact about the checkout rather than offering a
+    // base branch it will not use.
+  ).toContainText(/Already on |Whatever is checked out/);
   await page
     .getByRole("textbox", { name: "First message" })
     .fill("Inspect this project");

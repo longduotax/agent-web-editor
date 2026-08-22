@@ -20,7 +20,11 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 });
 
 import { newChatDraftKey, readDraft } from "./drafts.js";
-import { NewChatPane } from "./NewChatPane.js";
+import {
+  NewChatPane,
+  partitionBranches,
+  shortBranchLabel,
+} from "./NewChatPane.js";
 
 const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
@@ -32,7 +36,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function renderNewChat() {
+function renderNewChat(preflight: Record<string, unknown> = {}) {
   api.getWorkspace.mockResolvedValue({
     projects: [
       {
@@ -56,6 +60,7 @@ function renderNewChat() {
     currentBranch: "master",
     branches: ["master"],
     changes: null,
+    ...preflight,
   });
   const onThreadStarted = vi.fn();
   const onFocus = vi.fn();
@@ -368,5 +373,113 @@ describe("NewChatPane's composer on Escape", () => {
       await user.keyboard(chord);
 
     expect(composer).toHaveFocus();
+  });
+});
+
+// G7. The Local-checkout note read "Pi will work directly in the existing
+// checkout and see its current files." Every word of that is about READING.
+// Verified against the server: a shared thread's execution root IS the
+// project's own directory, and Pi's tools run there with the user's
+// permissions and no approval step -- it writes. That is the defining
+// property of the mode, and it is the one irreversible choice on this screen.
+describe("NewChatPane's local-checkout warning", () => {
+  async function chooseLocalCheckout(
+    preflight: Record<string, unknown> = {},
+  ): Promise<HTMLElement> {
+    const user = userEvent.setup();
+    renderNewChat(preflight);
+    await screen.findByRole("textbox", { name: "First message" });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Execution location" }),
+      "shared",
+    );
+    return await screen.findByRole("status");
+  }
+
+  it("says that Pi writes, names the directory and names the branch", async () => {
+    const note = await chooseLocalCheckout();
+
+    expect(note).toHaveTextContent("Pi writes to your project directory");
+    expect(note).toHaveTextContent(/edits, creates and deletes files/);
+    expect(note).toHaveTextContent("example");
+    expect(note).toHaveTextContent("master");
+    expect(note).toHaveTextContent(/no undo/);
+    // The old sentence claimed only that Pi would SEE the files.
+    expect(note.textContent).not.toMatch(/see its current files/);
+  });
+
+  it("still names the write when the project has no current branch", async () => {
+    const note = await chooseLocalCheckout({ currentBranch: null });
+
+    expect(note).toHaveTextContent("Pi writes to your project directory");
+    expect(note.textContent).not.toMatch(/current branch/);
+  });
+
+  // The disabled Base branch select kept DISPLAYING "master", which reads as
+  // "it will use master" rather than "this control does not apply".
+  it("stops the disabled base-branch select showing a branch it will not use", async () => {
+    await chooseLocalCheckout();
+
+    const branch = screen.getByRole("combobox", { name: "Base branch" });
+    expect(branch).toBeDisabled();
+    expect(branch).toHaveTextContent("Already on master");
+    expect(branch.textContent).not.toBe("master");
+  });
+});
+
+// G11. Every worktree thread creates a branch `pi/<slug>-<hash>`, and the
+// select was built from every local head -- so the list grew by one long,
+// machine-generated name per thread, forever, in a 200px control.
+describe("NewChatPane's base branch list", () => {
+  const generated = [
+    "pi/explore-this-repository-before-changing-anything-1909c1f5",
+    "pi/explore-this-repository-before-changing-anything-2a3b4c5d",
+  ];
+
+  it("puts the branches a person named ahead of the ones this app made", async () => {
+    renderNewChat({
+      branches: ["master", generated[0], "feature/login", generated[1]],
+    });
+    await screen.findByRole("textbox", { name: "First message" });
+    await screen.findByRole("option", { name: "feature/login" });
+
+    const select = screen.getByRole("combobox", { name: "Base branch" });
+    const values = [...select.querySelectorAll("option")].map(
+      (option) => option.value,
+    );
+    expect(values).toEqual(["master", "feature/login", ...generated]);
+    expect(select.querySelector("optgroup")).toHaveAttribute(
+      "label",
+      "Previous Pi runs",
+    );
+  });
+
+  it("keeps the hash that tells two generated branches apart", async () => {
+    renderNewChat({ branches: ["master", ...generated] });
+    await screen.findByRole("textbox", { name: "First message" });
+    await screen.findByRole("option", { name: "master" });
+
+    const labels = [
+      ...screen
+        .getByRole("combobox", { name: "Base branch" })
+        .querySelectorAll("option"),
+    ].map((option) => option.textContent);
+    // Head truncation -- the browser's default in a 200px control -- leaves
+    // these two identical.
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels[1]).toMatch(/1909c1f5$/);
+    expect(labels[2]).toMatch(/2a3b4c5d$/);
+    for (const label of labels) expect(label.length).toBeLessThanOrEqual(24);
+  });
+
+  it("shortens only what has to be shortened", () => {
+    expect(shortBranchLabel("master")).toBe("master");
+    expect(shortBranchLabel("feature/a-fairly-long-name")).toBe(
+      "feature/a-fair…long-name",
+    );
+    expect(partitionBranches(["master", "pi/a-1", "dev"])).toEqual({
+      project: ["master", "dev"],
+      generated: ["pi/a-1"],
+    });
   });
 });
