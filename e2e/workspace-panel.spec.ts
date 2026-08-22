@@ -2863,6 +2863,30 @@ function diffGeometry() {
 }
 
 /**
+ * What a copy of the WHOLE diff body would carry (K3).
+ *
+ * `diffSelection` above selects one hunk's lines, which is the case that was
+ * already right. This one selects everything inside the scrolling box, which
+ * is what a reader dragging from the top of a diff to the bottom of it
+ * actually selects: several hunks, both labelled sections, and every piece of
+ * chrome between them.
+ */
+function diffWholeSelection() {
+  const body = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  const selection = window.getSelection();
+  if (body === null || selection === null) return null;
+  const range = document.createRange();
+  range.selectNodeContents(body);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const selected = selection.toString();
+  selection.removeAllRanges();
+  return selected;
+}
+
+/**
  * The pinned first column at one horizontal scroll offset (K1).
  *
  * Reported by hit-testing rather than by reading a rule, because what WSP-06
@@ -3210,5 +3234,57 @@ test("panel diff: the prefix and both gutters stay on screen at any scroll offse
         );
       }
     }
+  }
+});
+
+test("panel diff: a selection spanning hunks and sections is still patch text", async ({
+  page,
+}) => {
+  // K3. Within one hunk the copy was already exactly right. Across a hunk
+  // boundary it took the twisty and the tally with it —
+  //
+  //     ▾
+  //     @@ -78,11 +82,26 @@ from avm_agent.v4.bracket import (
+  //     +15 -0
+  //      )
+  //
+  // — and across a section boundary the bare word `Unstaged` too, which is
+  // the difference between a copied diff that applies and one that does
+  // not. The `@@` header is legitimate patch content and stays copyable; the
+  // panel's own drawing does not.
+  await openProjectWithThread(page);
+
+  for (const [file, wanted] of [
+    // Two hunks in one section...
+    ["diff-target.txt", ["@@ -1,5 +1,5 @@", "@@ -27,7 +27,7 @@ line 26"]],
+    // ...and one hunk in each of two sections.
+    ["staged-target.txt", ["+second STAGED", "+third UNSTAGED"]],
+  ] as const) {
+    // Back to the list first: opening a diff makes the Diff tab active, and
+    // the Changes rows are in a hidden body until it is selected again.
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await changeRow(page, file).click();
+    await expect(page.getByRole("tab", { name: file })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^@@/ }).first(),
+    ).toBeVisible();
+
+    const selected = await page.evaluate(diffWholeSelection);
+    expect(selected).not.toBeNull();
+    if (selected === null) return;
+
+    // The selection really does span the whole body, or it proves nothing.
+    for (const line of wanted) expect(selected).toContain(line);
+
+    // Every line of it is something `git apply` reads: a hunk header, or a
+    // context, added, removed or no-newline line. Nothing else — no `▾`, no
+    // `+2 -0` tally, no `Staged`/`Unstaged` heading, no bounded-view notice.
+    const stray = selected
+      .split("\n")
+      .filter((line) => line !== "")
+      .filter((line) => !/^(@@|[-+ \\])/.test(line));
+    expect(`${file} ${stray.join(" | ")}`).toBe(`${file} `);
+    expect(selected).not.toContain("▾");
+    expect(selected).not.toContain("▸");
   }
 });

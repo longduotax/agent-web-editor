@@ -2328,6 +2328,20 @@ a:focus-visible {
   text-align: left;
   cursor: pointer;
 }
+/* K3. The disclosure's own drawing, and the section heading, are NOT patch
+   content: a selection dragged across two hunks used to copy the twisty, a
+   `+15 -0` tally and the bare word `Unstaged` into the middle of the diff,
+   and a patch with those lines in it does not apply. The `@@` header beside
+   them stays selectable, because `git apply` needs it. Bounded-view notices
+   go the same way for the same reason — they are the panel explaining
+   itself, not lines Git wrote. */
+.diff-hunk-mark,
+.diff-hunk-tally,
+.diff-section h4,
+.diff-section > .panel-state {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .diff-hunk-mark {
   flex: none;
 }

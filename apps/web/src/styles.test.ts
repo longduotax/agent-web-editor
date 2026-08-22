@@ -822,6 +822,41 @@ describe("the Diff tab's line numbers", () => {
   });
 });
 
+describe("the Diff tab's copyable text", () => {
+  // K3. Inside one hunk the copy was already exactly right — clean patch
+  // text, prefixes kept, no line numbers. Across a hunk boundary it picked
+  // up the disclosure's own chrome:
+  //
+  //     ▾
+  //     @@ -78,11 +82,26 @@ from avm_agent.v4.bracket import (
+  //     +15 -0
+  //      )
+  //
+  // and across a section boundary the bare word `Unstaged` as well. A
+  // two-hunk copy of a diff will not apply, which is most of what copying a
+  // diff is for. Computed `user-select` was `auto` on all four.
+
+  it("leaves the disclosure's chrome out of a selection", () => {
+    for (const selector of [
+      ".diff-hunk-mark",
+      ".diff-hunk-tally",
+      ".diff-section h4",
+      ".diff-section > .panel-state",
+    ])
+      expect(
+        `${selector} ${declarationsFor(selector)["user-select"] ?? ""}`,
+      ).toBe(`${selector} none`);
+  });
+
+  it("keeps the `@@` header itself copyable", () => {
+    // It is legitimate patch content — `git apply` needs it — so it is the
+    // one part of the disclosure that must stay selectable. The tally and
+    // the twisty beside it are the panel's own drawing.
+    expect(declarationsFor(".diff-hunk-header")["user-select"]).toBeUndefined();
+    expect(declarationsFor(".diff-lines")["user-select"]).toBeUndefined();
+  });
+});
+
 describe("the Diff tab's header path", () => {
   // J1 again, on the other header that states a path. The declarations are
   // shared with the File tab's rule, so this asserts that the diff's
