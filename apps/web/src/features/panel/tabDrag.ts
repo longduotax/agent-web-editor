@@ -128,13 +128,31 @@ function edgeAt(rect: DragRect, point: DragPoint): PanelEdge | null {
 }
 
 /**
+ * The part of a group the edges and the centre share: everything below its
+ * tab strip.
+ *
+ * The strip is a drop target in its own right and it is about 40px tall,
+ * while the top band has a 32px floor, so the two would otherwise overlap
+ * almost exactly. Giving the strip priority alone is not enough — that would
+ * leave the top edge with whatever few pixels the strip did not cover, or
+ * with none at all in a short group, and WSP-03 asks for four edges that can
+ * each be hit without precision. So the strip is taken off the top first and
+ * the four edges divide what is left, which is also exactly what the overlay
+ * draws.
+ */
+export function contentRect(zone: GroupZone): DragRect {
+  const stripHeight = zone.strip === null ? 0 : zone.strip.rect.height;
+  return {
+    left: zone.rect.left,
+    top: zone.rect.top + stripHeight,
+    width: zone.rect.width,
+    height: zone.rect.height - stripHeight,
+  };
+}
+
+/**
  * The drop target under the pointer, or null when it is over none — which
  * WSP-03 requires to leave the layout exactly as it was.
- *
- * The strip is resolved before the edges deliberately. A strip is about 40px
- * tall and the top band is at least 32px, so they overlap by construction;
- * the strip is the more specific target, and without this rule most of every
- * strip would split the group instead of reordering its tabs.
  */
 export function resolveDropTarget(
   point: DragPoint,
@@ -148,7 +166,8 @@ export function resolveDropTarget(
       groupId: zone.groupId,
       index: stripInsertIndex(zone.strip, point.x),
     };
-  const edge = edgeAt(zone.rect, point);
+  const body = contentRect(zone);
+  const edge = edgeAt(body, point);
   if (edge !== null) return { kind: "edge", groupId: zone.groupId, edge };
   return { kind: "centre", groupId: zone.groupId };
 }

@@ -113,6 +113,7 @@ function actionsSpy(): PanelActions {
     setOpen: vi.fn(),
     updateTab: vi.fn(),
     bindPendingContexts: vi.fn(),
+    announce: vi.fn(),
   };
 }
 

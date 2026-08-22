@@ -13,6 +13,7 @@ import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import { TabStrip } from "./TabStrip.js";
 import type { PanelActions } from "./usePanelState.js";
+import type { TabDragController } from "./useTabDrag.js";
 import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
 import type { TabGroup } from "./panelModel.js";
 
@@ -51,6 +52,22 @@ function actionsSpy(): PanelActions {
     setOpen: vi.fn(),
     updateTab: vi.fn(),
     bindPendingContexts: vi.fn(),
+    announce: vi.fn(),
+  };
+}
+
+// A drag that is not happening. The drag itself is exercised against a whole
+// panel in TabDrag.test.tsx, where there are two groups to drop between.
+function idleDrag(): TabDragController {
+  return {
+    drag: null,
+    ghostRef: { current: null },
+    onTabPointerDown: vi.fn(),
+    onTabPointerMove: vi.fn(),
+    onTabPointerUp: vi.fn(),
+    onTabPointerCancel: vi.fn(),
+    consumeClick: () => false,
+    zoneFor: () => undefined,
   };
 }
 
@@ -86,6 +103,7 @@ function renderStrip(
       group={overrides.group ?? group}
       tabs={tabs}
       actions={actions}
+      drag={idleDrag()}
       focused
       focusedContext={
         overrides.focusedContext === undefined ? here : overrides.focusedContext
@@ -156,6 +174,7 @@ describe("TabStrip", () => {
           group={{ ...group, activeTabId }}
           tabs={tabs}
           actions={actions}
+          drag={idleDrag()}
           focused
           focusedContext={here}
           index={1}
@@ -380,6 +399,7 @@ describe("TabStrip", () => {
           group={group}
           tabs={tabs}
           actions={actionsSpy()}
+          drag={idleDrag()}
           focused
           focusedContext={here}
           index={1}

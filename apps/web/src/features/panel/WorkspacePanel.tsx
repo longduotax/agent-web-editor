@@ -21,6 +21,7 @@ import {
 import { tabElementId } from "./TabStrip.js";
 import type { TabContext } from "./panelTabs.js";
 import type { PanelController } from "./usePanelState.js";
+import { useTabDrag } from "./useTabDrag.js";
 
 // The docked column right of the chat surface (WSP-01): a keyboard-operable
 // resize separator, the tree of tab groups, and — when the panel is closed —
@@ -36,6 +37,9 @@ export function WorkspacePanel({
   focusedContext: TabContext | null;
 }): JSX.Element {
   const { state, actions, focusRequest, announcement } = controller;
+  // Owned here rather than by a strip: a drag spans every group, and the
+  // group it started in may be unmounted by the drop that ends it.
+  const drag = useTabDrag(state, actions);
   const [resizing, setResizing] = useState(false);
   const resizingPointer = useRef<number | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -178,6 +182,7 @@ export function WorkspacePanel({
                 node={state.root}
                 state={state}
                 actions={actions}
+                drag={drag}
                 focusedContext={focusedContext}
                 groupOrder={groupOrder}
                 closeControlGroupId={closeControlGroupId}
@@ -196,6 +201,19 @@ export function WorkspacePanel({
         <p className="panel-announcement" role="status">
           {announcement}
         </p>
+        {/* The dragged tab's ghost: a label following the pointer, never a
+            clone of the tab's body — cloning one would mount a second
+            terminal, and the body's own host element must not move until the
+            drop does move it (PanelBodies.tsx). */}
+        {drag.drag !== null && (
+          <div
+            className="panel-drag-ghost"
+            ref={drag.ghostRef}
+            aria-hidden="true"
+          >
+            {drag.drag.title}
+          </div>
+        )}
       </aside>
       {!open && (
         <div className="panel-rail">

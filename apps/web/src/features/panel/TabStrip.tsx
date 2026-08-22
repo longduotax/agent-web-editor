@@ -9,8 +9,10 @@ import { PanelRightIcon } from "./PanelRightIcon.js";
 import type { TabGroup } from "./panelModel.js";
 import { tabTitle } from "./panelTabs.js";
 import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
+import { stripCaretOffset } from "./tabDrag.js";
 import { showsWorktreeChip } from "./tabContext.js";
 import type { PanelActions } from "./usePanelState.js";
+import type { TabDragController } from "./useTabDrag.js";
 
 // One tab group's strip: a real tablist with a roving tabindex (WSP-10),
 // a per-tab close control, the worktree chip (WSP-02), and the `+` menu.
@@ -35,6 +37,8 @@ export interface TabStripProps {
   group: TabGroup;
   tabs: Record<TabId, PanelTab>;
   actions: PanelActions;
+  /** The panel-wide tab drag (WSP-03), idle or in progress. */
+  drag: TabDragController;
   /** Whether this group is the panel's focused one. */
   focused: boolean;
   /** The focused chat pane's scope: what `+` opens tabs for, and what the
@@ -53,6 +57,7 @@ export function TabStrip(props: TabStripProps): JSX.Element {
     group,
     tabs,
     actions,
+    drag,
     focused,
     focusedContext,
     index,
@@ -61,6 +66,12 @@ export function TabStrip(props: TabStripProps): JSX.Element {
   } = props;
   const activeTabId = group.activeTabId;
   const activeTab = activeTabId === null ? undefined : tabs[activeTabId];
+  // Where a release right now would insert the dragged tab in THIS strip.
+  const dropIndex =
+    drag.drag?.target?.kind === "strip" && drag.drag.target.groupId === group.id
+      ? drag.drag.target.index
+      : null;
+  const dropZone = dropIndex === null ? undefined : drag.zoneFor(group.id);
 
   // Overflow must never hide the tab the user is looking at: the strip
   // scrolls, and the active tab is scrolled back into it.
@@ -126,25 +137,57 @@ export function TabStrip(props: TabStripProps): JSX.Element {
           strip.scrollLeft += delta;
         }}
       >
+        {/* The insertion point a strip drop would use, drawn in the strip's
+            own scrolled content coordinates so it stays put while the strip
+            scrolls under the drag. */}
+        {dropIndex !== null &&
+          dropZone?.strip !== undefined &&
+          dropZone.strip !== null && (
+            <div
+              className="panel-drop-caret"
+              aria-hidden="true"
+              style={{ left: stripCaretOffset(dropZone.strip, dropIndex) }}
+            />
+          )}
         {group.tabIds.map((tabId) => {
           const tab = tabs[tabId];
           if (tab === undefined) return null;
           const title = tabTitle(tab);
           const active = tabId === activeTabId;
+          const dragged = drag.drag?.tabId === tabId;
           return (
             <button
               type="button"
               role="tab"
               key={tabId}
               id={tabElementId(tabId)}
+              data-panel-tab={tabId}
               // Only the active tab names a panel: a tab that has never been
               // activated has no body mounted (WSP-09 mounts on first use),
               // so pointing at one would be a dangling reference.
               aria-controls={active ? tabPanelElementId(tabId) : undefined}
               aria-selected={active}
               tabIndex={active ? 0 : -1}
-              className={`panel-tab ${active ? "active" : ""}`}
+              className={`panel-tab ${active ? "active" : ""} ${dragged ? "dragging" : ""}`}
+              // WSP-03's drag. The close affordance is not a drag handle:
+              // starting a drag from it would make a press on the × either
+              // close the tab or move it depending on a tremor.
+              onPointerDown={(event) => {
+                if (isCloseAffordance(event.target)) return;
+                drag.onTabPointerDown(event, {
+                  tabId,
+                  title,
+                  groupId: group.id,
+                });
+              }}
+              onPointerMove={drag.onTabPointerMove}
+              onPointerUp={drag.onTabPointerUp}
+              onPointerCancel={drag.onTabPointerCancel}
               onClick={(event) => {
+                // A drag ends in a click on the tab it started from, because
+                // the pointer was captured there. That click belongs to the
+                // drag, not to the tab.
+                if (drag.consumeClick(tabId)) return;
                 if (isCloseAffordance(event.target)) actions.closeTab(tabId);
                 else actions.activateTab(tabId);
               }}

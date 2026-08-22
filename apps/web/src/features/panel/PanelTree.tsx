@@ -11,6 +11,7 @@ import { treeMinHeight, treeMinWidth } from "./panelGeometry.js";
 import { TabGroupView } from "./TabGroupView.js";
 import type { TabContext } from "./panelTabs.js";
 import type { PanelActions } from "./usePanelState.js";
+import type { TabDragController } from "./useTabDrag.js";
 
 // The panel's own tiling tree (WSP-01). A sibling of the chat surface's
 // `TilingSurface`, deliberately: same geometry module, same divider
@@ -26,6 +27,8 @@ export interface PanelTreeProps {
   node: TreeNode<"group", GroupId>;
   state: PanelState;
   actions: PanelActions;
+  /** The panel-wide tab drag (WSP-03), passed to every group it may drop on. */
+  drag: TabDragController;
   focusedContext: TabContext | null;
   /** Every group in reading order, so each can name itself (WSP-10). */
   groupOrder: readonly GroupId[];
@@ -44,6 +47,7 @@ export function PanelTree(props: PanelTreeProps): JSX.Element | null {
         group={group}
         tabs={state.tabs}
         actions={props.actions}
+        drag={props.drag}
         focused={state.focusedGroupId === node.id}
         focusedContext={props.focusedContext}
         index={props.groupOrder.indexOf(node.id) + 1}

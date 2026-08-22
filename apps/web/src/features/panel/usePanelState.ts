@@ -53,6 +53,16 @@ export interface PanelActions {
   updateTab: (tabId: TabId, patch: TabPatch) => void;
   /** Binds every tab still carrying a null context (see D-1 below). */
   bindPendingContexts: (context: TabContext) => void;
+  /**
+   * Says something in the panel's live region, changing nothing else.
+   *
+   * The drag (WSP-03) is the caller: a pointer gesture is invisible to a
+   * screen reader unless the pick-up, each drop target it crosses, and its
+   * outcome are narrated (WSP-10). It shares the region the refused split
+   * already uses rather than adding a second one, because two live regions
+   * on one surface interrupt each other.
+   */
+  announce: (message: string) => void;
 }
 
 export interface PanelController {
@@ -190,6 +200,18 @@ export function usePanelState(): PanelController {
       },
       bindPendingContexts: (context) => {
         transform((current) => bindPendingContexts(current, context));
+      },
+      announce: (message) => {
+        setSession((current) => ({
+          ...current,
+          // Two identical messages in a row are two events, and a live
+          // region re-announces only text it sees change — a drag crossing
+          // back onto a target it just left says the same words again.
+          announcement: {
+            text: message,
+            id: (current.announcement?.id ?? 0) + 1,
+          },
+        }));
       },
     }),
     [],

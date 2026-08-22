@@ -1466,8 +1466,12 @@ a:focus-visible {
 }
 /* The strip scrolls rather than squeezing tabs into unreadable slivers, and
    the active tab is scrolled back into view whenever it changes, so overflow
-   can never hide the tab the user is looking at (WSP-09). */
+   can never hide the tab the user is looking at (WSP-09).
+   Positioned so it is the offset parent of its own tabs: a drag measures
+   each tab's `offsetLeft` inside this box, which — unlike a client
+   rectangle — does not move when the strip scrolls under the pointer. */
 .panel-tab-options {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
@@ -1481,6 +1485,11 @@ a:focus-visible {
   min-width: 0;
   /* Never shrinks: the strip scrolls instead. */
   flex: 0 0 auto;
+  /* A touch that pans horizontally scrolls the strip — the only way a touch
+     device reaches a tab an overflowing strip cannot show. A touch that
+     moves vertically belongs to the drag (WSP-03), which is the direction
+     every cross-group drop lies in anyway. */
+  touch-action: pan-x;
   align-items: center;
   gap: 0.3rem;
   padding: 0.8rem 0.4rem;
@@ -1672,8 +1681,10 @@ a:focus-visible {
       visibility 0s;
   }
 }
-/* One tab group: its strip, and the bodies of the tabs it has mounted. */
+/* One tab group: its strip, and the bodies of the tabs it has mounted.
+   Positioned, because its drop targets (WSP-03) are drawn over it. */
 .panel-group {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -1812,6 +1823,85 @@ a:focus-visible {
 }
 .panel-divider:focus-visible {
   outline: none;
+}
+/* Dragging a tab (WSP-03).
+   Every one of these elements exists only while a drag is in progress, and
+   none of them is hit-tested: the pointer is captured by the tab it started
+   on, and the target is resolved from measurements taken at pick-up
+   (tabDrag.ts). They are what the user sees, not what the drag asks. */
+.panel-tab.dragging {
+  opacity: 0.45;
+}
+.panel-drop-zones {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+.panel-drop-edge,
+.panel-drop-centre {
+  position: absolute;
+  border: 1px dashed transparent;
+  border-radius: 0.3rem;
+}
+.panel-drop-top,
+.panel-drop-bottom {
+  right: 0;
+  left: 0;
+}
+.panel-drop-top {
+  top: 0;
+}
+.panel-drop-bottom {
+  bottom: 0;
+}
+.panel-drop-left {
+  left: 0;
+}
+.panel-drop-right {
+  right: 0;
+}
+/* Individually highlighted as the pointer enters it, which WSP-03 requires:
+   the user must be able to tell which of five targets a release would use. */
+.panel-drop-edge.active,
+.panel-drop-centre.active {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+/* The insertion point inside a strip. Absolutely positioned inside the
+   strip's own scroller, so it scrolls with the tabs it sits between. */
+.panel-drop-caret {
+  position: absolute;
+  z-index: 1;
+  top: 0.35rem;
+  bottom: 0.35rem;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  pointer-events: none;
+}
+/* A label under the pointer, never a clone of the tab's body: cloning one
+   would mount a second terminal. Moved by transform alone, which is
+   composited, so following the pointer costs no layout (WSP-09). */
+.panel-drag-ghost {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
+  max-width: 12rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: var(--surface-2);
+  box-shadow: var(--dock-shadow);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  pointer-events: none;
 }
 .scope-note,
 .terminal-warning {

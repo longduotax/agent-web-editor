@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  contentRect,
   DRAG_CANCELLED_MESSAGE,
   DRAG_UNCHANGED_MESSAGE,
   dragPickUpMessage,
@@ -150,6 +151,30 @@ describe("resolveDropTarget", () => {
       groupId: "group-1",
       index: 0,
     });
+  });
+
+  // Priority alone would leave the top edge with whatever pixels the strip
+  // did not cover — none at all in a short group — so the strip is taken off
+  // the top and the edges divide what is left.
+  it("puts a full-thickness top edge directly below the strip", () => {
+    const top = { kind: "edge", groupId: "group-1", edge: "top" };
+    // 5px below a 40px strip, and 59px below it: both the top edge.
+    expect(resolveDropTarget({ x: 200, y: 45 }, zones)).toEqual(top);
+    expect(resolveDropTarget({ x: 200, y: 99 }, zones)).toEqual(top);
+    expect(resolveDropTarget({ x: 200, y: 101 }, zones)).toEqual({
+      kind: "centre",
+      groupId: "group-1",
+    });
+  });
+
+  it("measures the edges against the group's content, strip excluded", () => {
+    expect(contentRect(group())).toEqual({
+      left: 0,
+      top: 40,
+      width: 400,
+      height: 560,
+    });
+    expect(contentRect(group({ strip: null }))).toEqual(group().rect);
   });
 
   it("picks the group the pointer is actually in", () => {
