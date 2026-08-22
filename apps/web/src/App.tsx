@@ -813,6 +813,13 @@ function ProjectWorkspace({
     },
     enabled: focusedThreadId !== null,
     placeholderData: keepPreviousData,
+    // Restored after the port to the panel dropped it silently (D6). It is
+    // usually redundant — ThreadPane holds the same key with the same
+    // interval and the live subscription — but only while the focused
+    // thread still has a pane mounted, and this query is what names the
+    // worktree on a tab's chip. A chip is a claim about which worktree a tab
+    // reads; it should not be able to go stale because a pane closed.
+    refetchInterval: 15_000,
   });
   const focusedContext = useMemo(() => {
     const data = snapshot.data;

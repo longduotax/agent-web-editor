@@ -232,6 +232,33 @@ describe("FilesTab", () => {
     expect(api.getFiles).toHaveBeenLastCalledWith(projectId, threadId, "mai");
   });
 
+  // D7. The tab needs a selection to do anything, so WSP-10 requires a
+  // no-selection state; the port dropped the inspector's, while the Changes
+  // tab kept its analogue.
+  it("says what a selection would do while nothing is selected", async () => {
+    api.getFiles.mockResolvedValue({
+      entries: [
+        { path: "src/main.ts", name: "main.ts", kind: "file", size: 1 },
+      ],
+      truncated: false,
+    });
+    renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByText("Select a file to open it in its own tab."),
+    ).toBeVisible();
+  });
+
+  it("offers no no-selection line when there is nothing to select", async () => {
+    api.getFiles.mockResolvedValue({ entries: [], truncated: false });
+    renderBody(<FilesTab tab={tab} visible actions={actionsSpy()} />);
+
+    await screen.findByText("No files in this workspace.");
+    expect(
+      screen.queryByText("Select a file to open it in its own tab."),
+    ).not.toBeInTheDocument();
+  });
+
   it("caps the rendered rows and says how many there really are", async () => {
     api.getFiles.mockResolvedValue({
       entries: Array.from({ length: 250 }, (_, index) => ({

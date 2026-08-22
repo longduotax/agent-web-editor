@@ -101,6 +101,14 @@ export const FilesTab = memo(function FilesTab({
           </li>
         ))}
       </ul>
+      {/* WSP-10's no-selection state. This tab does not preview in place —
+          activating a row opens a File tab (WSP-05) — but it is still a list
+          the user is meant to choose from, and saying so is what the shipped
+          inspector did and what the Changes tab still does. The old
+          inspector's version of this line was dropped in the port (D7). */}
+      {entries.length > 0 && (
+        <p className="panel-state">Select a file to open it in its own tab.</p>
+      )}
       {entries.length > FILE_LIST_RENDER_LIMIT && (
         <p className="panel-state" aria-live="polite">
           {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(entries.length)} files. Search to narrow the list.`}
