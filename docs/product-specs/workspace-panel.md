@@ -2,17 +2,21 @@
 
 **Current version:** None
 
-**Proposed version:** 1
+**Proposed version:** 2
 
-**Proposal status:** Approved
+**Proposal status:** Draft
 
 **Implementation status:** In progress
 
-**Product approval:** Approved for specification version 1 (user, 2026-08-22,
-from the design as presented in session, which the user approved and directed to
+**Product approval:** Pending for specification version 2 — the bounded Files-tab
+revision below (navigable tree, ignore rules honoured by default, flat search,
+accessible naming), drafted 2026-08-22 after a hands-on pass at a real
+repository. **Specification version 1 remains approved** (user, 2026-08-22, from
+the design as presented in session, which the user approved and directed to
 implementation; the user has not yet read this document itself, so a discrepancy
 between it and that discussion resolves in favour of the discussion and returns
-this proposal to Draft)
+that proposal to Draft), and its implementation continues. Version 2 adds
+behaviour to WSP-05 alone and reopens no other requirement.
 
 **Subsystem:** Browser workspace composition — the right-hand workspace surface,
 its tabs, its internal tiling, and the file, diff, terminal, and browser views it
@@ -153,6 +157,10 @@ never silently dropped: anything that cannot be restored is either migrated or
 accounted for by a full reset, never left referenced-but-absent.
 
 ### WSP-05 — Files and File tabs
+
+_Revised by [proposed version 2](#proposed-revision-version-2--the-files-tab-is-a-navigable-ignore-aware-tree),
+which replaces this requirement's Files-tab listing behavior. The File-tab rules
+below are unchanged by that revision._
 
 A **Files** tab lists the files of its context's execution scope with the
 existing bounded, searchable, `.git`-excluding traversal. Activating a file
@@ -336,6 +344,176 @@ by colour alone.
     type renders defined loading, empty, error-with-retry, and no-selection
     states that read correctly in both themes without relying on colour alone.
 
+## Proposed revision (version 2) — the Files tab is a navigable, ignore-aware tree
+
+**Proposal status:** Draft; product approval pending.
+
+**Scope.** This revision replaces the Files-tab listing behavior of
+[WSP-05](#wsp-05--files-and-file-tabs) and adds acceptance criteria 11 through 14. Every other requirement of version 1 — WSP-01 through WSP-04 and WSP-06
+through WSP-10 — is untouched, as are version 1's non-goals. In particular the
+**read-only** non-goal stands in full: a tree adds navigation, never editing,
+and no expansion, tooltip, or copy affordance introduced here writes anything.
+
+**Why.** On 2026-08-22 a reviewer drove the running application against a real
+repository and verified the result in the DOM. Two things made the Files tab
+unusable there, and neither is an implementation miss against version 1:
+
+- **The traversal excludes only `.git`.** Searching `README.md` returned
+  hundreds of `frontend/node_modules/@babel/…`, `@eslint/…`, and `@floating-ui/…`
+  matches and buried the project's own README.
+  [Inspector and terminal](../design/inspector-and-terminal.md) deferred
+  ignore-file support — "ignore behavior is explicit and can later incorporate
+  parsed ignore files" — and that deferral was tolerable while Files was one
+  third of a cramped strip that also had to hold Changes and Terminal. It is not
+  tolerable now that Files is a first-class, durable, independently addressed
+  tab whose whole purpose is browsing a repository.
+- **Files is a flat list of paths from the execution root**, with no directory
+  expansion, no collapsing, and rows that truncate. The user asked for a
+  VS-Code-like surface; this is the one place the panel clearly is not one.
+  Version 1's WSP-05 required only the existing traversal, so a tree is a
+  contract change rather than a defect, which is why it is proposed here instead
+  of being fixed silently.
+
+### WSP-05 — Files and File tabs (revised by version 2)
+
+A **Files** tab presents the files of its context's execution scope as a
+**navigable tree**. Activating a file opens a **File** tab for it rather than
+previewing in place, so a document the user is reading survives further
+browsing.
+
+- **The listing is hierarchical.** Directories and files are shown in a tree.
+  A directory is **expandable and collapsible in place**, and expanding one
+  reveals its own children rather than replacing the view. A file's row shows
+  **its own name**, not its path from the execution root; the full
+  workspace-relative path is available on the row's tooltip and through
+  copy-path. Which directories are expanded is part of the tab's own persisted
+  state (WSP-04), so a tab reopened after a reload is expanded exactly as it was
+  left.
+- **Ignore rules are honoured by default.** Both the listing and the search
+  exclude paths matched by the repository's own ignore rules, in addition to
+  `.git`. A dependency directory therefore cannot bury the project's own files.
+  The user may **explicitly opt into showing ignored files**, and while ignored
+  files are hidden the tab **says so** — a listing that quietly under-reports
+  what is on disk is not acceptable, in the tree or in a search result count.
+- **Search stays flat.** While a search term is active the tab shows flat
+  matching paths rather than a tree, because a tree of sparse matches is harder
+  to read than a list. Clearing the search returns to the tree **at its previous
+  expansion state**, not to a collapsed root.
+- **Every row and every tab exposes its name to assistive technology.** A file
+  row is announced by its file name, a directory row by its directory name and
+  its expanded or collapsed state, and each tab in a tab strip by the title it
+  displays. This restates WSP-10 rather than extending it. It is restated
+  because the tree introduces a row type WSP-10 was written before — a directory
+  whose announced state changes as it expands — and because naming here was
+  reported as broken and turned out not to be: see
+  [Findings against version 1](#findings-against-version-1), which records both
+  the evidence and the fact that the inspection tool, not the page, was at
+  fault. The requirement stands; how it is verified is what that finding
+  changed.
+- The tree stays inside WSP-09's render budget: an expanded directory with more
+  children than the budget allows states that it is showing a bounded portion,
+  exactly as the flat list already does.
+
+A **File** tab is strictly read-only; the product offers no editing affordance
+of any kind.
+
+- A markdown file renders as a **formatted preview** by default, with an
+  explicit toggle to view its source. The rendered preview does not load remote
+  images or execute embedded scripts.
+- A text file that is not markdown renders with **syntax highlighting** derived
+  from the active theme's tokens, and remains readable — as plain monospace
+  text — if highlighting is unavailable for its language or has not finished
+  loading. Highlighting never blocks first paint of the file's content.
+- Binary, oversized, truncated, missing, and inaccessible files each render
+  their own explicit labelled state, as the shipped preview already does.
+- The tab offers copy-path and copy-content actions. Copy-path yields the
+  normalized workspace-relative path; absolute server paths are never shown.
+
+### Acceptance criteria added by version 2
+
+Continuing the numbering of the version 1 list above.
+
+11. A Files tab opened on a repository shows a tree: directories expand and
+    collapse in place, a file row displays only its own name while its tooltip
+    and copy-path give the full workspace-relative path, and the set of
+    expanded directories survives a reload with the tab.
+12. Neither the listing nor the search returns a path matched by the
+    repository's ignore rules or by `.git`; searching a name that also exists
+    inside an ignored dependency directory returns the project's own file and
+    not the dependency's copies; the tab states that ignored files are hidden;
+    and an explicit opt-in reveals them and is itself persisted with the tab.
+13. Entering a search term switches the tab to a flat list of matching paths,
+    and clearing it restores the tree with exactly the directories that were
+    expanded before the search.
+14. Every file row, every directory row (including its expanded or collapsed
+    state), and every tab in every tab strip exposes an accessible name equal to
+    the text it displays, confirmed by computing the accessible name rather than
+    by an automated rule scan alone.
+
+## Findings against version 1
+
+The same hands-on pass of 2026-08-22 reported six issues. Two were contract gaps
+and are answered by proposed version 2 above. The other four were reported as
+defects against behavior version 1 already requires; on follow-up in the running
+application, **two of those four were false positives from the inspection tool
+rather than faults in the page**. All of them are recorded here so the
+specification is not read as silent about any of them, and the live ones are
+tracked in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md).
+
+### Confirmed, needing no contract change
+
+| Finding                                                                                                    | Requirement involved                      | Tracked in  |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ----------- |
+| Only the active tab exposes an announced close control — one "Close X tab" button rather than one per tab. | WSP-10 (every action reachable and named) | Milestone 3 |
+| File content does not wrap and is clipped at the panel's right edge, with no visible horizontal scroll.    | WSP-05's "remains readable" clause        | Milestone 5 |
+
+The first of these is a **design decision to confirm rather than a defect to
+fix**: a tablist may own only tabs, so a real button nested inside a tab is a
+nested interactive control, and the strip's single close control names the
+selected tab while arrow keys move the selection. What must hold is that any tab
+can be closed in one step without a pointer. The second is unconfirmed as to
+mechanism and open.
+
+### Closed as not defects — the tool was at fault, not the page
+
+Panel tabs and file-list rows were reported as exposing **no accessible name**,
+with the accessibility tree showing bare `tab` and `button` nodes. Both reports
+were re-checked against the live DOM and are **wrong**. The markup is:
+
+```html
+<button class="panel-tab" role="tab">
+  <span class="panel-tab-title">Changes</span>
+  <span
+    class="panel-tab-close"
+    data-tab-close
+    aria-hidden="true"
+    title="Close Changes"
+    >×</span
+  >
+</button>
+```
+
+```html
+<button>
+  <span aria-hidden="true">·</span
+  ><span>frontend/node_modules/@alloc/quick-lru/readme.md</span>
+</button>
+```
+
+In each case the label-bearing span is **not** `aria-hidden`; `tab` and `button`
+are both name-from-content roles; and the `aria-hidden` close affordance is
+excluded from the name computation without suppressing its sibling. The
+accessible name therefore computes correctly, and no requirement is violated.
+
+**The empty `name` field came from the accessibility-tree dump tool, which
+renders a name-from-content role as blank.** That is the durable lesson, and it
+is recorded here so the same tool output is not re-reported as the same defect
+later: an empty `name` in a tree dump is evidence about the dump, not about the
+page, until the accessible name has actually been computed. Verification of
+naming therefore uses a computed accessible name — never a tree dump alone, and
+never an automated rule scan alone.
+
 ## Superseded requirements
 
 ### In the Codex-style workspace surface spec
@@ -391,3 +569,8 @@ None. The four questions raised during drafting were resolved with the user on
   (WSP-01).
 - Diff and preview fidelity → **structured unified diff** (WSP-06) and
   **lazy-loaded syntax highlighting** (WSP-05).
+
+Proposed version 2 raises no new product question. It awaits product approval,
+not a decision: the behavior it specifies was chosen from what the hands-on pass
+showed, and the one judgement inside it — flat results while a search is active,
+a tree otherwise — is stated in the requirement rather than left open.

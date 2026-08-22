@@ -32,10 +32,24 @@ superseded, or abandoned.
   (layout v1→v2). Implementation is complete and verified (unit coverage,
   end-to-end Playwright coverage, and the tiling-spec supersession); kept Active
   pending merge.
-- [Workspace panel](2026-08-22-workspace-panel.md) — Ready plan version 1,
-  technical approval granted 2026-08-22, product approval satisfied by
-  [Workspace panel](../../product-specs/workspace-panel.md) v1 (approved from
-  the design as presented in session, not yet from a reading of the document).
+- [Workspace panel](2026-08-22-workspace-panel.md) — Draft plan version 2,
+  technical approval pending; plan version 1 was approved on 2026-08-22 and its
+  milestones are carried forward, with milestones 1 and 2 implemented. Product
+  approval for [Workspace panel](../../product-specs/workspace-panel.md) v1 was
+  granted from the design as presented in session, not from a reading of the
+  document; **specification version 2 — a bounded WSP-05 revision making the
+  Files tab a navigable, ignore-aware tree — is Draft with approval pending**,
+  and plan version 2's new milestone 4 (directory-scoped server listing,
+  ignore-rule parsing over both listing and search, the browser tree with
+  persisted expansion, flat search, panel storage v2 → v3) waits on it. Plan
+  version 2 also folds a keyboard close-control question into milestone 3 and a
+  file-content overflow defect into milestone 5, and adds a standing hands-on UI
+  pass to every remaining milestone, all after a 2026-08-22 manual pass found
+  six issues in a milestone the automated suite had passed. Two of those six —
+  panel tabs and file rows reported as having no accessible name — were probed
+  against the live DOM and closed as false positives from the accessibility-tree
+  dump tool; the computed-name and keyboard-walk verification they prompted is
+  kept, and pass findings are now confirmed before they become work.
   Replaces the
   `Changes | Files | Terminal` inspector (CWS-06, superseded) with a docked
   panel of tab groups in their own binary tiling tree, holding durable tabs

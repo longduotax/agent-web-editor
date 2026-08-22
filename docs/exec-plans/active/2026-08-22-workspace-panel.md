@@ -1,10 +1,18 @@
 # Workspace panel implementation plan
 
-**Status:** Ready
+**Status:** Draft
 
-**Plan version:** 1
+**Plan version:** 2
 
-**Technical approval:** Approved for plan version 1 (user, 2026-08-22)
+**Technical approval:** Pending for plan version 2 — the added file-tree and
+ignore-rule milestone (new milestone 4), which brings a new server listing mode,
+ignore-rule parsing at the file boundary, and a persisted-shape change to the
+`files` tab. Plan version 1 was approved by the user on 2026-08-22 and every
+milestone it covered is carried forward unchanged; that approval is not
+retracted, and milestones already implemented stay implemented. What is pending
+is approval of the new milestone and of the accessibility and overflow fix items
+folded into milestones 3 and 5. Product approval for the governing revision
+(specification version 2) is pending as well.
 
 **Subsystem:** Browser workspace composition — the docked right-hand panel, its
 tab groups and durable tabs, and the server multi-terminal, terminal-cwd, and
@@ -19,14 +27,20 @@ URL-probe boundaries those tabs require
 `apps/web/src/inspectorPreferences.ts` (deleted),
 `apps/web/src/api/client.ts`, new `apps/server/src/terminal/cwd.ts`,
 `apps/server/src/terminal/manager.ts`, new `apps/server/src/browser/probe.ts`,
-`apps/server/src/app.ts`, `packages/contracts/src/index.ts` (terminal client and
+`apps/server/src/app.ts`, `apps/server/src/inspector/files.ts`, new
+`apps/server/src/inspector/ignoreRules.ts`, new
+`apps/web/src/features/panel/FileTree.tsx`,
+`apps/web/src/features/panel/FilesTab.tsx`,
+`packages/contracts/src/index.ts` (terminal client and
 server frames, a terminals-listing response, a browser-probe request and
-response), `apps/web/package.json` (Shiki), and the design and architecture
+response, a directory-scoped file-listing query and response),
+`apps/web/package.json` (Shiki), and the design and architecture
 documents named below. No database, migration, agent-runtime, or Pi-adapter
 change.
 
 **Governing specification:** [Workspace panel](../../product-specs/workspace-panel.md)
-— WSP-01 through WSP-10
+— WSP-01 through WSP-10, with WSP-05 as revised by that specification's
+[proposed version 2](../../product-specs/workspace-panel.md#proposed-revision-version-2--the-files-tab-is-a-navigable-ignore-aware-tree)
 
 **Related documents or issue:**
 [Codex-style workspace surface](../../product-specs/codex-workspace-surface.md)
@@ -55,6 +69,33 @@ discussion resolves in favour of the discussion, returns the proposal to Draft,
 and invalidates this plan's technical approval. No question in its Open product
 questions section remains open. This plan implements WSP-01 through WSP-10 and
 performs the CWS-06 supersession bookkeeping the spec requires.
+
+**Plan version 2 and specification version 2.** On 2026-08-22, after milestone 2
+shipped and the automated suite was green, a hands-on pass at a real repository
+found six issues (see Discoveries and blockers). Four are defects against
+requirements version 1 already carries; two — the Files tab's flat listing and
+its lack of ignore rules — are behavior version 1 does not require, so they are
+proposed as **specification version 2**, a bounded revision of WSP-05 that is
+Draft with product approval pending. Of the four reported as defects, two were
+subsequently **closed as false positives from the inspection tool** (see
+Discoveries), leaving one open question and one open defect. This plan version
+accordingly:
+
+- adds **milestone 4**, the file tree and ignore rules, and renumbers the
+  milestones after it;
+- folds the close-control question into **milestone 3** and the file-content
+  overflow defect into **milestone 5**, rather than queueing either behind
+  feature work;
+- keeps the computed-accessible-name and keyboard-walk verification the closed
+  findings prompted, in milestone 3, because the episode showed that axe and an
+  accessibility-tree dump can mislead in opposite directions;
+- adds a standing hands-on UI verification step to every remaining milestone,
+  whose findings are confirmed before they become work.
+
+Milestone 4 must not start production work until specification version 2 is
+approved. Every other milestone is unchanged from plan version 1 and is covered
+by that version's technical approval; the defect fix items are corrections to
+work already approved, not new scope.
 
 Product behavior change: yes, and it is the whole point of the change. The
 shipped `Changes | Files | Terminal` inspector is removed and replaced. The
@@ -93,18 +134,19 @@ links them rather than restating them.
 
 ## Requirement traceability
 
-| Spec requirement                                                                                      | Technical consequence                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Verification                                                                                                                                                                                                                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [WSP-01](../../product-specs/workspace-panel.md#wsp-01--the-panel-is-a-tiling-area-of-tab-groups)     | `apps/web/src/features/layout/binaryTree.ts` holds the geometry; `panelModel.ts` instantiates it as `TreeNode<"group", GroupId>`; `PanelSurface.tsx` renders splits with the same divider affordance the chat surface uses; empty group is removed and its sibling promoted; last tab closing sets `root = null, open = false`.                                                                                                                                                               | `binaryTree.test.ts` (promotion, clamping, split ids); `panelModel.test.ts` (`closeGroup` promotes sibling, last-tab close closes the panel); `PanelSurface.test.tsx` (dividers resize, rail replaces the panel when closed).                                                                                                                                                                         |
-| [WSP-02](../../product-specs/workspace-panel.md#wsp-02--tabs-are-durable-and-carry-their-own-context) | Every tab record carries a frozen `TabContext`; the panel never reads `focusedThreadId` except to seed a **new** tab and to decide whether to render the worktree chip; the `+` menu filters by `tabNeedsThread`; an unresolvable context renders an unavailable state with a close action.                                                                                                                                                                                                   | `panelModel.test.ts` (focus change is not an input to any operation); `App.test.tsx` (focus a second pane, assert every tab's content and context are unchanged and the chip appears); `PanelTabContent.test.tsx` (unavailable state).                                                                                                                                                                |
-| [WSP-03](../../product-specs/workspace-panel.md#wsp-03--tabs-are-rearranged-by-dragging)              | `moveTab`, `reorderTab`, and `splitGroupWithTab(edge)` are pure model operations; `useTabDrag.ts` maps pointer and keyboard gestures onto them; drop zones are computed per visible group (strip, centre, four edges) and are only mounted during a drag; cancel restores the pre-drag state object by reference.                                                                                                                                                                             | `panelModel.test.ts` (each operation, plus own-group-centre is referentially identity); `TabDrag.test.tsx` (`Escape` and outside-release leave the state object identical; a moved terminal tab keeps its `terminalId`).                                                                                                                                                                              |
-| [WSP-04](../../product-specs/workspace-panel.md#wsp-04--panel-geometry-and-device-local-persistence)  | `panelStorage.ts` reads and writes a zod-validated record at `pi-workspace:panel` version 2, migrating `pi-workspace:inspector` version 1; the panel's outer edge keeps the existing keyboard-operable separator; `PANEL_MIN_WIDTH` and a per-group minimum are enforced in the model, not only in CSS.                                                                                                                                                                                       | `panelStorage.test.ts` (round trip; v1 migration; malformed, unknown version, and dangling-tab-reference all reset to one `Changes` tab; no persisted tab is dropped silently); `App.test.tsx` reload assertion.                                                                                                                                                                                      |
-| [WSP-05](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs)                          | `FilesTab` reuses the existing bounded `getFiles` query and opens a `File` tab instead of previewing in place; `FileTab` renders markdown through the existing `react-markdown` configuration with raw HTML and remote images disabled, and non-markdown text through a dynamically imported Shiki highlighter over theme tokens.                                                                                                                                                             | `FilesTab.test.tsx` (activation opens a tab, list survives); `FileTab.test.tsx` (markdown preview and source toggle; plain text paints before the highlighter resolves; binary, oversized, truncated, missing, inaccessible states; no editing control; copy-path is relative).                                                                                                                       |
-| [WSP-06](../../product-specs/workspace-panel.md#wsp-06--changes-and-diff-tabs)                        | `parseUnifiedDiff.ts` turns the existing `GitDiffResponse` staged/unstaged strings into hunks with old/new line numbers; `DiffTab` renders labelled sections, collapsible hunks, retained `+`/`-` prefixes, a sticky header with counts, and an explicit truncation notice. The server diff contract is unchanged.                                                                                                                                                                            | `parseUnifiedDiff.test.ts` (headers, counts, renames, no-newline marker, malformed input degrades to raw text); `DiffTab.test.tsx` (sections, collapse, dual gutters, sticky header, truncation).                                                                                                                                                                                                     |
-| [WSP-07](../../product-specs/workspace-panel.md#wsp-07--terminal-tabs)                                | `ProjectTerminalManager.owners` is rekeyed by `TerminalId` with a `scopeId -> Set<TerminalId>` index and a per-scope cap of 8; the `attach` frame gains optional `terminalId` and `cwd`; a `create` frame is added; `GET …/terminals` lists live terminals for the scope; `terminal/cwd.ts` polls the working directory at most 1 Hz while attached and pushes a `cwd` server frame.                                                                                                          | `manager.test.ts` (N per scope, cap rejection, re-attach by id, cross-scope id rejected, spawn cwd containment, disposal); `cwd.test.ts` (Linux, macOS, unsupported platform, timeout, non-UTF-8); `app.test.ts` (listing route); `TerminalTab.test.tsx` (reload re-attaches, gone state, per-tab warning).                                                                                           |
-| [WSP-08](../../product-specs/workspace-panel.md#wsp-08--browser-tab)                                  | `POST /api/browser/probe` reports only whether the target refuses framing; `BrowserTab` renders an explicit named state instead of a blank frame; an address whose origin equals the workspace's own is refused at parse time; the iframe is sandboxed with `allow-same-origin` but **without** either top-navigation token, so the embedded page cannot navigate the workspace away; production CSP gains `frame-src http: https:` while `X-Frame-Options: DENY` on our own responses stays. | `probe.test.ts` (scheme allowlist, same-origin refusal before any request, redirect bound, timeout, body never read or returned, `X-Frame-Options` and `frame-ancestors` detection); `app.test.ts` (CSP header contains `frame-src http: https:` and still `frame-ancestors 'none'`); `BrowserTab.test.tsx` (blocked, unreachable, and self-origin states, address restore, exact sandbox token set). |
-| [WSP-09](../../product-specs/workspace-panel.md#wsp-09--the-panel-stays-responsive)                   | Tab bodies stay mounted and are hidden with `hidden`/`content-visibility` rather than unmounted; every query and timer in a tab body is gated on `isVisible`; the file list keeps the existing 200-row render cap and the debounced search with `keepPreviousData`; diffs and previews cap rendered lines with an explicit notice; drag and resize mutate only geometry.                                                                                                                      | `Panel.perf.test.tsx` (hidden tab issues no query and runs no timer; switching back keeps scroll offset; a moved tab does not remount its terminal); existing `useDebouncedValue` tests retained; `App.test.tsx` search assertions retained.                                                                                                                                                          |
-| [WSP-10](../../product-specs/workspace-panel.md#wsp-10--keyboard-accessibility-and-defined-states)    | `panelKeybindings.ts` is a single table of `{ id, keys, label, command }`; the handler dispatches from it and `SettingsPage` renders the same table, so an inert binding cannot be advertised; the tab strip is a real `tablist`; drag is mirrored by a keyboard move mode with `aria-live` announcements; a closed panel is `inert`.                                                                                                                                                         | `panelKeybindings.test.ts` (every advertised id resolves to a command and every command is advertised); `TabStrip.test.tsx` (roles, selection, roving focus); axe checks in every tab-body test; `SettingsPage.test.tsx` (list matches the table).                                                                                                                                                    |
+| Spec requirement                                                                                                                        | Technical consequence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Verification                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [WSP-01](../../product-specs/workspace-panel.md#wsp-01--the-panel-is-a-tiling-area-of-tab-groups)                                       | `apps/web/src/features/layout/binaryTree.ts` holds the geometry; `panelModel.ts` instantiates it as `TreeNode<"group", GroupId>`; `PanelSurface.tsx` renders splits with the same divider affordance the chat surface uses; empty group is removed and its sibling promoted; last tab closing sets `root = null, open = false`.                                                                                                                                                                                                                                                                   | `binaryTree.test.ts` (promotion, clamping, split ids); `panelModel.test.ts` (`closeGroup` promotes sibling, last-tab close closes the panel); `PanelSurface.test.tsx` (dividers resize, rail replaces the panel when closed).                                                                                                                                                                                                                                                                                                          |
+| [WSP-02](../../product-specs/workspace-panel.md#wsp-02--tabs-are-durable-and-carry-their-own-context)                                   | Every tab record carries a frozen `TabContext`; the panel never reads `focusedThreadId` except to seed a **new** tab and to decide whether to render the worktree chip; the `+` menu filters by `tabNeedsThread`; an unresolvable context renders an unavailable state with a close action.                                                                                                                                                                                                                                                                                                       | `panelModel.test.ts` (focus change is not an input to any operation); `App.test.tsx` (focus a second pane, assert every tab's content and context are unchanged and the chip appears); `PanelTabContent.test.tsx` (unavailable state).                                                                                                                                                                                                                                                                                                 |
+| [WSP-03](../../product-specs/workspace-panel.md#wsp-03--tabs-are-rearranged-by-dragging)                                                | `moveTab`, `reorderTab`, and `splitGroupWithTab(edge)` are pure model operations; `useTabDrag.ts` maps pointer and keyboard gestures onto them; drop zones are computed per visible group (strip, centre, four edges) and are only mounted during a drag; cancel restores the pre-drag state object by reference.                                                                                                                                                                                                                                                                                 | `panelModel.test.ts` (each operation, plus own-group-centre is referentially identity); `TabDrag.test.tsx` (`Escape` and outside-release leave the state object identical; a moved terminal tab keeps its `terminalId`).                                                                                                                                                                                                                                                                                                               |
+| [WSP-04](../../product-specs/workspace-panel.md#wsp-04--panel-geometry-and-device-local-persistence)                                    | `panelStorage.ts` reads and writes a zod-validated record at `pi-workspace:panel` version 2, migrating `pi-workspace:inspector` version 1; the panel's outer edge keeps the existing keyboard-operable separator; `PANEL_MIN_WIDTH` and a per-group minimum are enforced in the model, not only in CSS.                                                                                                                                                                                                                                                                                           | `panelStorage.test.ts` (round trip; v1 migration; malformed, unknown version, and dangling-tab-reference all reset to one `Changes` tab; no persisted tab is dropped silently); `App.test.tsx` reload assertion.                                                                                                                                                                                                                                                                                                                       |
+| [WSP-05](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs)                                                            | `FilesTab` reuses the existing bounded `getFiles` query and opens a `File` tab instead of previewing in place; `FileTab` renders markdown through the existing `react-markdown` configuration with raw HTML and remote images disabled, and non-markdown text through a dynamically imported Shiki highlighter over theme tokens.                                                                                                                                                                                                                                                                 | `FilesTab.test.tsx` (activation opens a tab, list survives); `FileTab.test.tsx` (markdown preview and source toggle; plain text paints before the highlighter resolves; binary, oversized, truncated, missing, inaccessible states; no editing control; copy-path is relative).                                                                                                                                                                                                                                                        |
+| [WSP-05 as revised by specification version 2](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs-revised-by-version-2) | `GET …/files` gains a directory-scoped, single-level `depth=1` mode so the browser expands lazily instead of pulling a 20,000-entry recursive tree; `apps/server/src/inspector/ignoreRules.ts` parses the working tree's ignore files at the boundary and filters **both** the listing and the search; `FileTree.tsx` renders one level at a time, shows a row's own name with the workspace-relative path on its `title` and copy-path, and keeps `expanded` and `showIgnored` in the `files` tab record (panel storage version 3); an active search bypasses the tree and renders flat matches. | `ignoreRules.test.ts` (pattern forms, negation, precedence, absent and unreadable ignore files, a hostile 5 MiB ignore file); `files.test.ts` (single-level listing, ignored paths absent from the listing and from search, opt-in reveal, `.git` still excluded); `FileTree.test.tsx` (expand, collapse, persisted expansion, row name versus tooltip, flat search, expansion restored on clear, accessible names and expanded state); `panelStorage.test.ts` (version 2 record migrates into version 3 with an empty expansion set). |
+| [WSP-06](../../product-specs/workspace-panel.md#wsp-06--changes-and-diff-tabs)                                                          | `parseUnifiedDiff.ts` turns the existing `GitDiffResponse` staged/unstaged strings into hunks with old/new line numbers; `DiffTab` renders labelled sections, collapsible hunks, retained `+`/`-` prefixes, a sticky header with counts, and an explicit truncation notice. The server diff contract is unchanged.                                                                                                                                                                                                                                                                                | `parseUnifiedDiff.test.ts` (headers, counts, renames, no-newline marker, malformed input degrades to raw text); `DiffTab.test.tsx` (sections, collapse, dual gutters, sticky header, truncation).                                                                                                                                                                                                                                                                                                                                      |
+| [WSP-07](../../product-specs/workspace-panel.md#wsp-07--terminal-tabs)                                                                  | `ProjectTerminalManager.owners` is rekeyed by `TerminalId` with a `scopeId -> Set<TerminalId>` index and a per-scope cap of 8; the `attach` frame gains optional `terminalId` and `cwd`; a `create` frame is added; `GET …/terminals` lists live terminals for the scope; `terminal/cwd.ts` polls the working directory at most 1 Hz while attached and pushes a `cwd` server frame.                                                                                                                                                                                                              | `manager.test.ts` (N per scope, cap rejection, re-attach by id, cross-scope id rejected, spawn cwd containment, disposal); `cwd.test.ts` (Linux, macOS, unsupported platform, timeout, non-UTF-8); `app.test.ts` (listing route); `TerminalTab.test.tsx` (reload re-attaches, gone state, per-tab warning).                                                                                                                                                                                                                            |
+| [WSP-08](../../product-specs/workspace-panel.md#wsp-08--browser-tab)                                                                    | `POST /api/browser/probe` reports only whether the target refuses framing; `BrowserTab` renders an explicit named state instead of a blank frame; an address whose origin equals the workspace's own is refused at parse time; the iframe is sandboxed with `allow-same-origin` but **without** either top-navigation token, so the embedded page cannot navigate the workspace away; production CSP gains `frame-src http: https:` while `X-Frame-Options: DENY` on our own responses stays.                                                                                                     | `probe.test.ts` (scheme allowlist, same-origin refusal before any request, redirect bound, timeout, body never read or returned, `X-Frame-Options` and `frame-ancestors` detection); `app.test.ts` (CSP header contains `frame-src http: https:` and still `frame-ancestors 'none'`); `BrowserTab.test.tsx` (blocked, unreachable, and self-origin states, address restore, exact sandbox token set).                                                                                                                                  |
+| [WSP-09](../../product-specs/workspace-panel.md#wsp-09--the-panel-stays-responsive)                                                     | Tab bodies stay mounted and are hidden with `hidden`/`content-visibility` rather than unmounted; every query and timer in a tab body is gated on `isVisible`; the file list keeps the existing 200-row render cap and the debounced search with `keepPreviousData`; diffs and previews cap rendered lines with an explicit notice; drag and resize mutate only geometry.                                                                                                                                                                                                                          | `Panel.perf.test.tsx` (hidden tab issues no query and runs no timer; switching back keeps scroll offset; a moved tab does not remount its terminal); existing `useDebouncedValue` tests retained; `App.test.tsx` search assertions retained.                                                                                                                                                                                                                                                                                           |
+| [WSP-10](../../product-specs/workspace-panel.md#wsp-10--keyboard-accessibility-and-defined-states)                                      | `panelKeybindings.ts` is a single table of `{ id, keys, label, command }`; the handler dispatches from it and `SettingsPage` renders the same table, so an inert binding cannot be advertised; the tab strip is a real `tablist`; drag is mirrored by a keyboard move mode with `aria-live` announcements; a closed panel is `inert`.                                                                                                                                                                                                                                                             | `panelKeybindings.test.ts` (every advertised id resolves to a command and every command is advertised); `TabStrip.test.tsx` (roles, selection, roving focus); axe checks in every tab-body test; `SettingsPage.test.tsx` (list matches the table).                                                                                                                                                                                                                                                                                     |
 
 ## Current behavior and affected invariants
 
@@ -126,6 +168,20 @@ contains the whole binary-tree algorithm the panel needs — `replaceNode`,
 the `MIN_SIZE_FRACTION = 0.05` clamp — as module-private functions over a
 `PaneNode | SplitNode` union that narrows on `type`. Its persisted format is
 version 2 and is validated by `LayoutNodeSchema` in `layoutStorage.ts`.
+
+**The file listing.** `apps/server/src/inspector/files.ts` exports
+`listProjectFiles(rootPath, searchText)`, which walks the target **recursively
+and in full**, skipping directory entries named `.git`, stopping at
+`MAX_TREE_ENTRIES = 20_000` or at 500 while a search is active, and returning
+`{ entries, truncated }` with each entry carrying its display path relative to
+the listed root. `GET /api/projects/:projectId/threads/:threadId/files` already
+accepts a `path` query and resolves it with `resolveContained`, so a
+directory-scoped listing needs no new route — only a depth bound and a
+correspondingly bounded recursion. The browser never sends `path`:
+`getFiles(projectId, threadId, search)` in `apps/web/src/api/client.ts` sends
+only `search`, and `FilesTab.tsx` renders the returned paths as a flat list
+capped at `FILE_LIST_RENDER_LIMIT = 200`. Ignore rules are not read anywhere on
+this path; `.git` is the entire exclusion set.
 
 **Terminals.** `ProjectTerminalManager` keys `owners` and `pendingOwners` by
 `scopeId`, and `activeOwner` resolves a terminal by looking up the scope and
@@ -169,10 +225,14 @@ persistence across a server restart.
 - The chat surface's layout record stays version 2. This plan changes
   `layoutTree.ts` internals only, so no chat layout migration exists to get
   wrong.
-- The existing `getFiles` / `getFile` / `getStatus` / `getDiff` contracts are
-  sufficient for the Files, File, Changes, and Diff tabs. Nothing in WSP-05 or
-  WSP-06 needs a new read route; the structure they demand is a browser-side
-  parse of data the server already returns.
+- The existing `getFile` / `getStatus` / `getDiff` contracts are sufficient for
+  the File, Changes, and Diff tabs: the structure those tabs demand is a
+  browser-side parse of data the server already returns, and neither needs a new
+  read route. **This no longer holds for `getFiles`** — WSP-05 as revised needs
+  a depth bound and ignore filtering, which are server behavior and cannot be
+  synthesised in the browser from a listing that already omitted nothing and
+  contained everything. It still needs no new route: the existing files route
+  gains a query parameter (milestone 4).
 - Shiki's `createHighlighterCore` with individually imported language and theme
   modules keeps the highlighter out of the entry chunk. Vite 8 code-splits a
   dynamic import automatically; no manual chunk configuration is assumed.
@@ -185,10 +245,35 @@ carries the protection instead (D-3).
 
 ## Implementation milestones
 
-Seven milestones, in this order. Each is independently shippable and each ends
+Eight milestones, in this order. Each is independently shippable and each ends
 with the repository building, the full unit suite green, and no half-wired
 surface. Milestone 2 is the only one that removes a shipped feature, and it
-delivers its replacement in the same milestone.
+delivers its replacement in the same milestone. Milestone 4 was added in plan
+version 2 and the milestones after it were renumbered; a reference to
+"milestone 4" written before 2026-08-22 means the File tab, which is now
+milestone 5.
+
+**Standing verification step — a hands-on UI pass.** Every remaining milestone
+(3 through 8) ends with a **hands-on pass in the running application, driven
+through the browser**, exercising that milestone's behavior against a real
+repository — not a fixture — and reporting what it finds. It is **distinct from
+and additional to** the milestone's automated suite: a milestone is not done
+because `vitest` is green, and the pass is not satisfied by an end-to-end spec,
+because a scripted spec asserts only what someone already thought to assert. At
+minimum each pass drives the milestone's own surface, inspects the resulting
+accessibility tree — treating what it shows as a lead to confirm, not as a
+verdict — and resizes the panel to its minimum width. Anything it
+finds is recorded in Discoveries and blockers with its date and the fact that it
+came from a manual pass.
+
+This cadence was requested by the user on 2026-08-22, after the automated suite
+passed milestone 2 and a manual pass immediately found six issues in it — two of
+them contract-level gaps that no test could have failed on, because nothing
+required the behavior they were missing. **A pass reports; it does not by itself
+create work.** Two of those same six findings were false positives from the
+inspection tool, so every finding is confirmed against the live DOM, or by
+computing the value in question, before it becomes a fix item — and the
+confirmation, or the refutation, is recorded either way.
 
 ### Milestone 1 — Generic binary tree, panel tab model, panel state, storage
 
@@ -404,10 +489,10 @@ behavior: `ChangesTab` keeps the `["git", projectId, threadId]` key and the
 `keepPreviousData`, and `FILE_LIST_RENDER_LIMIT = 200` with its
 "Showing the first N of M" notice; `TerminalTab` wraps the existing
 `TerminalView` unchanged for now — it gains multi-terminal and cwd behavior in
-milestone 6. In this milestone a `Diff` tab renders the existing labelled
+milestone 7. In this milestone a `Diff` tab renders the existing labelled
 staged/unstaged text through the current `classifyDiff` colouring, and a `File`
 tab renders the existing `<pre>` preview; both are replaced properly in
-milestones 4 and 5. That keeps this milestone a strict port with no regression
+milestones 5 and 6. That keeps this milestone a strict port with no regression
 in what the user can see.
 
 **Delete.** From `App.tsx`: `Inspector`, `PanelRightIcon`, `inspectorMaxWidth`,
@@ -463,7 +548,7 @@ the inspector steps rewritten against the panel. Manual: open the panel, open
 one tab of each ported type, split the group from the tab menu and from the
 keyboard, reload, and confirm the layout returns.
 
-### Milestone 3 — Drag and drop, with keyboard equivalents
+### Milestone 3 — Drag and drop with keyboard equivalents, and accessible-name verification
 
 `useTabDrag.ts` drives the pure operations from milestone 1. Drop zones are
 mounted only while a drag is in progress: per visible group, one strip zone with
@@ -482,12 +567,190 @@ edge. Every drag action therefore has a keyboard equivalent and every one of
 them is a row in `panelKeybindings.ts`, which is also what the Settings page
 renders (WSP-10).
 
+**Naming and the close control** (findings 3, 4, and 5 of the 2026-08-22
+hands-on pass). Findings 3 and 4 — panel tabs and file rows exposing no
+accessible name — were **re-checked against the live DOM and closed as not
+defects**: the label-bearing span in each is not `aria-hidden`, `tab` and
+`button` are name-from-content roles, and the `aria-hidden` close affordance is
+excluded from the name computation without suppressing its sibling, so the name
+computes correctly. The empty `name` field came from the accessibility-tree dump
+tool, which renders a name-from-content role as blank. The evidence is in
+Discoveries and in the governing specification's
+[Findings against version 1](../../product-specs/workspace-panel.md#findings-against-version-1).
+No markup change is owed. What remains from that group is one open item:
+
+- [ ] **Confirm that every tab is closable from the keyboard and from assistive
+      technology.** The pass found exactly one announced "Close X tab" control,
+      for the active tab. That is a deliberate decision recorded in
+      `TabStrip.tsx` — a tablist may own only tabs, and a real button nested
+      inside a tab is a nested interactive — so this is a **design decision to
+      confirm, not a defect to fix**, and the answer is not necessarily one
+      close button per tab. What must hold is that closing any tab takes one
+      obvious step without a pointer: arrow keys move the selection along the
+      strip, and the strip's close control and the close chord both act on the
+      selected tab and name it. Confirm that holds, or change the design if it
+      does not, and record the outcome as a decision so the next reviewer does
+      not re-report it.
+
+**Naming is verified by computation from here on, and an axe pass is not
+evidence.** This milestone keeps the verification requirement that the closed
+findings prompted, because the episode showed both directions of failure: axe
+passed markup that was reported as broken, and a tree dump reported as broken
+markup that was correct. Neither tool settles a naming question on its own, so
+the panel's naming is asserted by a **computed accessible name** and exercised
+by a **keyboard-only walk** of the strip and the list, in addition to the
+automated rule scan. That is cheap, it is a regression guard for the real thing,
+and it is what makes the next such report answerable in one step.
+
 **Milestone 3 verification:** `panelModel.test.ts` referential-identity cases,
 `TabDrag.test.tsx` with `@testing-library/user-event` pointer and keyboard
 sequences, an axe check on a mid-drag render, and an e2e drag that splits a
-group at an edge and asserts a moved terminal tab did not reconnect.
+group at an edge and asserts a moved terminal tab did not reconnect. Added in
+plan version 2: `TabStrip.test.tsx` and `FilesTab.test.tsx` assert the
+**computed accessible name** of every tab and every row — queried by name, not
+by class or test id, so an empty name fails the test — and a keyboard-only
+sequence closes a non-active tab. Then the **standing hands-on UI pass**: drive
+the panel in the running application, confirm by **computed accessible name**
+— not by a tree dump — that each tab and row is announced by its own text, and
+close a tab without a pointer.
 
-### Milestone 4 — File tab: markdown preview, lazy highlighting, bounded states
+### Milestone 4 — File tree: directory-scoped listing, ignore rules, flat search
+
+Added in plan version 2. It implements
+[WSP-05 as revised by specification version 2](../../product-specs/workspace-panel.md#wsp-05--files-and-file-tabs-revised-by-version-2)
+and **must not start production work until that specification version is
+approved**. It carries both server and browser work, and the server half comes
+first: the browser cannot synthesise a tree or an ignore rule from a listing
+that already flattened and already included everything.
+
+**Server — a directory-scoped listing.** The current
+`listProjectFiles(rootPath, search)` returns the whole recursive tree capped at
+20,000 entries. That is both the flooding problem and a latency problem: on a
+real repository the unsearched listing takes hundreds of milliseconds to
+seconds, and the browser then throws away all but 200 rows of it.
+
+- `apps/server/src/inspector/files.ts` gains a **depth bound**. The route's
+  `fileQuerySchema` gains `depth`, parsed as exactly `"1" | "full"` and
+  defaulting to `"full"` so an older browser sees today's behavior; the panel
+  sends `depth=1` and expands one level at a time. The route already accepts
+  `path` and already resolves it through `resolveContained`, so no new route and
+  no new containment logic is introduced — the depth bound is the only change to
+  how the walk is driven.
+- Entries' `path` is **relative to the execution root**, not to the listed
+  directory, so a row carries everything needed to open a `File` tab, a `Diff`
+  tab, or a nested listing without the browser reassembling paths. Entries are
+  ordered directories first, then files, each case-insensitively by name, so a
+  child's identity is stable across two listings of the same directory.
+- **Ignore-rule filtering is applied to both the listing and the search**, not
+  to the listing alone. A search that ignores ignore rules is precisely the
+  failure that was reported.
+- `FileTreeResponseSchema` in `packages/contracts/src/index.ts` gains
+  `ignoredHidden: boolean` — whether this listing omitted anything because of an
+  ignore rule — so the tab can say so instead of silently under-reporting, and
+  the query gains `showIgnored` for the explicit opt-in. `.git` stays excluded
+  in **both** modes: it is not an ignore rule and is not revealed by the opt-in.
+
+**Server — ignore rules, parsed at the boundary.** New
+`apps/server/src/inspector/ignoreRules.ts`. Ignore-file contents are
+**untrusted input read from the user's working tree** — an arbitrary file of
+arbitrary size that the user, a dependency, or a generator wrote — so it gets
+the same Parse-Don't-Validate treatment as every other boundary here: a bounded
+read, a total parse into a value, and no partially-trusted intermediate.
+
+- `parseIgnoreFile(text): IgnorePattern[]` is pure and total: it drops blank
+  lines and comments, handles a trailing-slash directory rule, a leading-slash
+  root anchor, a `!` negation, and an escaped leading `#`/`!`, and **discards**
+  any line it cannot represent rather than approximating it. Bounds: at most
+  256 KiB per ignore file, at most 4,000 patterns per directory, and at most
+  1,024 bytes per line; anything beyond a bound is dropped with the rest of the
+  file's parsed patterns kept, never an unbounded buffer and never a thrown
+  request.
+- `loadIgnoreRules(root)` reads the execution root's `.gitignore` and
+  `.git/info/exclude` and, while walking, each visited directory's own
+  `.gitignore`, composing them so a nearer file wins and a later negation wins
+  within one file. A missing, unreadable, or oversized ignore file contributes
+  no patterns and never fails the listing — the tab degrades to showing more,
+  which is visible, rather than to an error or to silently showing less.
+- The matcher is a pure predicate `matches(relativePath, isDirectory): boolean`
+  over already-normalized, already-contained relative paths. It never touches
+  the filesystem, so it cannot be made to follow a symlink or to escape the
+  root; containment remains the job of `resolveContained`, unchanged.
+- **Rejected alternative:** shelling out to `git check-ignore`. It costs a
+  process per listing on a hot path, answers nothing for a non-Git project — the
+  file routes deliberately do not imply Git ownership — and turns a pure
+  predicate into a parsed subprocess boundary for no gain in fidelity that the
+  user would notice.
+- **Out of scope:** the user's global `core.excludesFile` and nested repository
+  or submodule rule scoping. Both are named here so their absence is a decision
+  rather than an oversight.
+
+**Browser — the tree, its persisted expansion, and flat search.**
+
+- New `apps/web/src/features/panel/FileTree.tsx`; `FilesTab.tsx` is rewritten
+  around it. A directory row is a disclosure that expands **in place**; each
+  expanded directory is its own query keyed
+  `["files", projectId, threadId, path]`, gated on `visible` as every panel query
+  is (WSP-09), so collapsing a directory stops its work and expanding it again
+  serves the retained result.
+- A row displays **its own name**. The workspace-relative path is on the row's
+  `title` and is what copy-path yields; absolute server paths still never reach
+  the browser.
+- **The `files` tab's persisted shape changes**, which is a storage-schema
+  change and is called out as one: the tab record gains
+  `expanded: string[]` (the workspace-relative paths of expanded directories)
+  and `showIgnored: boolean`. `panelStorage.ts` therefore moves from record
+  version 2 to **version 3**, with a version 2 → 3 migration that fills an empty
+  expansion set and `showIgnored: false`, and the `pi-workspace:inspector` v1 →
+  v2 → v3 chain preserved so a device that has not opened the panel since the
+  inspector still migrates in one read. The existing rule stands: anything that
+  fails to parse resets to the default panel, and no tab is left referenced but
+  absent.
+- **Search renders flat.** While the debounced search term is non-empty the tab
+  renders matching paths as a list — full paths, since a bare name is ambiguous
+  across directories — and not as a tree. Clearing it restores the tree with
+  exactly the previously expanded directories, which is why expansion lives in
+  the tab record rather than in component state.
+- The ignored-files disclosure states plainly that ignored files are hidden when
+  `ignoredHidden` is true, next to the opt-in that reveals them; the opt-in is
+  persisted with the tab.
+- Accessibility is part of this milestone, not a follow-up: the tree is a real
+  `tree` with `treeitem` rows carrying `aria-expanded` and `aria-level`, roving
+  `tabindex`, and arrow-key navigation, and it degrades to a plain list — with
+  the role changing with it — in flat search mode. Every row's accessible name
+  is the name it displays.
+- The per-directory render budget is the existing one: at most
+  `FILE_LIST_RENDER_LIMIT` children painted per expanded directory with the
+  "showing the first N of M" notice, so one enormous directory cannot blow the
+  frame budget (WSP-09).
+
+**Documentation this milestone must carry.** The file-path and read policy in
+[Inspector and terminal boundaries](../../design/inspector-and-terminal.md)
+currently reads "Tree traversal excludes `.git` … Ignore behavior is explicit
+and can later incorporate parsed ignore files." That deferral is retired by this
+milestone and the bullet is rewritten when it ships, together with the required
+tests listed there.
+
+**Milestone 4 verification:** `ignoreRules.test.ts` over the pattern forms, a
+negation, precedence between a root and a nested ignore file, a comment and an
+escaped `#`, an unrepresentable line discarded, a missing file, an unreadable
+file, a 5 MiB file, a 100,000-line file, and a line of 1 MiB — asserting bounded
+memory and a total parse in every case; `files.test.ts` for the single-level
+listing, root-relative entry paths, deterministic ordering, ignored paths absent
+from the listing **and** from the search, `showIgnored` revealing them,
+`ignoredHidden` reported truthfully, `.git` excluded in both modes, and a
+symlinked directory still not followed; `app.test.ts` for the `depth` parameter
+including its `"full"` default and a rejected value; `panelStorage.test.ts` for
+the v2 → v3 migration and the v1 → v3 chain; `FileTree.test.tsx` for expand,
+collapse, expansion surviving a reload, the row name versus its tooltip, flat
+search, expansion restored on clearing the search, the ignored-files notice and
+opt-in, computed accessible names, and `aria-expanded`. Then the **standing
+hands-on UI pass**, which for this milestone is the exact scenario that produced
+the finding: open the Files tab on a repository containing `node_modules`,
+search `README.md`, and confirm the project's own README is in the first screen
+of results and no dependency path is; expand and collapse several directories;
+reload and confirm the expansion returns; and toggle ignored files on and off.
+
+### Milestone 5 — File tab: markdown preview, lazy highlighting, bounded states
 
 `FileTab` renders one of: a markdown preview (default for `.md`/`.markdown`)
 with an explicit source toggle, using the existing `react-markdown` +
@@ -508,13 +771,33 @@ fixed allowlist of pre-imported language modules and returns `null` otherwise.
 Rendered lines are capped with an explicit "showing the first N lines" notice,
 matching the file list's existing render-budget pattern (WSP-09).
 
-**Milestone 4 verification:** `FileTab.test.tsx` with the highlighter module
+**Long lines are readable, fixed in this milestone** (finding 6 of the
+2026-08-22 hands-on pass). File content does not wrap and is **clipped at the
+panel's right edge with no visible horizontal scroll**, so the end of a long
+line is unreachable by any means. That is a defect against WSP-05's "remains
+readable" clause and needs no contract change. `.file-preview pre` already sets
+`overflow: auto`, so the likely cause is not the `pre` itself but a flex or grid
+ancestor between it and the panel body that never gets `min-width: 0` and
+therefore lets the `pre` grow past the panel instead of scrolling inside it —
+**confirm that before changing the `pre`**. Whichever it is, the fix must give
+the tab a deliberate answer for a long line rather than an accidental one: a
+horizontal scroll container that is actually reachable, or an explicit soft-wrap
+toggle, and in either case the line-number gutter and the sticky header must
+stay aligned with the content. The same check applies to the `Diff` tab, which
+shares the pattern and will show the same defect for a long diff line.
+
+**Milestone 5 verification:** `FileTab.test.tsx` with the highlighter module
 mocked to a never-resolving promise (asserting readable plain text) and to a
 rejecting one (asserting the same); a markdown fixture with a remote image
 asserting no request is issued; every explicit state; an axe check in both
 themes; and `pnpm --filter @pi-web/web build` showing Shiki in a separate chunk.
+Added in plan version 2: a layout assertion that a file containing a 2,000-
+character line produces a scrollable — or wrapped — content region and does not
+widen the panel or the page. Then the **standing hands-on UI pass**: open a
+minified file and a long-lined source file in a narrow panel, confirm the end of
+the line is reachable, and confirm the page itself never scrolls sideways.
 
-### Milestone 5 — Diff tab: structured unified diff
+### Milestone 6 — Diff tab: structured unified diff
 
 `parseUnifiedDiff.ts` converts a `GitDiffResponse`'s `staged` and `unstaged`
 strings into `{ path, hunks: { header, oldStart, newStart, lines: { kind, old,
@@ -528,11 +811,14 @@ prefix characters so the distinction is never colour-only, a sticky file header
 carrying the path and the add/delete counts, and the server's `truncated` flag
 as an explicit notice. The server diff contract does not change.
 
-**Milestone 5 verification:** `parseUnifiedDiff.test.ts` over the fixtures;
+**Milestone 6 verification:** `parseUnifiedDiff.test.ts` over the fixtures;
 `DiffTab.test.tsx` for sections, collapse state surviving a tab switch, gutter
-values, sticky header counts, and truncation; axe in both themes.
+values, sticky header counts, and truncation; axe in both themes. Then the
+**standing hands-on UI pass**: open a Diff tab on a real working tree with a
+staged and an unstaged change, collapse and re-expand hunks, switch to another
+tab and back, and read the accessibility tree of the hunk disclosures.
 
-### Milestone 6 — Many terminals per scope, cwd probe, terminal tab
+### Milestone 7 — Many terminals per scope, cwd probe, terminal tab
 
 **Rekey the manager.** `ProjectTerminalManager.owners` becomes
 `Map<TerminalId, TerminalOwner>` with a companion
@@ -594,15 +880,18 @@ renders the explicit gone state with a restart action; `terminal_limit_reached`
 renders the cap message. The unsandboxed-shell warning renders once per terminal
 tab.
 
-**Milestone 6 verification:** `manager.test.ts` for N terminals in one scope, the
+**Milestone 7 verification:** `manager.test.ts` for N terminals in one scope, the
 cap rejection, re-attach by id, a foreign-scope id rejected, a spawn `cwd`
 outside the root rejected, disposal removing both map entries, and no leaked
 listeners; `cwd.test.ts` for each platform branch, a timeout, and non-UTF-8
 output; `app.test.ts` for the listing route and its scope ownership; a real
 `node-pty` smoke test in a generated temporary project only, never against a
-user project.
+user project. Then the **standing hands-on UI pass**: run two terminals in one
+worktree, `cd` in one, reload the browser, confirm both re-attach with replay
+and the changed directory is shown, and confirm the ninth terminal is refused
+with the cap message.
 
-### Milestone 7 — Browser tab, probe endpoint, CSP, and sandboxing
+### Milestone 8 — Browser tab, probe endpoint, CSP, and sandboxing
 
 **`apps/server/src/browser/probe.ts`.** `POST /api/browser/probe` takes
 `{ url: string }`. The URL is parsed with `new URL()` and its protocol must be
@@ -673,7 +962,7 @@ responses stay: they govern who may frame **us**, which this change must not
 relax. Development has no CSP, so the tab works there either way; the header
 test guards the production path.
 
-**Milestone 7 verification:** `probe.test.ts` against a local fixture server for
+**Milestone 8 verification:** `probe.test.ts` against a local fixture server for
 the scheme allowlist, a redirect chain of exactly three and of four, a
 non-responding host inside and outside the deadline, `X-Frame-Options: DENY` /
 `SAMEORIGIN` / absent, a `frame-ancestors` directive, a `HEAD`-refusing server,
@@ -681,24 +970,30 @@ and an assertion that the fixture's body bytes are never read; `app.test.ts` for
 the exact CSP string and the retained `X-Frame-Options`; `BrowserTab.test.tsx`
 for the sandbox attribute's exact value — including that it contains
 `allow-same-origin` and contains **neither** top-navigation token — the blocked
-and unreachable states, and address restoration. Same-origin refusal is tested
+and unreachable states, and address restoration. Then the **standing hands-on UI
+pass**: point a Browser tab at a local dev server, at a site that refuses
+framing, and at this workspace's own address, and confirm each renders its named
+state rather than a blank frame. Same-origin refusal is tested
 at both ends: the route rejects a self-origin URL with `same_origin_refused`
 before issuing any request, and the tab renders its named state without ever
 mounting an `iframe`, for a typed address and for one restored from storage.
 
 ## Untrusted-data-boundary analysis
 
-| Source and raw representation                                                                                                    | Entry/read point                                                  | Runtime parser                                                                                                                                    | Trusted output and guarantees                                                                                                                                                                             | Failure behavior                                                                                                                                                                                                                        | Boundary tests                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Device-local panel record — an arbitrary string under `pi-workspace:panel`, editable by the user and by any script on the origin | `readPanelState()` in `panelStorage.ts`                           | JSON guard, then a zod v2 schema, then a referential-integrity pass (groups are leaves, each tab in exactly one group, `activeTabId` valid)       | A `PanelState` whose tree, groups, and tabs are mutually consistent; widths and sizes clamped; no tab referenced without a record                                                                         | Remove the key and return the default single-`Changes`-tab panel. A dangling reference is a full reset, never a dropped tab                                                                                                             | Round trip; malformed JSON; unknown version; group not a leaf; tab in two groups; `activeTabId` absent; storage throwing                                                                                                              |
-| Legacy inspector record — arbitrary string under `pi-workspace:inspector`                                                        | The same read, only after the v2 read misses                      | The retained private v1 zod schema (`version: 1, open, activeTab, width`)                                                                         | One group, one tab of the recorded type at the recorded width and open state, `context: null`; the v1 key is then removed                                                                                 | Falls through to the same default reset                                                                                                                                                                                                 | Each of the three `activeTab` values migrates; out-of-range width; unknown version; the v1 key is gone afterwards                                                                                                                     |
-| `cwd` field of the `attach`/`create` terminal client frame — a client-supplied string over the WebSocket                         | `apps/server/src/app.ts` terminal socket handler                  | `TerminalClientFrameSchema` (`RelativePathSchema`), then `resolveContained(executionRoot, cwd)`                                                   | An absolute spawn directory that is the realpath'd execution root or provably under it, used as the PTY's cwd                                                                                             | Typed `error` frame with a `path_rejected` code; no PTY is spawned                                                                                                                                                                      | Absolute, drive, UNC, `..`, encoded `..`, NUL, backslash, empty segment, symlink escaping the root, and a valid nested directory                                                                                                      |
-| `terminalId` field of the `attach`/`input`/`resize`/`restart`/`terminate` frames — a client-supplied UUID                        | The same handler, then `activeOwner`                              | `TerminalIdSchema`, then an owner lookup requiring `projectId` **and** `scopeId` to match the request's                                           | A `TerminalOwner` proven to belong to the requesting project and execution scope                                                                                                                          | Typed `error` frame with `terminal_gone`; no write reaches any PTY                                                                                                                                                                      | Unknown id; a live id from another thread's worktree scope; a live id from another project; a disposed id; a well-formed non-UUID                                                                                                     |
-| Browser-probe URL — a user-typed string in a POST body                                                                           | `POST /api/browser/probe`                                         | Zod string, then `new URL()`, then a protocol allowlist of exactly `http:`/`https:`, then an **origin check refusing the workspace's own origin** | An absolute `http`/`https` URL, proven not to be this workspace's own origin, fetched with no client-controlled headers, method, or body, at most three redirect hops, a 5 s deadline, and no credentials | 400 with a stable code — `same_origin_refused` for a self-origin address — for a bad scheme, a self-origin address, or an unparseable URL, before any socket is opened; `reachable: false` for a timeout, refusal, or a fourth redirect | Each rejected scheme; a credentialed authority; the workspace's own origin rejected with no request issued; a differing port accepted; three hops accepted and four rejected; a redirect loop; a hanging host; a `HEAD`-refusing host |
-| Probe target response — arbitrary remote headers and body from a host the user named                                             | The same route                                                    | Only `X-Frame-Options` and a `frame-ancestors` directive are inspected; the body stream is destroyed unread                                       | Three booleans/enums. No remote bytes, header values, redirect chain, or error text are returned to the browser                                                                                           | Any parse ambiguity resolves to `embeddable: false`, which is the safe direction — the tab shows its explicit state rather than a blank frame                                                                                           | A hostile 1 GiB body is never buffered; header values containing control characters; a `frame-ancestors` list; the response is asserted byte-free                                                                                     |
-| Terminal cwd probe output — an OS-provided absolute path from `readlink /proc/<pid>/cwd` or `lsof` stdout                        | `probeCwd` in `apps/server/src/terminal/cwd.ts`, then the manager | Bounded `execFile` (argument array, no shell, 2 s timeout, 64 KiB buffer), UTF-8 decode, first `n` record                                         | A **workspace-relative** display path, `""` for the root, or `null`. Absolute server paths never enter a browser DTO                                                                                      | `null` on a non-zero exit, timeout, unparseable output, unsupported platform, or a directory outside the execution root                                                                                                                 | Each platform branch; a directory outside the root yields `null`; a timeout; non-UTF-8 bytes; a path containing a newline; no shell is invoked                                                                                        |
-| Persisted or typed browser-tab address — restored from the panel record, or entered, before it becomes an `iframe` `src`         | `BrowserTab`, on restore and on commit                            | The same `new URL()`, protocol allowlist, **and self-origin refusal** as the probe, applied client-side before the element is rendered            | An `http`/`https` `src` that is provably not this workspace's own origin, on a frame granted neither top-navigation token                                                                                 | The tab renders its named refusal state and mounts **no** `iframe`; a rejected address is cleared from tab state                                                                                                                        | A persisted `javascript:` or `data:` address never becomes an `src`; a persisted self-origin address renders the refusal state and mounts no frame; a persisted valid address survives a reload                                       |
-| File extension driving syntax highlighting — derived from a server-supplied path                                                 | `languageForPath` in the File tab                                 | A fixed map from extension to one of a pre-imported allowlist of Shiki language modules                                                           | A language id from a closed set, or `null`                                                                                                                                                                | `null` renders plain monospace text; no highlighter is loaded                                                                                                                                                                           | An unknown extension; an extension-shaped path segment; an assertion that no `import()` specifier is ever built from path text                                                                                                        |
+| Source and raw representation                                                                                                                                                       | Entry/read point                                                                              | Runtime parser                                                                                                                                                                                   | Trusted output and guarantees                                                                                                                                                                             | Failure behavior                                                                                                                                                                                                                        | Boundary tests                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Device-local panel record — an arbitrary string under `pi-workspace:panel`, editable by the user and by any script on the origin                                                    | `readPanelState()` in `panelStorage.ts`                                                       | JSON guard, then a zod v2 schema, then a referential-integrity pass (groups are leaves, each tab in exactly one group, `activeTabId` valid)                                                      | A `PanelState` whose tree, groups, and tabs are mutually consistent; widths and sizes clamped; no tab referenced without a record                                                                         | Remove the key and return the default single-`Changes`-tab panel. A dangling reference is a full reset, never a dropped tab                                                                                                             | Round trip; malformed JSON; unknown version; group not a leaf; tab in two groups; `activeTabId` absent; storage throwing                                                                                                                      |
+| Legacy inspector record — arbitrary string under `pi-workspace:inspector`                                                                                                           | The same read, only after the v2 read misses                                                  | The retained private v1 zod schema (`version: 1, open, activeTab, width`)                                                                                                                        | One group, one tab of the recorded type at the recorded width and open state, `context: null`; the v1 key is then removed                                                                                 | Falls through to the same default reset                                                                                                                                                                                                 | Each of the three `activeTab` values migrates; out-of-range width; unknown version; the v1 key is gone afterwards                                                                                                                             |
+| `cwd` field of the `attach`/`create` terminal client frame — a client-supplied string over the WebSocket                                                                            | `apps/server/src/app.ts` terminal socket handler                                              | `TerminalClientFrameSchema` (`RelativePathSchema`), then `resolveContained(executionRoot, cwd)`                                                                                                  | An absolute spawn directory that is the realpath'd execution root or provably under it, used as the PTY's cwd                                                                                             | Typed `error` frame with a `path_rejected` code; no PTY is spawned                                                                                                                                                                      | Absolute, drive, UNC, `..`, encoded `..`, NUL, backslash, empty segment, symlink escaping the root, and a valid nested directory                                                                                                              |
+| `terminalId` field of the `attach`/`input`/`resize`/`restart`/`terminate` frames — a client-supplied UUID                                                                           | The same handler, then `activeOwner`                                                          | `TerminalIdSchema`, then an owner lookup requiring `projectId` **and** `scopeId` to match the request's                                                                                          | A `TerminalOwner` proven to belong to the requesting project and execution scope                                                                                                                          | Typed `error` frame with `terminal_gone`; no write reaches any PTY                                                                                                                                                                      | Unknown id; a live id from another thread's worktree scope; a live id from another project; a disposed id; a well-formed non-UUID                                                                                                             |
+| Browser-probe URL — a user-typed string in a POST body                                                                                                                              | `POST /api/browser/probe`                                                                     | Zod string, then `new URL()`, then a protocol allowlist of exactly `http:`/`https:`, then an **origin check refusing the workspace's own origin**                                                | An absolute `http`/`https` URL, proven not to be this workspace's own origin, fetched with no client-controlled headers, method, or body, at most three redirect hops, a 5 s deadline, and no credentials | 400 with a stable code — `same_origin_refused` for a self-origin address — for a bad scheme, a self-origin address, or an unparseable URL, before any socket is opened; `reachable: false` for a timeout, refusal, or a fourth redirect | Each rejected scheme; a credentialed authority; the workspace's own origin rejected with no request issued; a differing port accepted; three hops accepted and four rejected; a redirect loop; a hanging host; a `HEAD`-refusing host         |
+| Probe target response — arbitrary remote headers and body from a host the user named                                                                                                | The same route                                                                                | Only `X-Frame-Options` and a `frame-ancestors` directive are inspected; the body stream is destroyed unread                                                                                      | Three booleans/enums. No remote bytes, header values, redirect chain, or error text are returned to the browser                                                                                           | Any parse ambiguity resolves to `embeddable: false`, which is the safe direction — the tab shows its explicit state rather than a blank frame                                                                                           | A hostile 1 GiB body is never buffered; header values containing control characters; a `frame-ancestors` list; the response is asserted byte-free                                                                                             |
+| Terminal cwd probe output — an OS-provided absolute path from `readlink /proc/<pid>/cwd` or `lsof` stdout                                                                           | `probeCwd` in `apps/server/src/terminal/cwd.ts`, then the manager                             | Bounded `execFile` (argument array, no shell, 2 s timeout, 64 KiB buffer), UTF-8 decode, first `n` record                                                                                        | A **workspace-relative** display path, `""` for the root, or `null`. Absolute server paths never enter a browser DTO                                                                                      | `null` on a non-zero exit, timeout, unparseable output, unsupported platform, or a directory outside the execution root                                                                                                                 | Each platform branch; a directory outside the root yields `null`; a timeout; non-UTF-8 bytes; a path containing a newline; no shell is invoked                                                                                                |
+| Persisted or typed browser-tab address — restored from the panel record, or entered, before it becomes an `iframe` `src`                                                            | `BrowserTab`, on restore and on commit                                                        | The same `new URL()`, protocol allowlist, **and self-origin refusal** as the probe, applied client-side before the element is rendered                                                           | An `http`/`https` `src` that is provably not this workspace's own origin, on a frame granted neither top-navigation token                                                                                 | The tab renders its named refusal state and mounts **no** `iframe`; a rejected address is cleared from tab state                                                                                                                        | A persisted `javascript:` or `data:` address never becomes an `src`; a persisted self-origin address renders the refusal state and mounts no frame; a persisted valid address survives a reload                                               |
+| Ignore-file contents — `.gitignore` at the execution root and in each visited directory, and `.git/info/exclude`: arbitrary bytes written by the user, a dependency, or a generator | `loadIgnoreRules` in `apps/server/src/inspector/ignoreRules.ts`, during a listing or a search | A bounded read (at most 256 KiB per file, 1,024 bytes per line, 4,000 patterns per directory), then `parseIgnoreFile`, a total parse that discards any line it cannot represent                  | An `IgnoreMatcher`: a pure predicate over already-normalized, already-contained relative paths, which touches no filesystem and therefore cannot follow a symlink or escape the root                      | A missing, unreadable, or oversized ignore file contributes no patterns; the listing shows **more** than it might have, never fewer, and never fails the tab                                                                            | Each pattern form; negation; root anchor; directory-only rule; comment and escaped `#`/`!`; an unrepresentable line discarded; a 5 MiB file; a 100,000-line file; a 1 MiB single line; an unreadable file; a `.gitignore` that is a directory |
+| `depth` and `showIgnored` query parameters on the files route — client-supplied strings                                                                                             | `fileQuerySchema` in `apps/server/src/app.ts`                                                 | Zod: `depth` is exactly `"1"` or `"full"` and defaults to `"full"`; `showIgnored` is a strict boolean flag defaulting to false                                                                   | A bounded walk depth and an explicit reveal decision; `.git` stays excluded regardless of either value                                                                                                    | 400 from the existing schema-parse path; no walk is started                                                                                                                                                                             | An unknown `depth`; a numeric `depth`; a missing `depth` yielding the full listing; `showIgnored` not revealing `.git`                                                                                                                        |
+| Persisted tree expansion — the `files` tab's `expanded` array in the device-local panel record, arbitrary strings that become listing requests                                      | `readPanelState()`, then `FileTree` when it issues a directory query                          | The v3 zod schema parses each entry with the relative-path rules, and the route re-parses and re-contains every `path` it receives; a path that no longer exists simply returns an empty listing | Expansion state that can only ever address a normalized relative path inside the execution root                                                                                                           | A malformed entry drops that entry from the expansion set, not the tab; a malformed record resets the panel as today                                                                                                                    | An absolute, `..`, NUL, or backslash entry never reaches a request; a stale path renders as collapsed-and-empty rather than as an error                                                                                                       |
+| File extension driving syntax highlighting — derived from a server-supplied path                                                                                                    | `languageForPath` in the File tab                                                             | A fixed map from extension to one of a pre-imported allowlist of Shiki language modules                                                                                                          | A language id from a closed set, or `null`                                                                                                                                                                | `null` renders plain monospace text; no highlighter is loaded                                                                                                                                                                           | An unknown extension; an extension-shaped path segment; an assertion that no `import()` specifier is ever built from path text                                                                                                                |
 
 Nothing in this plan is "not applicable": every new field, route, and persisted
 value above crosses a boundary and has a parser and a failure behavior.
@@ -748,6 +1043,7 @@ pnpm --filter @pi-web/web exec vitest run src/features/layout src/features/panel
 pnpm --filter @pi-web/web exec vitest run src/features/workspace   # must pass unedited
 pnpm --filter @pi-web/web exec vitest run src/App.test.tsx
 pnpm --filter @pi-web/server exec vitest run src/terminal src/browser src/app.test.ts
+pnpm --filter @pi-web/server exec vitest run src/inspector   # milestone 4
 pnpm --filter @pi-web/contracts exec vitest run
 ```
 
@@ -758,7 +1054,27 @@ pnpm check      # format:check, lint, typecheck, test, build, test:docs, docs:ch
 pnpm test:e2e --grep workspace
 ```
 
+**The hands-on UI pass is a required step of every remaining milestone**, not a
+closing formality: drive the running application through the browser against a
+real repository, exercise that milestone's behavior, read the resulting
+accessibility tree, confirm each finding against the live DOM or by computing
+the value in question, and record what it finds in Discoveries and blockers with
+its date and its confirmation. It is additional to everything above, and a green suite does not
+stand in for it — the six findings of 2026-08-22 were all made against a green
+suite. Its per-milestone content is stated in each milestone.
+
 Runtime and manual checks that no unit test covers:
+
+- open a Files tab on a repository that contains `node_modules`, search
+  `README.md`, and confirm the project's own README is in the first screen and
+  no dependency path is; expand and collapse directories; reload and confirm the
+  expansion returns;
+- **compute** the accessible name of every tab in a strip and every row in a
+  file list — a tree dump's `name` field is not evidence for a name-from-content
+  role — confirm each is the text it displays, and close a non-active tab
+  without a pointer;
+- open a file with a 2,000-character line in a narrow panel and confirm the end
+  of the line is reachable;
 
 - open a `Diff` tab against thread A and a `Terminal` tab against thread B in
   one group, focus a third chat pane, and confirm both tabs still read their own
@@ -795,8 +1111,12 @@ holds no unsaved content.
 
 **Deployment.** Milestones ship in order. Milestone 2 is the user-visible
 switch; the milestones after it add capability to a working panel and can each
-stop at any point without leaving a broken surface. Milestones 6 and 7 are the
-only ones touching the server and can be deployed independently of each other.
+stop at any point without leaving a broken surface. Milestones 4, 7, and 8 are
+the only ones touching the server and can be deployed independently of each
+other. Milestone 4's server change is additive — a new query parameter and a
+filter — so a browser built before it still receives the listing it expects,
+and a browser built after it degrades to the full recursive listing if the
+parameter is ignored.
 
 **Recovery.** A PTY that outlives its browser is recovered through the
 terminals-listing route rather than orphaned; a PTY the server no longer has is
@@ -815,11 +1135,15 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 
 - [ ] Milestone 1 — generic binary tree, tab model, panel model, storage
 - [ ] Milestone 2 — panel shell, ported tabs, inspector deleted
-- [ ] Milestone 3 — drag and drop with keyboard equivalents
-- [ ] Milestone 4 — File tab, markdown preview, lazy Shiki
-- [ ] Milestone 5 — Diff tab, structured unified diff
-- [ ] Milestone 6 — multi-terminal server, cwd probe, terminal tab
-- [ ] Milestone 7 — browser tab, probe endpoint, CSP, sandbox
+- [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
+      verification, close-control question confirmed
+- [ ] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
+      search (blocked on approval of specification version 2)
+- [ ] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
+      fixed
+- [ ] Milestone 6 — Diff tab, structured unified diff
+- [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
+- [ ] Milestone 8 — browser tab, probe endpoint, CSP, sandbox
 - [ ] Documentation — designs and architecture updated, CWS-06 supersession
       recorded
 
@@ -852,10 +1176,109 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
   hazard exists solely for an address equal to the workspace's own origin, which
   is a case to reject by address rather than to pay for on every page. Resolved
   as D-3.
-- No blockers.
+
+**2026-08-22 — six findings from a hands-on UI pass, not from the tests.** After
+milestone 2 shipped and the whole automated suite was green, a reviewer drove
+the running application against a **real repository** and verified each result
+in the DOM and in the accessibility tree. Nothing below came from a test
+failure; the suite passed throughout. Two are contract gaps and four are
+defects.
+
+1. **The Files tab is unusable on a real repository (contract gap).** The
+   traversal excludes only `.git`, so searching `README.md` returned hundreds of
+   `frontend/node_modules/@babel/…`, `@eslint/…`, and `@floating-ui/…` matches
+   and buried the project's own README. The ignore-file deferral recorded in
+   [Inspector and terminal boundaries](../../design/inspector-and-terminal.md)
+   was tolerable while Files was one third of a cramped strip; it is not
+   tolerable now that Files is a first-class tab. Addressed by specification
+   version 2 and milestone 4.
+2. **Files is a flat list of paths from the root, not a tree (contract gap).**
+   No directory expansion, no collapsing, rows truncate. WSP-05 as approved
+   required only that the existing traversal be ported, so this is a
+   specification gap rather than an implementation miss. Addressed by
+   specification version 2 and milestone 4.
+3. **Panel tabs expose no accessible name — reported as a WSP-10 regression,
+   _closed as a false positive_.** The accessibility-tree dump showed bare `tab`
+   nodes with no label. A follow-up probe of the live DOM the same day showed
+   the markup is
+   `<button class="panel-tab" role="tab"><span class="panel-tab-title">Changes</span><span class="panel-tab-close" data-tab-close aria-hidden="true" title="Close Changes">×</span></button>`:
+   the label-bearing span is not `aria-hidden`, `tab` is a name-from-content
+   role, and the `aria-hidden` close affordance is excluded from the name
+   computation without suppressing its sibling. The name computes correctly.
+   **The dump tool renders a name-from-content role as a blank `name`; the page
+   was never at fault.** No work is owed, and no markup was changed to satisfy
+   the report.
+4. **File-list rows expose no accessible name — reported as a WSP-10 violation,
+   _closed as a false positive_.** Same tool, same cause. The live markup is
+   `<button><span aria-hidden="true">·</span><span>frontend/node_modules/@alloc/quick-lru/readme.md</span></button>`
+   — an unhidden label span inside a name-from-content `button`. The name
+   computes correctly.
+5. **Only the active tab exposes an announced close control (open, WSP-10).**
+   There is exactly one "Close X tab" control rather than one per tab. This one
+   is a **deliberate** decision in `TabStrip.tsx` — a tablist may own only tabs
+   — so it is a design decision to confirm rather than a defect to fix: what
+   milestone 3 must establish is that every tab is closable in one step without
+   a pointer, not that a per-tab button appears.
+6. **File content does not wrap and is clipped at the panel's right edge**
+   (open defect, WSP-05's "remains readable" clause), with no visible horizontal
+   scroll. Unconfirmed as to mechanism: `.file-preview pre` already sets
+   `overflow: auto`, so the hypothesis is a flex or grid ancestor without
+   `min-width: 0`. Addressed in milestone 5, hypothesis first.
+
+**Calibration: of the six findings, two were false positives from the inspection
+tool.** Findings 1 and 2 were re-confirmed the same day — a `README.md` search
+still returns 200 rendered rows, every one under `frontend/node_modules/` — and
+findings 5 and 6 stand as an open question and an open defect. But findings 3
+and 4 were artifacts of how the accessibility-tree dump renders
+name-from-content roles, and had they been taken at face value the fix would
+have been markup changes to a page that was already correct.
+
+Both halves of that are the lesson, and both are why the standing hands-on UI
+pass is written as it is. A hands-on pass finds real things the suite cannot —
+the two contract gaps are things no test could have failed on, because nothing
+required the behavior they were missing — and it also invents things the suite
+would have disproved. So a pass **reports**; its findings are **confirmed
+against the live DOM, or by computing the value in question, before they become
+work**; and a tool's output is evidence about the tool until it is corroborated.
+A green suite says the code does what the plan said, and says nothing about
+whether the plan said enough; a red flag from an inspector says something looked
+wrong to that inspector, and says nothing until it is reproduced.
+
+- No blockers. Milestone 4 is **gated**, not blocked: it waits on product
+  approval of specification version 2, which is a normal lifecycle step rather
+  than an obstacle.
 
 ## Decision and revision log
 
+- 2026-08-22: **Created plan version 2** after the hands-on pass recorded in
+  Discoveries. It adds milestone 4 (file tree, ignore rules, flat search),
+  renumbers the milestones after it, folds findings 3–5 into milestone 3 and
+  finding 6 into milestone 5, and adds a standing hands-on UI pass to every
+  remaining milestone. Adding a server listing mode, an ignore-rule parser at
+  the file boundary, and a persisted-shape change to the `files` tab is
+  material technical replanning, so the version increments and the status
+  returns to Draft with technical approval pending, per the ExecPlan lifecycle.
+  Plan version 1's approval is not retracted: every milestone it covered is
+  carried forward unchanged and the milestones already implemented stay
+  implemented.
+- 2026-08-22: **The two reported accessible-name defects are closed as not
+  defects, and the verification they prompted is kept anyway.** A live-DOM probe
+  showed the label span in both a panel tab and a file row is unhidden inside a
+  name-from-content role, so the accessible name computes; the blank `name` came
+  from the accessibility-tree dump tool. No markup was changed to satisfy a
+  misreading. The computed-accessible-name assertions and the keyboard-only walk
+  stay in milestone 3 on their own merits: axe passed this markup, and a tree
+  dump failed it, so naming is settled by computing the name and by using the
+  keyboard, not by either tool's verdict. The one item that survives from that
+  group — that every tab is closable without a pointer — is carried as a design
+  decision to confirm rather than as a fix.
+- 2026-08-22: **Every remaining milestone ends with a hands-on UI pass in the
+  running application, driven through the browser**, distinct from and
+  additional to the automated suite. Requested by the user on 2026-08-22 after
+  the automated suite passed milestone 2 and a manual pass immediately found six
+  issues in it. Recorded as a standing step rather than a one-off task so it
+  cannot be treated as satisfied by the end-to-end spec, which asserts only what
+  someone already thought to assert.
 - 2026-08-22: Created plan version 1. Technical approval granted by the user for
   plan version 1 the same day, with product approval satisfied by the governing
   specification, so the plan opens at Ready rather than Draft.

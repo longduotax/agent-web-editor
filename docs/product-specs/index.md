@@ -13,7 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Workspace panel](workspace-panel.md)                             | None            | 1                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
+| [Workspace panel](workspace-panel.md)                             | None            | 2                | Draft    | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -62,6 +62,23 @@ responsiveness and keyboard/accessibility contracts. It supersedes **CWS-06** of
 other requirements are unaffected. Implementation is in progress under the
 linked plan and the proposal becomes Current only after the behavior is
 implemented and verified.
+
+Workspace panel version 2 is a Draft proposal with product approval pending. It
+is bounded to WSP-05: after a 2026-08-22 hands-on pass at a real repository
+found the Files tab flooded by `node_modules` and presented as a flat list of
+root-relative paths, version 2 requires a navigable tree with persisted
+expansion, ignore rules honoured by default in both the listing and the search
+with an explicit opt-in to reveal ignored files, flat results while a search is
+active, and accessible names on every row and every tab. Version 1 stays
+approved and in progress; version 2 reopens nothing else, and the read-only
+non-goal is unchanged — a tree adds navigation, never editing. The same pass
+reported four defects against version 1; two of them — panel tabs and file rows
+said to expose no accessible name — were probed against the live DOM and closed
+as false positives from the inspection tool, which renders name-from-content
+roles as blank. The two that stand are one close control rather than one per tab
+(a design decision to confirm) and clipped file content. None needs a contract
+change; all four, closed and open, are recorded in that specification's Findings
+section and tracked in the plan's milestones 3 and 5.
 
 Codex-style workspace surface is a Draft proposal for version 1 that restyles
 the tiling surface to a calm, near-borderless Codex desktop aesthetic; adds
