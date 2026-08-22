@@ -2231,10 +2231,42 @@ a:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.file-preview button {
+/* The header's own controls only. A previewed document's in-repository links
+   are buttons too, and they are prose, not chrome. */
+.file-preview > header button {
   border: 1px solid var(--border);
   border-radius: 0.25rem;
   background: var(--surface-3);
+}
+/* A link inside a previewed markdown file (WSP-05). Three kinds, and they
+   are told apart on purpose: one opens another File tab, one leaves for a
+   real browser tab and says so, and one goes nowhere and is not offered as
+   a link at all. */
+.file-markdown :is(.md-file-link, .md-external-link) {
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.file-markdown .md-external-mark {
+  margin-left: 0.15em;
+  font-size: 0.85em;
+}
+.file-markdown .md-inert-link {
+  color: var(--muted);
+  text-decoration: underline dotted;
+}
+.file-markdown .md-image-missing {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.3rem;
+  color: var(--muted);
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
 }
 .diff-view h4 {
   margin: 0.7rem;
