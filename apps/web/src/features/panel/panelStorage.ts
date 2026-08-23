@@ -26,19 +26,20 @@ import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 // than an exception: a browser with storage disabled must still work.
 
 export const PANEL_STORAGE_KEY = "pi-workspace:panel";
-export const PANEL_STATE_VERSION = 3;
+export const PANEL_STATE_VERSION = 4;
 
 // Record versions this reader still accepts, and migrates on read.
 //
 // Version 3 added `expanded` and `showIgnored` to the `files` tab for the
-// file tree (WSP-05 as revised by specification version 2). That is the whole
-// of the difference, and both fields carry a default below, so a version 2
-// record migrates by being parsed: the next write stamps it 3. The chain from
-// the v1 inspector preference is unbroken — a device that has not opened the
-// panel since the inspector shipped still migrates v1 -> v3 in one read,
-// because the v1 migration builds tabs through the model rather than through
-// this schema.
-const MIGRATABLE_PANEL_VERSIONS = [2] as const;
+// file tree (WSP-05 as revised by specification version 2). Version 4 added
+// `wrap` to the `file` and `diff` tabs for the soft-wrap toggle (WSP-05 as
+// revised by version 3, K5). That is the whole of each difference, and every
+// one of those fields carries a default below, so an older record migrates by
+// being parsed: the next write stamps it 4. The chain from the v1 inspector
+// preference is unbroken — a device that has not opened the panel since the
+// inspector shipped still migrates v1 -> v4 in one read, because the v1
+// migration builds tabs through the model rather than through this schema.
+const MIGRATABLE_PANEL_VERSIONS = [2, 3] as const;
 
 // The shipped inspector's own key. Held here rather than imported, because
 // this migration has to outlive the module that wrote it: that module is
@@ -92,6 +93,9 @@ const PanelTabSchema = z.discriminatedUnion("type", [
     context: TabContextSchema.nullable(),
     path: z.string(),
     view: z.enum(["preview", "source"]),
+    // The version 3 -> 4 migration: scrolling is what the tab did before the
+    // toggle existed, so a record written without one comes back scrolling.
+    wrap: z.boolean().default(false),
   }),
   z.object({
     id: z.string(),
@@ -99,6 +103,7 @@ const PanelTabSchema = z.discriminatedUnion("type", [
     context: TabContextSchema.nullable(),
     path: z.string(),
     collapsedHunks: z.array(z.string()),
+    wrap: z.boolean().default(false),
   }),
   z.object({
     id: z.string(),

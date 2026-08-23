@@ -49,6 +49,12 @@ export type PanelTab =
       context: TabContext | null;
       path: string;
       view: "preview" | "source";
+      // Whether the source view wraps a long line instead of scrolling it
+      // (WSP-05 as revised by specification version 3). On the tab, beside
+      // `view`, and for the same reasons: it is the reader's choice about
+      // this file, and WSP-04 requires it to survive a switch, a reload and
+      // a drag between groups.
+      wrap: boolean;
     }
   | {
       id: TabId;
@@ -56,6 +62,8 @@ export type PanelTab =
       context: TabContext | null;
       path: string;
       collapsedHunks: string[];
+      /** As the File tab's, for the diff's own lines (WSP-06, WSP-05 v3). */
+      wrap: boolean;
     }
   | {
       id: TabId;

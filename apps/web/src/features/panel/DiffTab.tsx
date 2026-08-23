@@ -141,6 +141,26 @@ export const DiffTab = memo(function DiffTab({
             </span>
           </span>
         )}
+        {/* Soft wrap (K5, WSP-05 version 3). Width is the main thing that
+            would send a reader back to `git diff`: at the panel's 400px
+            default a diff line shows about 40 characters once the gutters
+            and the prefix have taken their column, and about 25 at the
+            280px floor, where a terminal at 120 columns needs no scrolling
+            at all. Pinning the column made scrolled reading correct; this
+            is what makes it unnecessary. A pressed button rather than a
+            checkbox, because it is a view control beside the counts and
+            `aria-pressed` says which of the two states it is in. */}
+        <div className="diff-actions">
+          <button
+            type="button"
+            aria-pressed={tab.wrap}
+            onClick={() => {
+              actions.updateTab(tab.id, { wrap: !tab.wrap });
+            }}
+          >
+            Wrap lines
+          </button>
+        </div>
       </header>
       {/* Current working-tree state of a named worktree, never the thread's
           output (WSP-06). The same sentence the Changes tab opens with. */}
@@ -178,6 +198,7 @@ export const DiffTab = memo(function DiffTab({
               collapsed={collapsed}
               onToggle={toggleHunk}
               idPrefix={idPrefix}
+              wrap={tab.wrap}
             />
           ))}
       </div>
@@ -191,11 +212,13 @@ function DiffSectionView({
   collapsed,
   onToggle,
   idPrefix,
+  wrap,
 }: {
   diff: ParsedDiff;
   collapsed: ReadonlySet<string>;
   onToggle: (id: string) => void;
   idPrefix: string;
+  wrap: boolean;
 }): JSX.Element {
   const label = diff.section === "staged" ? "Staged" : "Unstaged";
   return (
@@ -231,6 +254,7 @@ function DiffSectionView({
           collapsed={collapsed.has(hunk.id)}
           onToggle={onToggle}
           bodyId={`${idPrefix}${hunk.id}`}
+          wrap={wrap}
         />
       ))}
       {!diff.binary && diff.raw === null && diff.hunks.length === 0 && (
@@ -258,11 +282,13 @@ function HunkView({
   collapsed,
   onToggle,
   bodyId,
+  wrap,
 }: {
   hunk: DiffHunk;
   collapsed: boolean;
   onToggle: (id: string) => void;
   bodyId: string;
+  wrap: boolean;
 }): JSX.Element {
   return (
     <div className="diff-hunk-group">
@@ -295,7 +321,11 @@ function HunkView({
           </span>
         </button>
       </h5>
-      <pre className="diff-lines" id={bodyId} hidden={collapsed}>
+      <pre
+        className={wrap ? "diff-lines wrap" : "diff-lines"}
+        id={bodyId}
+        hidden={collapsed}
+      >
         {hunk.lines.map((line, index) => (
           // A diff line has no identity of its own — the array is the hunk —
           // so the index is the honest key here.

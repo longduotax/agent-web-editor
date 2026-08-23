@@ -48,6 +48,7 @@ describe("tabTitle", () => {
       context: context(),
       path: "apps/web/src/App.tsx",
       view: "preview",
+      wrap: false,
     };
     const diff: PanelTab = {
       id: "t2",
@@ -55,6 +56,7 @@ describe("tabTitle", () => {
       context: context(),
       path: "docs/product-specs/workspace-panel.md",
       collapsedHunks: [],
+      wrap: false,
     };
     expect(tabTitle(file)).toBe("App.tsx");
     expect(tabTitle(diff)).toBe("workspace-panel.md");
@@ -67,6 +69,7 @@ describe("tabTitle", () => {
       context: context(),
       path: "README.md",
       view: "source",
+      wrap: false,
     };
     const empty: PanelTab = {
       id: "t2",
@@ -74,6 +77,7 @@ describe("tabTitle", () => {
       context: context(),
       path: "",
       view: "source",
+      wrap: false,
     };
     expect(tabTitle(bare)).toBe("README.md");
     expect(tabTitle(empty)).toBe("Untitled");
@@ -179,6 +183,7 @@ describe("sameTarget", () => {
       context: context(),
       path: "a.ts",
       view: "preview",
+      wrap: false,
     };
     const diff: PanelTab = {
       id: "t2",
@@ -186,6 +191,7 @@ describe("sameTarget", () => {
       context: context(),
       path: "a.ts",
       collapsedHunks: [],
+      wrap: false,
     };
     expect(sameTarget(file, diff)).toBe(false);
     expect(sameTarget(diff, file)).toBe(false);
@@ -212,6 +218,7 @@ describe("sameTarget", () => {
         context: context(),
         path: "a.ts",
         view: "preview",
+        wrap: false,
       },
       {
         id: "t5",
@@ -219,6 +226,7 @@ describe("sameTarget", () => {
         context: context(),
         path: "b.ts",
         view: "preview",
+        wrap: false,
       },
       {
         id: "t6",
@@ -226,6 +234,7 @@ describe("sameTarget", () => {
         context: context(),
         path: "a.ts",
         collapsedHunks: [],
+        wrap: false,
       },
       {
         id: "t7",
@@ -305,6 +314,7 @@ describe("sameTarget", () => {
       context: context(),
       path,
       view: "preview",
+      wrap: false,
     });
     expect(sameTarget(file("t1", "a.ts"), file("t2", "a.ts"))).toBe(true);
     expect(sameTarget(file("t1", "a.ts"), file("t2", "b.ts"))).toBe(false);
@@ -315,6 +325,7 @@ describe("sameTarget", () => {
       context: context(),
       path,
       collapsedHunks: [],
+      wrap: false,
     });
     expect(sameTarget(diff("t1", "a.ts"), diff("t2", "a.ts"))).toBe(true);
     expect(sameTarget(diff("t1", "a.ts"), diff("t2", "b.ts"))).toBe(false);
@@ -327,6 +338,7 @@ describe("sameTarget", () => {
       context: context(),
       path: "a.md",
       view: "preview",
+      wrap: false,
     };
     const source: PanelTab = {
       id: "t2",
@@ -334,6 +346,7 @@ describe("sameTarget", () => {
       context: context(),
       path: "a.md",
       view: "source",
+      wrap: false,
     };
     expect(sameTarget(preview, source)).toBe(true);
   });
@@ -451,6 +464,7 @@ describe("tabTitles: two tabs on two files are told apart (J6)", () => {
       context: context({ projectId: scope, scopeKey: scope }),
       path,
       view: "preview",
+      wrap: false,
     };
   }
 

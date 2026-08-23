@@ -391,7 +391,13 @@ declare const document: {
   querySelector(selector: string): ProbeElement | null;
   querySelectorAll(selector: string): Iterable<ProbeElement>;
   elementFromPoint(x: number, y: number): ProbeElement | null;
-  createRange(): { selectNodeContents(node: ProbeElement): void };
+  createRange(): {
+    selectNodeContents(node: ProbeElement): void;
+    /** One rectangle per VISUAL row of the selected text (K5). */
+    getClientRects(): Iterable<{ x: number; y: number; width: number }> & {
+      length: number;
+    };
+  };
 };
 declare function getComputedStyle(
   element: ProbeElement,
@@ -1489,6 +1495,100 @@ test("panel file tab: a copy that works and a copy that fails both say so", asyn
   await expect(status).toHaveText(
     "Could not copy the file's contents: the browser refused access to the clipboard.",
   );
+});
+
+/**
+ * The File tab's source view, wrapped (K5).
+ *
+ * The diff's twin, measured the same way and for the same reason: a Range
+ * over the text answers per visual row, where the `inline-block` that bounds
+ * it has exactly one border box.
+ */
+function previewWrapGeometry() {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview > pre',
+  );
+  // The file's LONGEST line, not its first: `wide.json` opens with `[`, and
+  // a line that fits is not a line that wraps.
+  let text: ProbeElement | null = null;
+  for (const candidate of pre?.querySelectorAll(".file-line-text") ?? [])
+    if ((candidate.textContent ?? "").length > (text?.textContent ?? "").length)
+      text = candidate;
+  if (pre === null || text === null) return null;
+  const box = pre.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const byRow = new Map<number, number>();
+  for (const row of range.getClientRects()) {
+    const y = Math.round(row.y);
+    byRow.set(y, Math.min(byRow.get(y) ?? Number.POSITIVE_INFINITY, row.x));
+  }
+  const lefts = [...byRow.values()].map((left) => Math.round(left - box.x));
+  return {
+    overflowX: pre.scrollWidth - pre.clientWidth,
+    rows: byRow.size,
+    // Every row begins at the same place, past the gutter — which is what
+    // makes a continuation row read as one.
+    distinctLefts: [...new Set(lefts)],
+    // The gutter is generated content, so its width is measured through the
+    // first row's own offset rather than read off an element.
+    textLeft: Math.round(text.getBoundingClientRect().x - box.x),
+    numbered: [
+      ...document.querySelectorAll(
+        '[role="tabpanel"]:not([hidden]) .file-preview > pre .file-line',
+      ),
+    ].length,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  };
+}
+
+test("panel file tab: the source view wraps on request, numbering the logical line once", async ({
+  page,
+}) => {
+  // K5 on the other half of the scope addition. Same three claims as the
+  // diff's: nothing scrolls sideways, a logical line keeps ONE number
+  // however many rows it takes, and every row begins past the gutter so a
+  // continuation cannot read as a new line.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("treeitem", { name: "wide.json" }).click();
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  const scrolling = await page.evaluate(previewWrapGeometry);
+  expect(scrolling).not.toBeNull();
+  if (scrolling === null) return;
+  expect(scrolling.overflowX).toBeGreaterThan(0);
+  expect(scrolling.rows).toBe(1);
+
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  const wrapped = await page.evaluate(previewWrapGeometry);
+  expect(wrapped).not.toBeNull();
+  if (wrapped === null) return;
+  expect(wrapped.overflowX).toBeLessThanOrEqual(0);
+  expect(wrapped.pageOverflowX).toBeLessThanOrEqual(0);
+  expect(wrapped.rows).toBeGreaterThan(1);
+  // One number for the logical line, not one per row.
+  expect(wrapped.numbered).toBe(scrolling.numbered);
+  // Every row starts in the same column, and that column is past the gutter.
+  expect(wrapped.distinctLefts).toHaveLength(1);
+  expect(wrapped.distinctLefts[0]).toBeGreaterThanOrEqual(wrapped.textLeft);
+  expect(wrapped.textLeft).toBeGreaterThan(0);
+
+  // And it is the tab's own state (WSP-04).
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
@@ -2939,6 +3039,68 @@ function diffPinnedColumn(request: { scrollLeft: number; kind: string }) {
   };
 }
 
+/**
+ * A wrapped diff, measured (K5).
+ *
+ * Three claims, and jsdom can settle none of them: that nothing scrolls
+ * sideways any more, that a logical line is numbered ONCE however many
+ * visual rows it takes, and that a continuation row begins under the code
+ * rather than at the panel's left edge — which is what stops a wrapped row
+ * reading as a new line.
+ */
+function diffWrapGeometry() {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  const line = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-lines .diff-add',
+  );
+  const text = line?.querySelector(".diff-line-text") ?? null;
+  const prefix = line?.querySelector(".diff-line-prefix") ?? null;
+  if (scroller === null || line === null || text === null || prefix === null)
+    return null;
+  const box = scroller.getBoundingClientRect();
+  // A Range over the text rather than the element's own rectangles: the
+  // wrapped text lives in an `inline-block`, which has exactly one border
+  // box however many rows its content takes. A range answers per line box,
+  // which is the thing being counted.
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const rows = range.getClientRects();
+  // Grouped by row rather than taken one rect at a time: a range can report
+  // more than one rectangle for a single visual row — measured, the second
+  // rect of row one began two characters in — and the question here is where
+  // each ROW begins, which is the leftmost rectangle on that row.
+  const byRow = new Map<number, number>();
+  for (const row of rows) {
+    const y = Math.round(row.y);
+    byRow.set(y, Math.min(byRow.get(y) ?? Number.POSITIVE_INFINITY, row.x));
+  }
+  return {
+    overflowX: scroller.scrollWidth - scroller.clientWidth,
+    // How many visual rows the one logical line took...
+    rows: byRow.size,
+    // ...and where each of them starts, relative to the scrolling box.
+    rowLefts: [...byRow.values()].map((left) => Math.round(left - box.x)),
+    // Where the pinned column ends, which is where a continuation row has
+    // to begin if it is to read as a continuation.
+    codeLeft: Math.round(
+      prefix.getBoundingClientRect().x +
+        prefix.getBoundingClientRect().width -
+        box.x,
+    ),
+    // One number, for one logical line, however many rows it took.
+    numbered: [
+      ...document.querySelectorAll(
+        '[role="tabpanel"]:not([hidden]) .diff-lines .diff-line',
+      ),
+    ].length,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  };
+}
+
 /** Scrolls the diff's one scrolling box, and reports where it got to. */
 function scrollDiffBody(by: number) {
   const scroller = document.querySelector(
@@ -3294,4 +3456,80 @@ test("panel diff: a selection spanning hunks and sections is still patch text", 
     expect(selected).not.toContain("▾");
     expect(selected).not.toContain("▸");
   }
+});
+
+test("panel diff: wrapped lines do not scroll, are numbered once, and are indented", async ({
+  page,
+}) => {
+  // K5, a scope addition rather than a defect: K1 made scrolled reading
+  // correct, and this is what makes it unnecessary. Three claims, and jsdom
+  // can settle none of them.
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  const scrolling = await page.evaluate(diffWrapGeometry);
+  expect(scrolling).not.toBeNull();
+  if (scrolling === null) return;
+  // The case under test: unwrapped, this really does scroll sideways and
+  // the line really is one row.
+  expect(scrolling.overflowX).toBeGreaterThan(0);
+  expect(scrolling.rows).toBe(1);
+
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    const wrapped = await page.evaluate(diffWrapGeometry);
+    expect(wrapped).not.toBeNull();
+    if (wrapped === null) return;
+
+    // Nothing scrolls sideways, in the body or on the page.
+    expect(`${width} body ${String(wrapped.overflowX <= 0)}`).toBe(
+      `${width} body true`,
+    );
+    expect(`${width} page ${String(wrapped.pageOverflowX <= 0)}`).toBe(
+      `${width} page true`,
+    );
+    // The one logical line now takes many rows...
+    expect(`${width} rows ${String(wrapped.rows > 1)}`).toBe(
+      `${width} rows true`,
+    );
+    // ...and is still ONE numbered line, not one per row.
+    expect(`${width} lines ${String(wrapped.numbered)}`).toBe(
+      `${width} lines ${String(scrolling.numbered)}`,
+    );
+    // Every row of it — the first and every continuation — begins where the
+    // code begins, past the pinned column, so a continuation can never be
+    // mistaken for a new line beginning at the panel's edge.
+    const strays = wrapped.rowLefts.filter(
+      (left) => left < wrapped.codeLeft || left > wrapped.codeLeft + 8,
+    );
+    expect(`${width} indent ${strays.join(",")}`).toBe(`${width} indent `);
+  }
+
+  // And it is the tab's own state, so it survives a reload (WSP-04).
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  const restored = await page.evaluate(diffWrapGeometry);
+  expect(restored).not.toBeNull();
+  expect(restored?.overflowX).toBeLessThanOrEqual(0);
+  expect((restored?.rows ?? 0) > 1).toBe(true);
 });

@@ -189,6 +189,7 @@ describe("ChangesTab", () => {
       context,
       path: "src/main.ts",
       collapsedHunks: [],
+      wrap: false,
     });
   });
 
@@ -434,6 +435,7 @@ describe("FilesTab", () => {
       context,
       path: "src/main.ts",
       view: "preview",
+      wrap: false,
     });
     expect(screen.getByRole("button", { name: /src$/ })).toBeDisabled();
   });
@@ -469,6 +471,7 @@ describe("DiffTab", () => {
     context,
     path: "src/main.ts",
     collapsedHunks: [] as string[],
+    wrap: false,
   };
 
   /** The shape of everything below: two hunks, both sides numbered. */
@@ -621,6 +624,47 @@ describe("DiffTab", () => {
         name: /^@@ -20,2 \+20,3 @@ function main\(\) \{\s*,\s*\+1 -0$/,
       }),
     ).toBeVisible();
+  });
+
+  it("wraps its lines on the tab's own record, not on component state (K5)", async () => {
+    // K5, a scope addition rather than a defect. Width is the main thing
+    // that would send a reader back to `git diff`: about 40 characters of
+    // code at the 400px default and 25 at the 280px floor, against a
+    // terminal at 120 columns. The toggle is on the tab beside the
+    // collapse, so WSP-04 carries it through a switch, a reload and a drag.
+    const user = userEvent.setup();
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actions} />,
+    );
+    const toggle = await screen.findByRole("button", { name: "Wrap lines" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(container.querySelector(".diff-lines.wrap")).toBeNull();
+
+    await user.click(toggle);
+
+    expect(actions.updateTab).toHaveBeenCalledWith(tab.id, { wrap: true });
+
+    cleanup();
+    const wrapped = renderBody(
+      <DiffTab tab={{ ...tab, wrap: true }} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+    expect(screen.getByRole("button", { name: "Wrap lines" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // Every hunk's body wraps, not only the first: the toggle is the tab's,
+    // not one disclosure's.
+    const bodies = [...wrapped.container.querySelectorAll(".diff-lines")];
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every((body) => body.classList.contains("wrap"))).toBe(true);
+    // Wrapping is a layout decision and nothing else: the numbers are still
+    // attributes and the text is still the patch, character for character.
+    expect(wrapped.container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
   });
 
   it("collapses a hunk into the tab's own record, and reopens it from there", async () => {
@@ -975,6 +1019,7 @@ describe("tab bodies are accessible", () => {
             context,
             path: "notes.txt",
             view: "preview",
+            wrap: false,
           }}
           visible
           actions={actionsSpy()}

@@ -414,6 +414,7 @@ describe("FileTree", () => {
       context,
       path: "README.md",
       view: "preview",
+      wrap: false,
     });
     expect(actions.updateTab).not.toHaveBeenCalledWith("t", {
       expanded: ["README.md"],
@@ -504,6 +505,7 @@ describe("FileTree keyboard navigation", () => {
       context,
       path: "README.md",
       view: "preview",
+      wrap: false,
     });
   });
 });

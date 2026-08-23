@@ -93,6 +93,7 @@ const tabs: Record<TabId, PanelTab> = {
     context: elsewhere,
     path: "src/main.ts",
     view: "preview",
+    wrap: false,
   },
 };
 
@@ -143,6 +144,7 @@ describe("TabStrip: two tabs on two files are tellable apart (J6)", () => {
       context: here,
       path: "docs/README.md",
       view: "preview",
+      wrap: false,
     },
     "tab-2": {
       id: "tab-2",
@@ -150,6 +152,7 @@ describe("TabStrip: two tabs on two files are tellable apart (J6)", () => {
       context: here,
       path: "frontend/node_modules/flatted/README.md",
       view: "preview",
+      wrap: false,
     },
   };
 

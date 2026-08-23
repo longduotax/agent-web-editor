@@ -122,6 +122,7 @@ export const ChangesTab = memo(function ChangesTab({
                   context,
                   path: file.path,
                   collapsedHunks: [],
+                  wrap: false,
                 });
               }}
             >

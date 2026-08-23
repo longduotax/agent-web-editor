@@ -822,6 +822,58 @@ describe("the Diff tab's line numbers", () => {
   });
 });
 
+describe("soft wrap in the Diff tab and the File tab's source view (K5)", () => {
+  // A scope addition rather than a defect, recorded as one. Width is what
+  // would send a reader back to `git diff`: roughly 40 characters of code at
+  // the 400px default once the pinned column has taken its own, and about 25
+  // at the 280px floor, against a terminal at 120 columns. Three things have
+  // to hold when it is on, and none of them is visible to jsdom.
+  const diffText = declarationsFor(".diff-lines.wrap .diff-line-text");
+  const fileText = declarationsFor(".file-preview > pre.wrap .file-line-text");
+
+  it("wraps the `pre` and stops it sizing to its longest line", () => {
+    // `width: max-content` is what lets an unwrapped diff scroll; left in
+    // place it would size the box to the longest UNWRAPPED line and the
+    // wrapping would buy nothing.
+    expect(declarationsFor(".diff-body pre.wrap")["white-space"]).toBe(
+      "pre-wrap",
+    );
+    expect(declarationsFor(".diff-body pre.wrap").width).toBe("auto");
+    expect(declarationsFor(".diff-body pre.wrap")["max-width"]).toBe("100%");
+    expect(declarationsFor(".file-preview > pre.wrap")["white-space"]).toBe(
+      "pre-wrap",
+    );
+  });
+
+  it("bounds the code by the width the gutters leave it", () => {
+    // This is what makes a continuation row indent under the code rather
+    // than start at the panel's left edge: the text is a box narrower than
+    // the `pre` by exactly the column beside it, so it wraps inside itself.
+    expect(diffText.display).toBe("inline-block");
+    expect(diffText["max-width"]).toBe("calc(100% - var(--diff-column))");
+    expect(diffText["box-sizing"]).toBe("border-box");
+    expect(fileText.display).toBe("inline-block");
+    expect(fileText["max-width"]).toContain("--file-gutter");
+    expect(fileText["box-sizing"]).toBe("border-box");
+  });
+
+  it("marks a continuation row as well as indenting it", () => {
+    // "An indent or a marker": a wrapped row that looks like a new line is
+    // worse than scrolling. Both, here — the indent above, and a rule down
+    // the code's left edge that a new line starts to the LEFT of and a
+    // continuation row starts to the right of.
+    for (const text of [diffText, fileText])
+      expect(text["border-left"]).toBe("1px solid var(--border)");
+  });
+
+  it("leaves a line with no spaces in it nowhere to overflow to", () => {
+    // A minified line has nothing to break at, and "wrapped" has to mean no
+    // horizontal scrolling for that line too.
+    for (const text of [diffText, fileText])
+      expect(text["overflow-wrap"]).toBe("anywhere");
+  });
+});
+
 describe("the Diff tab's copyable text", () => {
   // K3. Inside one hunk the copy was already exactly right — clean patch
   // text, prefixes kept, no line numbers. Across a hunk boundary it picked
@@ -840,6 +892,11 @@ describe("the Diff tab's copyable text", () => {
     for (const selector of [
       ".diff-hunk-mark",
       ".diff-hunk-tally",
+      // K4's separator, which is the same defect a second time: text added
+      // for the accessible name is not text a copy should carry, and a
+      // cross-hunk copy picked it up as a bare `,` line the day it was
+      // added. Only the end-to-end selection case saw it.
+      ".diff-hunk-toggle .sr-only",
       ".diff-section h4",
       ".diff-section > .panel-state",
     ])

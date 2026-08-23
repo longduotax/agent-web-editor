@@ -2287,6 +2287,21 @@ a:focus-visible {
   min-width: 100%;
   overflow: visible;
 }
+/* Soft wrap (K5, WSP-05 version 3). Width is the main thing that would send
+   a reader back to `git diff`: at the panel's 400px default a diff line
+   shows roughly 40 characters once the pinned column has taken its own, and
+   about 25 at the 280px floor, where a terminal at 120 columns needs no
+   scrolling at all. K1 made scrolled reading correct; this makes it
+   unnecessary.
+   Wrapped, the `pre` stops being max-content — otherwise it would size to
+   the longest unwrapped line and the wrapping would buy nothing — and the
+   text is bounded to the width left over beside the pinned column. */
+.diff-body pre.wrap {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+}
 /* One labelled half of the diff (WSP-06), and the hunks under it. */
 .diff-view h4 {
   margin: 0.7rem 0.7rem 0.4rem;
@@ -2334,9 +2349,13 @@ a:focus-visible {
    and a patch with those lines in it does not apply. The `@@` header beside
    them stays selectable, because `git apply` needs it. Bounded-view notices
    go the same way for the same reason — they are the panel explaining
-   itself, not lines Git wrote. */
+   itself, not lines Git wrote. So does K4's `.sr-only` separator, which is
+   the same defect a second time: text added for the name computation is not
+   text a copy should carry, and it landed in a cross-hunk copy as a bare
+   `,` line the moment it was added. */
 .diff-hunk-mark,
 .diff-hunk-tally,
+.diff-hunk-toggle .sr-only,
 .diff-section h4,
 .diff-section > .panel-state {
   user-select: none;
@@ -2476,6 +2495,28 @@ a:focus-visible {
   padding-right: 0.5ch;
   background: var(--diff-line-bg);
 }
+/* A wrapped line's continuation rows (K5).
+   The code becomes an inline-block as wide as what is left beside the
+   pinned column, so it wraps INSIDE that box and every continuation row
+   begins under the code rather than at the panel's left edge. That is the
+   indent; the rule down its left edge is the marker, and between them a
+   continuation is never mistakable for a new line — a continuation row has
+   an empty gutter and starts to the right of the rule, a new line has its
+   numbers and its prefix and starts to the left of it. The line's own
+   newline character still ends the outer line, so the gutter numbers the
+   LOGICAL line once however many rows it takes.
+   `anywhere` because a minified line has no spaces to break at, and
+   "wrapped" has to mean no horizontal scrolling for that line too. */
+.diff-lines.wrap .diff-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--diff-column));
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
 /* The header's counts (WSP-06). Words rather than glyphs, so the sentence a
    screen reader hears is the sentence on screen. */
 .diff-counts {
@@ -2520,7 +2561,14 @@ a:focus-visible {
 .file-preview > header .file-path {
   display: flex;
   min-width: 0;
-  flex: 1 1 6rem;
+  /* The basis decides when the header WRAPS, not how much the path finally
+     gets — `flex-grow: 1` gives it everything left over either way. It was
+     6rem, which is under a file name's own width, so a third action button
+     (K5's wrap toggle) fitted beside the path at 400px and squeezed the name
+     to 118px of the 136px it needs. 12rem is past any name this header is
+     asked to keep whole, so the actions take a line of their own before the
+     name is clipped. */
+  flex: 1 1 12rem;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -2553,8 +2601,18 @@ a:focus-visible {
   gap: 0.35rem;
   justify-content: flex-end;
 }
+/* The actions travel together in the diff's header too. */
+.diff-view > header .diff-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
 /* The header's own controls only. A previewed document's in-repository links
    are buttons too, and they are prose, not chrome. */
+.diff-view > header button,
 .file-preview > header button {
   flex: none;
   border: 1px solid var(--border);
@@ -2607,6 +2665,34 @@ a:focus-visible {
    plain text beside it. */
 .file-preview > pre .file-token {
   font: inherit;
+}
+/* Soft wrap in the source view (K5, WSP-05 version 3), by the same
+   mechanism as the diff's. The `pre` wraps, and the line's text is bounded
+   to what is left beside the gutter so its continuation rows begin under the
+   code and not under the number. The gutter therefore numbers the LOGICAL
+   line once, however many visual rows it takes, and the rule down the code's
+   left edge is what tells a continuation row from a new line. */
+.file-preview > pre.wrap {
+  white-space: pre-wrap;
+}
+.file-preview > pre.wrap .file-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--file-gutter, 4ch) - 2ch);
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+/* A view control that is on or off, rather than one that does something.
+   The state is on `aria-pressed`; this is the same state drawn for the eye,
+   and the border is a second carrier so it is not the fill alone. */
+.diff-view > header button[aria-pressed="true"],
+.file-preview > header button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--active);
 }
 /* The line-number gutter (J11, WSP-05 version 3).
    Generated content, and that is the whole mechanism: a selection cannot

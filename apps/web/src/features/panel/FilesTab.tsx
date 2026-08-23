@@ -96,7 +96,13 @@ export const FilesTab = memo(function FilesTab({
       if (context === null) return;
       // A tab of its own (WSP-05), so a document the user is reading
       // survives further browsing.
-      actions.openTab({ type: "file", context, path, view: "preview" });
+      actions.openTab({
+        type: "file",
+        context,
+        path,
+        view: "preview",
+        wrap: false,
+      });
     },
     [actions, context],
   );

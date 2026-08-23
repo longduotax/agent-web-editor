@@ -181,7 +181,13 @@ export const FileTab = memo(function FileTab({
   const openFile = useCallback(
     (path: string) => {
       if (context === null) return;
-      actions.openTab({ type: "file", context, path, view: "preview" });
+      actions.openTab({
+        type: "file",
+        context,
+        path,
+        view: "preview",
+        wrap: false,
+      });
     },
     [actions, context],
   );
@@ -273,6 +279,23 @@ export const FileTab = memo(function FileTab({
               }}
             >
               {rendered ? "View source" : "View preview"}
+            </button>
+          )}
+          {/* Soft wrap (K5, WSP-05 version 3), and only where there are
+              lines to wrap: a rendered markdown preview already wraps as
+              prose, and offering a control that does nothing there would be
+              the same kind of untruth as a line number on a paragraph.
+              Persisted on the tab beside `view`, so it survives a switch, a
+              reload and a drag (WSP-04). */}
+          {!rendered && (
+            <button
+              type="button"
+              aria-pressed={tab.wrap}
+              onClick={() => {
+                actions.updateTab(tab.id, { wrap: !tab.wrap });
+              }}
+            >
+              Wrap lines
             </button>
           )}
           <button
@@ -369,7 +392,10 @@ export const FileTab = memo(function FileTab({
             />
           </div>
         ) : (
-          <pre style={gutterWidth(shown)}>
+          <pre
+            className={tab.wrap ? "wrap" : undefined}
+            style={gutterWidth(shown)}
+          >
             {highlighted?.text === shown.text ? (
               <HighlightedText lines={highlighted.lines} />
             ) : (
@@ -494,7 +520,13 @@ function Line({
 }): JSX.Element {
   return (
     <span className="file-line" data-line={number}>
-      {children}
+      {/* The text in a box of its own so soft wrap has something to bound
+          (K5): wrapped, it is an inline-block narrower than the `pre` by the
+          gutter's width, so its continuation rows begin under the code
+          rather than under the number. Unwrapped it is an ordinary inline
+          span and changes nothing — including the file's own characters,
+          which are unchanged either way. */}
+      <span className="file-line-text">{children}</span>
       {last ? null : "\n"}
     </span>
   );

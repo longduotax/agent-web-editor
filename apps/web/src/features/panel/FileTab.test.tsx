@@ -96,11 +96,13 @@ function preview(overrides: Partial<Preview> = {}): Preview {
 function renderTab({
   path = "src/main.ts",
   view = "preview",
+  wrap = false,
   visible = true,
   actions = actionsSpy(),
 }: {
   path?: string;
   view?: "preview" | "source";
+  wrap?: boolean;
   visible?: boolean;
   actions?: PanelActions;
 } = {}) {
@@ -110,7 +112,7 @@ function renderTab({
   const view_ = render(
     <QueryClientProvider client={queryClient}>
       <FileTab
-        tab={{ id: "t", type: "file", context, path, view }}
+        tab={{ id: "t", type: "file", context, path, view, wrap }}
         visible={visible}
         actions={actions}
       />
@@ -188,6 +190,7 @@ describe("FileTab: markdown preview and its source toggle", () => {
       context,
       path: "docs/specs/one.md",
       view: "preview",
+      wrap: false,
     });
   });
 });
@@ -443,6 +446,80 @@ describe("FileTab: line numbers in the source view (J11)", () => {
     expect(
       container.querySelector("pre")?.style.getPropertyValue("--file-gutter"),
     ).toBe("3ch");
+  });
+});
+
+describe("FileTab: soft wrap in the source view (K5)", () => {
+  it("wraps on the tab's own record, and offers the control only where lines are", async () => {
+    const user = userEvent.setup();
+    api.getFile.mockResolvedValue(preview({ content: "const a = 1;\n" }));
+    const { container, actions } = renderTab();
+    await screen.findByText(/const a = 1;/);
+
+    const toggle = screen.getByRole("button", { name: "Wrap lines" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(container.querySelector("pre.wrap")).toBeNull();
+
+    await user.click(toggle);
+
+    // On the tab, beside `view`, so WSP-04 carries it through a switch, a
+    // reload and a drag between groups.
+    expect(actions.updateTab).toHaveBeenCalledWith("t", { wrap: true });
+  });
+
+  it("bounds the text rather than the line, so the gutter numbers once", async () => {
+    api.getFile.mockResolvedValue(
+      preview({ content: "const a = 1;\nconst b = 2;\n" }),
+    );
+    const { container } = renderTab({ wrap: true });
+    await screen.findByText(/const a = 1;/);
+
+    expect(container.querySelector("pre.wrap")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Wrap lines" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The number stays an attribute of the LOGICAL line, and the text it
+    // wraps lives in a box inside that line — which is what makes a
+    // continuation row indent under the code instead of starting a new
+    // numbered line. Three lines, three numbers, however many rows they
+    // take on screen.
+    const lines = [...container.querySelectorAll(".file-line")];
+    expect(lines.map((line) => line.getAttribute("data-line"))).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+    expect(
+      lines.map((line) => line.querySelector(".file-line-text")?.textContent),
+    ).toEqual(["const a = 1;", "const b = 2;", ""]);
+    // And the file's own characters are untouched by any of it.
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "const a = 1;\nconst b = 2;\n",
+    );
+  });
+
+  it("offers no wrap control over a rendered markdown preview", async () => {
+    // A rendered document already wraps as prose. A control that does
+    // nothing is the same kind of untruth as a line number on a paragraph.
+    api.getFile.mockResolvedValue(
+      preview({
+        path: "docs/notes.md",
+        language: "markdown",
+        content: "# The title\n",
+      }),
+    );
+    renderTab({ path: "docs/notes.md" });
+    await screen.findByRole("heading", { name: "The title" });
+
+    expect(screen.queryByRole("button", { name: "Wrap lines" })).toBeNull();
+
+    // It comes back with the source view of the same file, which does have
+    // lines to wrap.
+    cleanup();
+    renderTab({ path: "docs/notes.md", view: "source" });
+    await screen.findByText(/# The title/);
+    expect(screen.getByRole("button", { name: "Wrap lines" })).toBeVisible();
   });
 });
 
@@ -753,6 +830,7 @@ describe("FileTab: the header's path", () => {
     const { container } = renderTab({
       path: "docs/product-specs/workspace-panel.md",
       view: "source",
+      wrap: false,
     });
     await screen.findByText("const answer = 42;");
 

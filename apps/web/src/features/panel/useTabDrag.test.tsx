@@ -128,6 +128,7 @@ function seedTwoGroups(store: Map<string, string>) {
           context,
           path: "src/main.ts",
           view: "preview",
+          wrap: false,
         },
       },
       focusedGroupId: "group-1",
