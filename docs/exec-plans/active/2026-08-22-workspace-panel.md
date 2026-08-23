@@ -1518,7 +1518,27 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       reach — the character bound, a real merge's `@@@` diff, and a status
       list past the render budget — covered by tests rather than left
       unproven. See Discoveries from the milestone-6 hands-on UI pass.
-- [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
+- [x] Milestone 7 — many terminals per scope, cwd probe, terminal tab.
+      Shipped 2026-08-23: `apps/server/src/terminal/cwd.ts` (the bounded
+      platform probe and the reduction of an absolute path to a
+      workspace-relative one) with 16 cases, a rekeyed
+      `ProjectTerminalManager` owning terminals by `TerminalId` with a
+      `scopeId -> Set<TerminalId>` index and a per-scope cap of eight, the
+      `create` frame, the optional `terminalId`/`cwd` on `attach`, the
+      optional `cwd` on `restart`, a typed `code` on the `error` frame, a
+      `cwd` server frame, `GET .../terminals`, and a `TerminalView` that
+      claims its recorded shell, shows the directory it is in, and says when
+      that directory is the one it started in rather than a live one. 49 new
+      unit cases and three new end-to-end cases against a real PTY. The
+      panel record's shape is unchanged, so it stays at **version 4** — but
+      a restored terminal id is no longer discarded, which is what makes a
+      reload re-attach instead of orphan. Two things were found while
+      verifying it and are recorded below: a tab whose middle was its own
+      close control (M1), and a suite that filled the shared execution scope
+      because terminals outlive their pages (M2). **Its standing hands-on UI
+      pass is still owed** — two shells in one worktree, a `cd` the tab
+      follows, a reload, and the ninth terminal refused, driven by hand in a
+      real browser.
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
       workaround retired
 - [ ] Milestone 9 — browser tab, probe endpoint, CSP, sandbox
@@ -2809,7 +2829,96 @@ should not have to rediscover.
   them: Git's status order is path order, and a bulk directory sorting first
   would push the fixtures the other tests open out of the painted 200.
 
+## Discoveries from milestone 7
+
+Recorded here rather than in a commit message because each is a trap the
+next milestone can walk into.
+
+- **M1 — the middle of a tab was its own close control.** Clicking the
+  centre of a tab named `src` closed it instead of switching to it, which the
+  new two-terminals case caught on its first run. Two errors compounded.
+  The comment justifying `min-width: 3.5rem` said it left "~3px of clearance
+  at the narrowest tab the strip can produce"; the hit area reaches 26.6px in
+  from a tab's right edge, so a 56px tab clears its own centre by 1.4px, and
+  a click at the exact centre is inside the rounding. Raising the floor did
+  not help, which is how the second error surfaced: `.panel-tab` is a flex
+  row with `justify-content: flex-start`, so the width a `min-width` adds
+  becomes empty space **after** the close control, and every calculation
+  about "how far in from the right edge" was about a glyph that was not at
+  the right edge. Measured: an 80px tab with the glyph's centre 43px from its
+  left. The close is now pinned with `margin-left: auto`, the floor is 5rem,
+  and the end-to-end case **measures** the clearance from the tab's centre
+  rather than trusting a comment. Milestone 7 is what exposed it: a terminal
+  tab titles itself from the directory it is in, so three-character tab names
+  stopped being a corner case.
+- **M2 — a terminal outlives the page that opened it, and a suite is many
+  pages.** That is WSP-07 working, and it means every end-to-end test that
+  opens a terminal leaves a shell running against this spec file's single
+  shared execution scope: the project scope, because these threads are
+  shared. Eight fill it and the ninth is refused, so the suite began failing
+  on whichever test happened to run ninth — a failure that does not reproduce
+  when the test is run alone. `ServerContext` now exposes the terminal
+  manager so the spec's `afterEach` can leave the server as it found it.
+  Nothing about it is reachable over HTTP.
+- **A bare `attach` no longer means "give me the scope's terminal".** It
+  means "give me a new one", exactly as `create` does; naming a terminal is
+  what claims an existing one. Anything counting `attach` frames as "times
+  the page asked for a shell" — `attachFrameCount` in the panel spec did —
+  under-counts by every first connection. It counts both spellings now.
+- **The fake PTY reports no pid, and that is the point.** `PtyProcess` gained
+  `readonly pid: number | null`; the fake returns `null`, so every manager
+  test that does not care about the working directory exercises the
+  unobservable path for free, and the probe is never scheduled for it. The
+  cases that do care set a pid on the factory **before** the terminal is
+  created, because the poll is started when the first client attaches and a
+  process with no id never starts one.
+- **`resolveContained` refuses `.git`, and a spawn directory goes through
+  it.** A terminal therefore cannot be started inside the repository's own
+  machinery, which is the same answer the file routes give and was not a
+  decision this milestone had to make separately.
+
 ## Decision and revision log
+
+- 2026-08-23: **`restart` carries the spawn directory, and the client is the
+  one that supplies it.** The design boundary requires that a restart's
+  replacement start in the tab's recorded directory, and left open which
+  frame carries it; the milestone's own contract list named only `attach` and
+  `create`. The `restart` frame gains the same optional `cwd`. The
+  alternative — having the server reuse the disposed terminal's **observed**
+  directory — was rejected because that value is `null` wherever the platform
+  cannot answer, and the whole point of the tab's record is that it is not.
+  A restart would then silently drop back to the execution root on exactly
+  the platforms WSP-07 wrote its "shows the directory it was started in"
+  clause for.
+
+- 2026-08-23: **The panel record stays at version 4, and a restored terminal
+  id is no longer discarded.** The shape is unchanged — `terminal` tabs have
+  carried `cwd` and `terminalId` since version 1 of the record — so there is
+  nothing to migrate and no chain to break. What changed is meaning:
+  `restoreTab` used to null the id on the reasoning that "the process belongs
+  to the server, not to the record", which was right about ownership and
+  wrong about the consequence, because it made a reload orphan the shell it
+  had been watching. The id is now restored and treated as a **claim**: the
+  server answers `terminal_gone` for anything it does not own in that project
+  and scope, and the tab renders its restart action. Both fields are still
+  parsed on the way out of storage, because both become a request.
+
+- 2026-08-23: **The scope id is compared, not parsed.** `activeOwner` used to
+  run the scope id through `TerminalIdSchema`, which passed only because all
+  three brands are UUIDs and proved nothing about the value it checked. The
+  scope id is derived by the execution-context resolver from a thread record
+  and never appears on the wire, so there is no untrusted input to parse; the
+  terminal id, which does come from the client, is parsed exactly as before.
+  Resolving now requires the owner's project **and** scope to equal the
+  request's, which is what makes a live id from another worktree a rejection
+  rather than a back door.
+
+- 2026-08-23: **A listed terminal's `cwd` is nullable, and is the observed
+  value rather than the spawn directory.** The listing exists so a reloaded
+  browser can re-attach by identity, and the browser already knows what it
+  recorded; reporting a spawn directory as though it were current would be
+  the one thing WSP-07 forbids, in a DTO instead of in the toolbar. `null`
+  therefore means the same thing here as in the `cwd` frame: not observable.
 
 - 2026-08-23: **Soft wrap is a toggle, off by default, rather than the way a
   long line is always shown** (K5). Both readings are legitimate: a diff of
