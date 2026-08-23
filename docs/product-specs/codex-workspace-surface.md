@@ -245,10 +245,20 @@ visibility preference, and its floating toggle are removed from the product.
 ### CWS-07 — One centered reading column
 
 Transcript content, the composer, and the new-chat card all sit inside the
-**same centered reading column**, sized by a single CSS custom property
-(`--surface-measure`, currently `48rem`). A user's turn and the input that
-answers it share one axis; no component may hardcode a competing measure. Below
-that width the column shrinks with the pane rather than clipping.
+**same centered reading column**, whose outer bound is a single CSS custom
+property (`--surface-measure`, currently `48rem`). A user's turn and the input
+that answers it share one axis; no component may hardcode a competing measure.
+Below that width the column shrinks with the pane rather than clipping.
+
+Transcript prose may be **narrower than that axis but never wider**. The
+transcript column is bounded by `min(--transcript-measure, --surface-measure)`,
+so `--transcript-measure` (currently `40rem`) tunes readability inside the
+shared axis rather than competing with it. At `48rem` a transcript line runs to
+roughly 113 characters, far past the 60–75 that prose wants; `40rem` brings the
+median to 83 while still fitting an 80-column code block without horizontal
+scrolling. Those two goals do not both fit — prose alone would want `38rem` and
+code needs at least `39.3rem` — and **code not scrolling wins**, because this is
+a tool for reading code.
 
 The pane's header chrome (run status, title, project chip, pane actions, and
 the quiet detail line) is full-width bar chrome, not reading content, and is

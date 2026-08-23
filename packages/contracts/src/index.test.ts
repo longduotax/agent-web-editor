@@ -7,6 +7,7 @@ import {
   UnarchiveThreadResponseSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
+  LiveDiagnosticSchema,
   ProjectIdSchema,
   SessionIdSchema,
   RelativePathSchema,
@@ -341,5 +342,48 @@ describe("wire contracts", () => {
     // The cap is a number the browser states to the user, so it lives with
     // the frames rather than only inside the server that enforces it.
     expect(TERMINAL_MAX_PER_SCOPE).toBe(8);
+  });
+});
+
+// `LiveEventSchema.payload` is `unknown` because four event types share one
+// envelope, so a diagnostic payload has to be asserted at the point of use —
+// the same arrangement `transcript` already has with TranscriptItemSchema.
+// Before this existed there was nothing to assert it WITH, which is part of
+// why the client used diagnostics only as a refetch trigger.
+describe("LiveDiagnosticSchema", () => {
+  it("accepts the payload the server republishes, code and all", () => {
+    expect(
+      LiveDiagnosticSchema.parse({
+        type: "diagnostic",
+        level: "warning",
+        code: "provider_retry",
+        message: "Provider retry 2 of 5.",
+      }),
+    ).toEqual({
+      type: "diagnostic",
+      level: "warning",
+      code: "provider_retry",
+      message: "Provider retry 2 of 5.",
+    });
+  });
+
+  it("accepts a runtime that predates the code field", () => {
+    expect(
+      LiveDiagnosticSchema.safeParse({
+        type: "diagnostic",
+        level: "info",
+        message: "Compacted the session.",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects payloads from the envelope's other event types", () => {
+    for (const payload of [
+      { type: "transcript", level: "warning", message: "x" },
+      { type: "diagnostic", level: "fatal", message: "x" },
+      { type: "diagnostic", level: "warning", message: "" },
+      { type: "diagnostic", level: "warning" },
+    ])
+      expect(LiveDiagnosticSchema.safeParse(payload).success).toBe(false);
   });
 });

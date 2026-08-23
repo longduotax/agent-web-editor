@@ -842,6 +842,12 @@ describe("PiAgentRuntime session open boundary", () => {
         output: "first result\n",
         cwd: "/project",
         exitCode: 0,
+        // N1: a result entry carries the moment the step *finished*. The step
+        // keeps the timestamp of the call that started it, so a reader can
+        // subtract the two -- writing the result's time over the call's used
+        // to leave a step's own elapsed time unrepresentable.
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:02.000Z",
       },
       {
         id: "result-2",
@@ -852,6 +858,8 @@ describe("PiAgentRuntime session open boundary", () => {
         output: "second result\n",
         cwd: "/project",
         exitCode: 0,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
       },
       {
         id: "bash",
@@ -861,10 +869,234 @@ describe("PiAgentRuntime session open boundary", () => {
         input: "false",
         output: "failed",
         exitCode: 1,
+        // A bashExecution is one entry with one instant and no start, so its
+        // span stays unknown rather than being flattened to zero.
+        timestamp: "2026-01-01T00:00:03.000Z",
+        completedAt: null,
       },
     ]);
     expect(snapshot.diagnostics).toEqual([
       "An unsupported native message was omitted.",
+    ]);
+  });
+
+  // N1: the shape behind "a 45-second run reports Worked for <1s" -- one tool
+  // call, whose duration is the whole run's duration. Both ends of it have to
+  // survive translation or the transcript cannot express it at all.
+  it("carries both ends of a long single tool call, and leaves a running one open-ended", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "assistant",
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "slept",
+                name: "bash",
+                arguments: { command: "sleep 45 && ls" },
+              },
+            ],
+          },
+        },
+        {
+          id: "slept-result",
+          type: "message",
+          timestamp: "2026-01-01T00:00:45.054Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "slept",
+            toolName: "bash",
+            content: [{ type: "text", text: "README.md\n" }],
+            isError: false,
+            details: { exitCode: 0 },
+          },
+        },
+        {
+          id: "assistant-2",
+          type: "message",
+          timestamp: "2026-01-01T00:00:46.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "running",
+                name: "bash",
+                arguments: { command: "sleep 60" },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    const tools = snapshot.transcript.filter((item) => item.kind === "tool");
+    expect(tools).toMatchObject([
+      {
+        status: "completed",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:45.054Z",
+      },
+      {
+        status: "running",
+        timestamp: "2026-01-01T00:00:46.000Z",
+        completedAt: null,
+      },
+    ]);
+  });
+
+  // S1: three histories where a result outlives the call that made it. Each
+  // must yield `timestamp: null` -- "I don't know when this began" -- because
+  // borrowing the end time instead produces a step that claims to have taken
+  // no time, which is N1's defect re-created inside N1's fix.
+  it.each([
+    [
+      "a compaction summarised the issuing entry away",
+      [
+        {
+          id: "compacted",
+          type: "compaction",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          summary: "Earlier turns.",
+        },
+      ],
+    ],
+    ["a branch or resume began after the call", []],
+  ])("reports an unknown start when %s", async (_name, prefix) => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        ...prefix,
+        {
+          id: "orphan-result",
+          type: "message",
+          timestamp: "2026-01-01T00:04:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-gone",
+            toolName: "bash",
+            content: [{ type: "text", text: "done\n" }],
+            isError: false,
+            details: { exitCode: 0 },
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    expect(snapshot.transcript.filter((i) => i.kind === "tool")).toMatchObject([
+      {
+        status: "completed",
+        timestamp: null,
+        completedAt: "2026-01-01T00:04:00.000Z",
+      },
+    ]);
+  });
+
+  it("reports an unknown start when a duplicate toolCallId discards it", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "assistant",
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "dupe", name: "bash", arguments: {} },
+              { type: "toolCall", id: "dupe", name: "bash", arguments: {} },
+            ],
+          },
+        },
+        {
+          id: "dupe-result",
+          type: "message",
+          timestamp: "2026-01-01T00:04:00.000Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "dupe",
+            toolName: "bash",
+            content: [],
+            isError: false,
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    const result = snapshot.transcript.filter((i) => i.kind === "tool").at(-1);
+    expect(result).toMatchObject({
+      status: "completed",
+      timestamp: null,
+      completedAt: "2026-01-01T00:04:00.000Z",
+    });
+  });
+
+  // S2: a bashExecution entry is one record with one instant and no start, so
+  // its span is unknown rather than zero -- a five-minute command must not
+  // report itself as instantaneous.
+  it("leaves a bash execution's span unknown rather than zero-width", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "bash",
+          type: "message",
+          timestamp: "2026-01-01T00:05:00.000Z",
+          message: {
+            role: "bashExecution",
+            command: "sleep 300",
+            output: "",
+            exitCode: 0,
+            cancelled: false,
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const snapshot = await opened.snapshot();
+    expect(snapshot.transcript).toMatchObject([
+      {
+        kind: "tool",
+        name: "bash",
+        timestamp: "2026-01-01T00:05:00.000Z",
+        completedAt: null,
+      },
     ]);
   });
 });
@@ -916,4 +1148,209 @@ describe("PiOpenSession preflight boundary", () => {
       expect(events).toHaveLength(accepted ? 1 : 0);
     },
   );
+
+  // G12. "Provider retry N of M." reached the browser and was dropped, so a
+  // stalled run was indistinguishable from a slow one. Fixing that in the
+  // client needed a way to tell this diagnostic apart from the adapter's
+  // routine ones — and severity could not do it, because EVERY unrecognised
+  // Pi event (which includes all tool activity) is also a `warning`.
+  describe("diagnostics carry a code, not only a severity", () => {
+    async function emitted(event: unknown): Promise<unknown[]> {
+      const context = await fixture();
+      sdk.list.mockResolvedValue([
+        descriptor(context.project, context.sessionPath),
+      ]);
+      sdk.open.mockReturnValue(openedManager());
+      let listener: ((value: unknown) => void) | undefined;
+      sdk.createAgentSession.mockResolvedValue({
+        session: {
+          subscribe: (next: (value: unknown) => void) => {
+            listener = next;
+            return () => undefined;
+          },
+          prompt: () => new Promise<void>(() => undefined),
+          steer: () => Promise.resolve(),
+          abort: () => Promise.resolve(),
+          dispose: () => undefined,
+        },
+      });
+      const opened = await new PiAgentRuntime().open(
+        context.project,
+        sessionId,
+      );
+      const events: unknown[] = [];
+      opened.subscribe((value) => events.push(value));
+      listener?.(event);
+      return events;
+    }
+
+    it("names a provider retry, and raises it above info", async () => {
+      expect(
+        await emitted({
+          type: "auto_retry_start",
+          attempt: 2,
+          maxAttempts: 5,
+        }),
+      ).toEqual([
+        {
+          type: "diagnostic",
+          // `info` had this filtered out everywhere downstream, and the run
+          // is not progressing — that is not information, it is a warning.
+          level: "warning",
+          code: "provider_retry",
+          message: "Provider retry 2 of 5.",
+        },
+      ]);
+    });
+
+    it("names the routine unsupported-event noise as such", async () => {
+      expect(await emitted({ type: "tool_execution_start" })).toEqual([
+        {
+          type: "diagnostic",
+          level: "warning",
+          code: "unsupported_event",
+          message: "Pi emitted an unsupported event.",
+        },
+      ]);
+    });
+
+    it("names an unsupported message separately from an unsupported event", async () => {
+      expect(
+        await emitted({ type: "message_end", message: { role: "nonsense" } }),
+      ).toEqual([
+        {
+          type: "diagnostic",
+          level: "warning",
+          code: "unsupported_message",
+          message: "Pi emitted an unsupported message.",
+        },
+      ]);
+    });
+  });
+});
+
+// B2. The pane tells a reader whose Stop stranded a steer that the message
+// was "never delivered" and hands the text back to the composer. That was
+// false: neither `AgentSession.abort()` nor `Agent.abort()` empties
+// `steeringQueue`, the queue belongs to the one session this thread reuses
+// for every run, and the next `prompt()` drains it BEFORE the model call. So
+// the reader pressed Enter on text Pi already held, and the instruction ran
+// twice. Pi's own TUI clears the queue on abort; this adapter did not.
+describe("stopping a run", () => {
+  async function stoppableSession(session: Record<string, unknown>) {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        subscribe: () => () => undefined,
+        prompt: () => new Promise<void>(() => undefined),
+        steer: () => Promise.resolve(),
+        dispose: () => undefined,
+        ...session,
+      },
+    });
+    return await new PiAgentRuntime().open(context.project, sessionId);
+  }
+
+  it("clears the steering queue, so a stranded steer cannot ride the next prompt", async () => {
+    const calls: string[] = [];
+    const opened = await stoppableSession({
+      clearQueue: () => {
+        calls.push("clearQueue");
+        return { steering: [], followUp: [] };
+      },
+      abort: () => {
+        calls.push("abort");
+        return Promise.resolve();
+      },
+    });
+
+    await opened.stop();
+
+    // Before the abort, which is the order Pi's own TUI uses. Aborting during
+    // a TOOL call returns normally and reaches the end-of-turn drain, so a
+    // queue cleared afterwards would already have been drained and persisted.
+    expect(calls).toEqual(["clearQueue", "abort"]);
+  });
+
+  it("still stops a run on a Pi that has no clearQueue", async () => {
+    let aborted = false;
+    const opened = await stoppableSession({
+      abort: () => {
+        aborted = true;
+        return Promise.resolve();
+      },
+    });
+
+    await expect(opened.stop()).resolves.toBeUndefined();
+    expect(aborted).toBe(true);
+  });
+
+  // The same stranded steer, on the ending nothing calls `stop()` for. A run
+  // that ends in FAILURE never reaches the end-of-turn drain either
+  // (`runLoop` returns on `stopReason === "error"`), so the queue survived it
+  // and the pane's "never delivered" was false all over again. The settlement
+  // outcome already distinguishes the three endings, so the rule is stated
+  // where they are all visible: only a COMPLETED run keeps its queue.
+  describe("a run that ends without being stopped", () => {
+    // A thunk, not a promise: a rejected promise created at the call site is
+    // unhandled for the microtasks it takes to reach the adapter.
+    async function settledSession(operation: () => Promise<void>) {
+      const cleared: string[] = [];
+      const opened = await stoppableSession({
+        clearQueue: () => {
+          cleared.push("clearQueue");
+          return { steering: [], followUp: [] };
+        },
+        abort: () => {
+          cleared.push("abort");
+          return Promise.resolve();
+        },
+        prompt: (
+          _text: string,
+          options: { preflightResult: (value: boolean) => void },
+        ) => {
+          Reflect.apply(options.preflightResult, undefined, [true]);
+          return operation();
+        },
+      });
+      const acceptance = await opened.prompt("Work");
+      acceptance.discardEvents();
+      return { cleared, outcome: await acceptance.settlement };
+    }
+
+    it("clears the steering queue when the run fails", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.reject(new Error("provider exploded")),
+      );
+
+      expect(outcome).toBe("failed");
+      // Nothing called stop(): this is the ending that had no owner.
+      expect(cleared).toEqual(["clearQueue"]);
+    });
+
+    it("clears it when the run ends interrupted", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.reject(new Error("The operation was aborted")),
+      );
+
+      expect(outcome).toBe("interrupted");
+      expect(cleared).toEqual(["clearQueue"]);
+    });
+
+    // Not merely redundant -- wrong. A completed run drained its own queue,
+    // so anything left in it arrived after that drain and is legitimately
+    // waiting for the next prompt.
+    it("leaves the queue alone when the run completes", async () => {
+      const { cleared, outcome } = await settledSession(() =>
+        Promise.resolve(),
+      );
+
+      expect(outcome).toBe("completed");
+      expect(cleared).toEqual([]);
+    });
+  });
 });

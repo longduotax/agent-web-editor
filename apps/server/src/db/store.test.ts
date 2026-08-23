@@ -100,6 +100,51 @@ describe("metadata persistence", () => {
     store.close();
   });
 
+  // G9. The sidebar orders threads by last_activity_at, and renaming used to
+  // set it -- so correcting a thread's title moved it to the top of the list,
+  // ahead of threads that had actually been worked in since. A rename is not
+  // activity; it is a correction to a label.
+  it("renames a thread without moving it in the list", async () => {
+    const state = await stateDirectory();
+    let now = "2026-08-15T12:00:00.000Z";
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      now: () => now,
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const older = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+      "Create a file called LOCAL CHECKOUT PROOF",
+    );
+    now = "2026-08-15T12:05:00.000Z";
+    const newer = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000002",
+      "Newer thread",
+    );
+    expect(store.listThreads(project.id).map((thread) => thread.id)).toEqual([
+      newer.id,
+      older.id,
+    ]);
+
+    now = "2026-08-15T12:10:00.000Z";
+    const renamed = store.renameThread(
+      project.id,
+      older.id,
+      "Create LOCAL-CHECKOUT-PROOF.txt",
+    );
+
+    expect(renamed.title).toBe("Create LOCAL-CHECKOUT-PROOF.txt");
+    expect(renamed.last_activity_at).toBe("2026-08-15T12:00:00.000Z");
+    expect(store.listThreads(project.id).map((thread) => thread.id)).toEqual([
+      newer.id,
+      older.id,
+    ]);
+    store.close();
+  });
+
   it("archives inactive threads without deleting history and updates active navigation", async () => {
     const state = await stateDirectory();
     let now = "2026-08-15T12:00:00.000Z";

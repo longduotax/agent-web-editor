@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +30,7 @@ import {
 
 import {
   archiveThread,
+  addProjectByPath,
   browseProject,
   discoverSessions,
   getArchivedThreads,
@@ -41,6 +43,7 @@ import {
   unarchiveThread,
 } from "./api/client.js";
 import { ErrorNotice } from "./components/ErrorNotice.js";
+import { ThreadRenameForm } from "./components/ThreadRenameForm.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
@@ -70,6 +73,30 @@ interface PendingArchive {
   title: string;
 }
 
+// How close the thread context menu may come to the edge of the window.
+const VIEWPORT_INSET = 8;
+
+// Keeps an already-rendered menu inside the window, using the size the browser
+// actually laid it out at. An earlier version carried `.thread-context-menu`'s
+// min-width and item metrics as JS constants; those are the stylesheet's to
+// change, and a copy of them here is a copy that drifts. Measuring costs one
+// layout read in an effect that already runs on open.
+function clampToViewport(
+  anchor: { left: number; top: number },
+  size: { width: number; height: number },
+) {
+  return {
+    left: Math.max(
+      VIEWPORT_INSET,
+      Math.min(anchor.left, window.innerWidth - size.width - VIEWPORT_INSET),
+    ),
+    top: Math.max(
+      VIEWPORT_INSET,
+      Math.min(anchor.top, window.innerHeight - size.height - VIEWPORT_INSET),
+    ),
+  };
+}
+
 function Sidebar({
   selectedProjectId,
   selectedThreadId,
@@ -90,6 +117,45 @@ function Sidebar({
         await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
+  // The path fallback's own state. Kept beside `browse` rather than inside a
+  // child component so both routes invalidate the same query and so the
+  // disclosure can close itself on success.
+  // The disclosure is left UNCONTROLLED and closed through the DOM node.
+  // Driving `open` from React state means React owns a value the browser also
+  // writes (a click on the summary), and the two desynchronise the moment one
+  // of them moves without the other -- which is exactly what happens in an
+  // environment that does not fire `toggle`. `<details>` already remembers
+  // its own state; the only thing this needs is to shut it once.
+  const pathFormRef = useRef<HTMLDetailsElement>(null);
+  const [pathDraft, setPathDraft] = useState("");
+  const addByPath = useMutation({
+    mutationFn: addProjectByPath,
+    onSuccess: async () => {
+      // Clear and collapse: the project's row appearing in the list below is
+      // the confirmation, and a field still holding the path that worked
+      // invites a second submit that would only report "already registered".
+      setPathDraft("");
+      if (pathFormRef.current !== null) pathFormRef.current.open = false;
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+  // A failed browse used to survive every navigation and clear only on a
+  // reload or a successful browse -- a red block in the primary navigation,
+  // for an action the user had already abandoned, reading as "something is
+  // broken with my project". Moving anywhere in the workspace is enough to
+  // say they have moved on. Read through a ref so this effect depends on the
+  // ROUTE only: putting the mutation's own error in the dependency list would
+  // fire the moment the error arrived and clear the notice before it painted.
+  const browseRef = useRef(browse);
+  useEffect(() => {
+    browseRef.current = browse;
+  });
+  useEffect(() => {
+    const current = browseRef.current;
+    // Never while the dialog is still open: resetting a pending mutation
+    // re-arms the Browse button behind a chooser that is still on screen.
+    if (!current.isPending && current.error !== null) current.reset();
+  }, [selectedProjectId, selectedThreadId]);
   const [discoveringProjectId, setDiscoveringProjectId] = useState<
     ProjectId | undefined
   >(undefined);
@@ -167,6 +233,22 @@ function Sidebar({
   // request could reject — so that failure surfaced nowhere at all. Each
   // entry now owns its own toast, its own 6s timer and its own named error.
   const [pendingArchives, setPendingArchives] = useState<PendingArchive[]>([]);
+  // Threads whose archive request is IN FLIGHT, kept hidden for exactly as
+  // long as it takes the listing to agree.
+  //
+  // `pendingArchives` stops hiding a row the instant the request is SENT,
+  // because the toast's dismissal both un-stages the archive and fires the
+  // mutation in one handler. But the authoritative listing does not drop the
+  // thread until the request has returned AND the invalidated ["workspace"]
+  // query has refetched. In that gap the row -- gone from the sidebar for the
+  // whole six-second undo window, its toast already faded -- came BACK, and
+  // left again 85ms later when the fresh listing landed. That flicker, and
+  // the reflow of every row beneath it, is the reported glitch.
+  //
+  // Hiding for the whole flight means the row leaves once, when the reader
+  // asked for it, and returns only if the archive actually fails -- which is
+  // what the named error notice beside it is there to explain.
+  const [archivingThreadIds, setArchivingThreadIds] = useState<ThreadId[]>([]);
   const [archiveFailures, setArchiveFailures] = useState<
     { thread: PendingArchive; error: unknown }[]
   >([]);
@@ -178,6 +260,14 @@ function Sidebar({
   const archive = useMutation({
     mutationFn: async ({ projectId, threadId }: PendingArchive) =>
       await archiveThread(projectId, threadId),
+    // One choke point for both routes into this mutation -- the toast timing
+    // out, and Retry on a failed archive's notice -- so neither can forget to
+    // hide the row it is about to remove.
+    onMutate: ({ threadId }) => {
+      setArchivingThreadIds((current) =>
+        current.includes(threadId) ? current : [...current, threadId],
+      );
+    },
     onSuccess: async (_result, variables) => {
       setThreadMenu(null);
       forgetArchiveFailure(variables.threadId);
@@ -188,8 +278,32 @@ function Sidebar({
         // apparently vanished from both lists at once.
         queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
       ]);
-      if (selectedThreadId === variables.threadId)
-        void navigate(`/projects/${variables.projectId}`);
+      // NO NAVIGATION. The focused pane keeps the thread it was showing and
+      // swaps its composer for "This thread is archived. Restore it to keep
+      // working." -- which is exactly what an unfocused pane has always done.
+      //
+      // Archiving used to send the app to `/projects/:id`, whose redirect to
+      // `lastOpenedThreadId ?? threads[0]` put an ARBITRARY OTHER THREAD
+      // under the reader's eyes with nothing said about it. The fix for that
+      // was to navigate to `/new` instead, which carries no thread id and so
+      // does not re-point the pane. But `/new` is not inert either: it is an
+      // INSTRUCTION to open an empty composer, so WorkspaceView answered it
+      // by splitting a second pane in and moving keyboard focus into its
+      // textarea -- six seconds after a click that asked for neither.
+      //
+      // That split is what re-tiled the surface, and re-tiling re-parents the
+      // existing pane's element, which React cannot preserve across a change
+      // of parent. The pane therefore REMOUNTED, losing the latched
+      // "this thread was once listed" that is the whole basis of its archived
+      // inference, and rendered the thread it had just correctly marked
+      // Archived as live again -- its title, a green "Done", a working
+      // composer -- until the refetched snapshot 404'd 35ms later.
+      //
+      // Staying put satisfies the original requirement more directly than
+      // either destination: nothing re-points the pane because nothing
+      // navigates, the URL goes on naming the thread the reader archived (so
+      // a reload returns to it, with Restore in reach), and the pane reaches
+      // the notice by simply re-rendering.
     },
     // Recorded per thread rather than read off the mutation, which only ever
     // holds the most recent call's error and is the exact hole NEW-R3-1 fell
@@ -201,6 +315,17 @@ function Sidebar({
         ),
         { thread: variables, error },
       ]);
+    },
+    // react-query AWAITS onSuccess before running this, so on the success
+    // path the row is only allowed back once the refetched listing has
+    // already dropped it -- and it therefore never comes back at all. On the
+    // failure path nothing dropped it, so it reappears beside its error.
+    // That ordering is the whole fix; a plain onSuccess would un-hide the row
+    // before the invalidation it just awaited had reached the cache.
+    onSettled: (_result, _error, variables) => {
+      setArchivingThreadIds((current) =>
+        current.filter((id) => id !== variables.threadId),
+      );
     },
   });
   const unarchive = useMutation({
@@ -236,6 +361,41 @@ function Sidebar({
       ]);
     },
   });
+  // One `rename` mutation is shared by every row in every project, so its
+  // error outlives the form that produced it: a failed rename of thread A,
+  // Cancel, then Rename on thread B rendered A's red block under B's field.
+  // Nothing ever called `reset()`, so the notice was also the one error in
+  // the app with no way out -- in the commit whose organising idea (G10) is
+  // that a red block needs an exit. Every route into and out of a rename form
+  // goes through these two, so the error can only ever belong to the form on
+  // screen.
+  const beginRename = (target: {
+    projectId: ProjectId;
+    threadId: ThreadId;
+    title: string;
+  }) => {
+    rename.reset();
+    setRenamingThread(target);
+  };
+  const endRename = () => {
+    rename.reset();
+    setRenamingThread(null);
+  };
+
+  // The menu opens off the right edge of the row that asked for it, level with
+  // that row's top, so it never covers the thread below. That anchor can fall
+  // outside the window near an edge, so it is corrected here — before paint,
+  // and against the size the browser actually laid the menu out at rather than
+  // against a copy of its CSS. Converges after one pass: the corrected anchor
+  // clamps to itself.
+  useLayoutEffect(() => {
+    const menu = threadMenuRef.current;
+    if (threadMenu === null || menu === null) return;
+    const { width, height } = menu.getBoundingClientRect();
+    const clamped = clampToViewport(threadMenu, { width, height });
+    if (clamped.left !== threadMenu.left || clamped.top !== threadMenu.top)
+      setThreadMenu({ ...threadMenu, ...clamped });
+  }, [threadMenu]);
 
   useEffect(() => {
     if (threadMenu === null) return;
@@ -310,8 +470,90 @@ function Sidebar({
         >
           {browse.isPending ? "Opening…" : "Browse…"}
         </button>
+        {/* The second route in, and the reason it exists: the button above
+            hands off to a native OS folder chooser, which is the better way
+            when it works and was the ONLY way. That dialog opens as a
+            separate window; it can land behind the browser or on another
+            desktop, and when it fails outright the app could say so and
+            offer nothing else. Adding a project is the first thing anyone
+            does and it had no second path.
+
+            Folded into a closed <details> so the common case is unchanged:
+            one uppercase label and one primary button, exactly as before.
+            The fallback is one word away for the reader who needs it and
+            invisible to the reader who does not. */}
+        <details className="add-project-path" ref={pathFormRef}>
+          <summary>Or enter a path</summary>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const path = pathDraft.trim();
+              if (path === "" || addByPath.isPending) return;
+              addByPath.mutate(path);
+            }}
+          >
+            <input
+              type="text"
+              value={pathDraft}
+              // Not a `required` field with browser validation: the submit
+              // button is disabled until there is something to send, which
+              // says the same thing without a popup.
+              aria-label="Project directory path"
+              placeholder="/absolute/project/path"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              onChange={(event) => {
+                setPathDraft(event.target.value);
+                addByPath.reset();
+              }}
+            />
+            <button
+              type="submit"
+              disabled={pathDraft.trim() === "" || addByPath.isPending}
+            >
+              {addByPath.isPending ? "Adding…" : "Add"}
+            </button>
+          </form>
+          {/* Said before it is asked, because the new-chat pane already
+              handles a non-repository directory and a reader who does not
+              know that will assume this field wants a repository. */}
+          <p className="add-project-path-note">
+            The full path to the directory. It does not have to be a Git
+            repository.
+          </p>
+          {addByPath.error !== null && (
+            <ErrorNotice
+              error={addByPath.error}
+              onDismiss={() => {
+                addByPath.reset();
+              }}
+            />
+          )}
+        </details>
       </div>
-      {browse.error !== null && <ErrorNotice error={browse.error} />}
+      {/* The folder chooser is a separate OS window, which on macOS can open
+          behind the browser or on another Space. All the sidebar used to say
+          was a disabled button reading "Opening…" forever, so the app looked
+          hung when in fact it was waiting on a dialog the user could not see.
+          Saying where the dialog went is the whole fix: there is no cancel to
+          offer -- the app cannot close someone else's window, and re-arming
+          the button would only open a second dialog behind the first. */}
+      {browse.isPending && (
+        <p className="add-project-waiting" role="status">
+          A folder chooser is open in a separate window. It may be behind this
+          one, or on another desktop.
+        </p>
+      )}
+      {browse.error !== null && (
+        <ErrorNotice
+          error={browse.error}
+          onDismiss={() => {
+            browse.reset();
+          }}
+        />
+      )}
       {/* One notice per failed archive, naming its thread: with several
           archives in flight an unlabelled message cannot say which one
           failed, and the row silently reappearing explains nothing. */}
@@ -325,7 +567,14 @@ function Sidebar({
           }}
         />
       ))}
-      {unarchive.error !== null && <ErrorNotice error={unarchive.error} />}
+      {unarchive.error !== null && (
+        <ErrorNotice
+          error={unarchive.error}
+          onDismiss={() => {
+            unarchive.reset();
+          }}
+        />
+      )}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
@@ -339,7 +588,8 @@ function Sidebar({
               thread.projectId === project.id &&
               !pendingArchives.some(
                 (pending) => pending.threadId === thread.id,
-              ),
+              ) &&
+              !archivingThreadIds.includes(thread.id),
           );
           return (
             <section
@@ -370,7 +620,7 @@ function Sidebar({
                 {project.unreadCount > 0 && (
                   <span
                     className="unread-dot"
-                    aria-label={`${String(project.unreadCount)} unread completions`}
+                    aria-label={`${String(project.unreadCount)} unread completion${project.unreadCount === 1 ? "" : "s"}`}
                   >
                     ●
                   </span>
@@ -501,14 +751,22 @@ function Sidebar({
                             event.preventDefault();
                             const bounds =
                               event.currentTarget.getBoundingClientRect();
-                            openMenu(bounds.right, bounds.bottom);
+                            openMenu(bounds.right + 6, bounds.top);
                           }}
                         >
                           {editing ? (
-                            <form
-                              className="thread-rename"
-                              onSubmit={(event) => {
-                                event.preventDefault();
+                            <ThreadRenameForm
+                              value={renamingThread.title}
+                              label={`Rename ${thread.title}`}
+                              pending={rename.isPending}
+                              error={rename.error}
+                              onChange={(title) => {
+                                setRenamingThread({
+                                  ...renamingThread,
+                                  title,
+                                });
+                              }}
+                              onSubmit={() => {
                                 const title = renamingThread.title.trim();
                                 if (title !== "")
                                   rename.mutate({
@@ -517,43 +775,11 @@ function Sidebar({
                                     title,
                                   });
                               }}
-                            >
-                              <input
-                                aria-label={`Rename ${thread.title}`}
-                                autoFocus
-                                maxLength={200}
-                                value={renamingThread.title}
-                                onFocus={(event) => {
-                                  event.currentTarget.select();
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key !== "Escape") return;
-                                  event.stopPropagation();
-                                  setRenamingThread(null);
-                                }}
-                                onChange={(event) => {
-                                  setRenamingThread({
-                                    ...renamingThread,
-                                    title: event.target.value,
-                                  });
-                                }}
-                              />
-                              <button type="submit" disabled={rename.isPending}>
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                disabled={rename.isPending}
-                                onClick={() => {
-                                  setRenamingThread(null);
-                                }}
-                              >
-                                Cancel
-                              </button>
-                              {rename.error !== null && (
-                                <ErrorNotice error={rename.error} />
-                              )}
-                            </form>
+                              onCancel={endRename}
+                              onDismissError={() => {
+                                rename.reset();
+                              }}
+                            />
                           ) : (
                             <>
                               <Link
@@ -563,7 +789,22 @@ function Sidebar({
                                   setThreadMenu(null);
                                 }}
                               >
-                                <span className="thread-title">
+                                {/* A title is the only text on this row the
+                                    app did not write, and it may be RTL. In
+                                    an LTR paragraph the server's trailing
+                                    `…` is a neutral run at the end of the
+                                    line, so the bidi algorithm hands it the
+                                    paragraph direction and draws it to the
+                                    RIGHT of a Hebrew or Arabic title --
+                                    detached from the end of the text it
+                                    truncates, where it reads as if it came
+                                    first. `dir="auto"` gives the title its
+                                    own base direction, taken from its first
+                                    strong character, so the ellipsis stays
+                                    at the logical end. It also stops an RTL
+                                    title reordering the status glyph beside
+                                    it. A no-op for every LTR title. */}
+                                <span className="thread-title" dir="auto">
                                   {thread.title}
                                 </span>
                                 {(() => {
@@ -609,7 +850,7 @@ function Sidebar({
                                   event.stopPropagation();
                                   const bounds =
                                     event.currentTarget.getBoundingClientRect();
-                                  openMenu(bounds.left, bounds.bottom);
+                                  openMenu(bounds.right + 6, bounds.top);
                                 }}
                               >
                                 <span aria-hidden="true">…</span>
@@ -704,7 +945,7 @@ function Sidebar({
             type="button"
             role="menuitem"
             onClick={() => {
-              setRenamingThread({
+              beginRename({
                 projectId: threadMenu.projectId,
                 threadId: threadMenu.threadId,
                 title: threadMenu.title,
@@ -866,18 +1107,43 @@ function ProjectWorkspace({
   );
 }
 
-function NewChatRoute() {
+/**
+ * `/projects/:id/new` and `/projects/:id/threads/:threadId` for ONE component,
+ * because they are one surface under two entry instructions.
+ *
+ * They used to be two route components, and React reconciles by ELEMENT TYPE:
+ * two types at the same position is an unmount and a mount, not an update. So
+ * every crossing between those paths tore the whole workspace down and built
+ * it again -- every pane's DOM replaced, every query refetched from cold, and
+ * every piece of pane-local state reset. Measured in the running app: one
+ * archive re-issued the workspace listing, the focused thread's snapshot and
+ * the new-chat preflight, and replaced the pane element twice.
+ *
+ * The state that reset is the point. `ThreadPane` infers "archived" from the
+ * thread's absence from the listing, LATCHED on having seen it there, so that
+ * a brand-new thread cannot flash "Archived" before the listing catches up.
+ * A remount puts that latch back to false. Archiving the focused thread
+ * navigates across exactly this boundary, so the pane that had correctly said
+ * "Archived" came back up saying the thread was live -- its title, a green
+ * "Done", a working composer -- and stayed wrong for the 126ms until its
+ * refetched snapshot returned 404. That is the second half of the reported
+ * glitch, and it is the precise defect c9709f8 was written to remove.
+ *
+ * One component for both paths, so React updates the surface in place. The
+ * thread id simply becomes absent on `/new`, which is what it means there.
+ * Crossings WITHIN `/threads/:threadId` already behaved: same type, so the
+ * surface was already preserved across a change of thread.
+ */
+function ProjectWorkspaceRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   if (!projectResult.success) return <NotFound />;
-  return <ProjectWorkspace projectId={projectResult.data} />;
-}
-
-function ThreadRoute() {
-  const params = useParams();
-  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  // `/new` has no thread id at all; on the thread path an unparseable one is
+  // not this route.
+  if (params.threadId === undefined)
+    return <ProjectWorkspace projectId={projectResult.data} />;
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
-  if (!projectResult.success || !threadResult.success) return <NotFound />;
+  if (!threadResult.success) return <NotFound />;
   return (
     <ProjectWorkspace
       projectId={projectResult.data}
@@ -1078,10 +1344,13 @@ export function App() {
     <Routes>
       <Route path="/" element={<EmptyRoot />} />
       <Route path="/projects/:projectId" element={<ProjectRoute />} />
-      <Route path="/projects/:projectId/new" element={<NewChatRoute />} />
+      <Route
+        path="/projects/:projectId/new"
+        element={<ProjectWorkspaceRoute />}
+      />
       <Route
         path="/projects/:projectId/threads/:threadId"
-        element={<ThreadRoute />}
+        element={<ProjectWorkspaceRoute />}
       />
       <Route path="/settings" element={<SettingsRoute />} />
       <Route path="*" element={<NotFound />} />

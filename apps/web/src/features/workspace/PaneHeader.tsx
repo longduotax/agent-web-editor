@@ -19,7 +19,12 @@ export interface PaneHeaderProps {
   // `detailTitle` carries the full text as a tooltip so nothing is lost.
   detail?: ReactNode;
   detailTitle?: string | undefined;
-  onSplit(): void; // split right (row); keyboard still offers both axes
+  // Splits right (row); the keyboard offers both axes. The new pane is
+  // always an empty New chat, never a second view of this thread -- so the
+  // button is named for what it does, matching the shortcut row that already
+  // read "Split right into a new chat". A bare "Split" told a screen-reader
+  // user neither the direction nor what would appear.
+  onSplit(): void;
   onClose(): void;
 }
 
@@ -42,14 +47,20 @@ export function PaneHeader(props: PaneHeaderProps): JSX.Element {
             )}
           </span>
         )}
-        <h1 className="title">{title}</h1>
+        {/* Same reasoning as the sidebar's `.thread-title`: the title is
+            user-or-model text that may be RTL, and it sits in a row of
+            app-written LTR labels. `dir="auto"` keeps its base direction to
+            itself. */}
+        <h1 className="title" dir="auto">
+          {title}
+        </h1>
         <span className="repo">{projectLabel}</span>
         <span className="acts">
           <button
             type="button"
             className="icon-btn"
-            aria-label="Split"
-            title="Split"
+            aria-label="Split right into a new chat"
+            title="Split right into a new chat"
             onClick={(event) => {
               event.stopPropagation();
               props.onSplit();

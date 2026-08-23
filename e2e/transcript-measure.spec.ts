@@ -18,7 +18,7 @@ import { parseConfig } from "../apps/server/src/config.js";
 //
 // The other two e2e specs stub a runtime that always returns an EMPTY
 // transcript, which is why the reading column's containment was never
-// exercised end to end: expanding a "Worked for Ns" step group used to size
+// exercised end to end: expanding an "N steps · Ns" group used to size
 // `.worked-items`' implicit grid track to its widest step's max-content, and
 // one long shell command stretched `.transcript` to a 14,641px scrollWidth
 // against a 1,042px clientWidth. The centered column silently died the
@@ -213,7 +213,7 @@ declare const document: {
 };
 
 // Opens every currently-rendered <details> and reports how many it opened.
-// A step row only enters the DOM once its enclosing "Worked for Ns" group has
+// A step row only enters the DOM once its enclosing "N steps · Ns" group has
 // opened and React has re-rendered, so the caller runs this repeatedly until
 // it reports 0.
 function openRenderedDisclosures(): number {
@@ -314,8 +314,11 @@ test("expanding every transcript disclosure never widens the centered reading co
   await openWideThread(page);
 
   // The stub's snapshot supplies the transcript, so the step group appears as
-  // soon as the pane's snapshot query resolves.
-  const group = page.getByText(/^Worked for /);
+  // soon as the pane's snapshot query resolves. Locate it structurally: this
+  // harness's run never settles, so the group summary reads "Working\u2026"
+  // rather than its settled "N steps \u00b7 Ns" form, and the point of this
+  // test is the geometry either way.
+  const group = page.locator("details.worked-group");
   await expect(group.first()).toBeVisible();
 
   // Collapsed: the column already holds.
@@ -331,8 +334,12 @@ test("expanding every transcript disclosure never widens the centered reading co
     // Let React process the toggle events and mount the newly revealed rows.
     await page.waitForTimeout(150);
   }
-  // The group plus each of its step rows.
-  expect(opened).toBeGreaterThanOrEqual(3);
+  // Each of the two step rows. The enclosing group is not counted: a group
+  // whose run is still live renders already expanded, which is the whole
+  // point of showing the steps while they are happening, so this loop never
+  // has to open it.
+  expect(opened).toBeGreaterThanOrEqual(2);
+  await expect(group.first()).toHaveAttribute("open", "");
   // The long command's full text lives in the expanded Input/Output <pre>,
   // which wraps; the summary line truncates.
   await expect(page.getByText("Input").first()).toBeVisible();
@@ -366,7 +373,7 @@ test.describe("a pane narrower than the reading measure", () => {
     page,
   }) => {
     await openWideThread(page);
-    await expect(page.getByText(/^Worked for /).first()).toBeVisible();
+    await expect(page.locator("details.worked-group").first()).toBeVisible();
 
     // As the machine renders it.
     const natural = await page.evaluate(axisProbe);

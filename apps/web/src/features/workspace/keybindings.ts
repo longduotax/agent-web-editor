@@ -90,14 +90,14 @@ export interface KeyBinding {
  */
 export const WORKSPACE_KEYBINDINGS: readonly KeyBinding[] = [
   {
-    label: "Split pane right",
+    label: "Split right into a new chat",
     group: "shift-primary",
     key: "=",
     keyLabel: "=",
     command: { type: "split", axis: "row" },
   },
   {
-    label: "Split pane down",
+    label: "Split down into a new chat",
     group: "shift-primary",
     key: "-",
     keyLabel: "-",
@@ -147,14 +147,16 @@ export const WORKSPACE_KEYBINDINGS: readonly KeyBinding[] = [
     label: "Next panel tab",
     group: "shift-primary-alt",
     key: "PageDown",
-    keyLabel: "⇟",
+    // Spelled out, not "⇟". The glyph is unreadable to most people and this
+    // list is the only place these chords are documented at all.
+    keyLabel: "Page Down",
     command: { type: "panel-tab", direction: "next" },
   },
   {
     label: "Previous panel tab",
     group: "shift-primary-alt",
     key: "PageUp",
-    keyLabel: "⇞",
+    keyLabel: "Page Up",
     command: { type: "panel-tab", direction: "previous" },
   },
   {

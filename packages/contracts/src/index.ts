@@ -131,7 +131,22 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
     output: z.string().max(1_000_000),
     cwd: z.string().max(500).nullable(),
     exitCode: z.number().int().nullable(),
+    /**
+     * When the step *started* -- the moment the agent issued the call.
+     *
+     * A tool step is the only transcript item that occupies a span rather
+     * than an instant, and the two ends arrive as two separate entries in the
+     * native session history. Carrying only one of them made a step's own
+     * elapsed time unrepresentable, which is how a 45-second shell command
+     * came to be summarised as "Worked for <1s".
+     */
     timestamp: TimestampSchema.nullable(),
+    /**
+     * When the step finished. `null` while it is still running, and
+     * `undefined` on a transcript produced before this field existed, so a
+     * reader must treat both as "no completion time" rather than as zero.
+     */
+    completedAt: TimestampSchema.nullable().optional(),
   }),
   z.object({
     id: z.string().min(1).max(200),
@@ -228,6 +243,39 @@ export const StartThreadResponseSchema = z.object({
 export const BrowseProjectRequestSchema = z
   .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();
+/* Adding a project by typing or pasting its path, as the second route in
+   beside the native folder picker. The picker is the better path when it
+   works; this one exists because it is the only one that still works when
+   the picker does not -- it opens as a separate OS window that can land
+   behind the browser or on another desktop, and until now a failure there
+   left no way to add a project at all.
+   `.trim()` because a pasted path routinely carries a trailing newline or a
+   leading space from a terminal. The cost is that a directory whose name
+   really does end in a space cannot be added THIS way; it can still be added
+   with the picker, and that trade is worth one keystroke of forgiveness on
+   every ordinary paste.
+   The NUL check is structural, not security theatre: this server is loopback
+   only and Pi already runs with the user's own permissions, so a path from
+   this field grants nothing the picker did not. But a NUL byte truncates a
+   path in every C API underneath us, so a string containing one never means
+   what it appears to mean and is refused rather than silently reinterpreted.
+   Absoluteness is checked on the server with node:path, not here: "absolute"
+   is spelled differently on Windows and a regex in a shared contract would
+   get one of the two platforms wrong. */
+export const AddProjectRequestSchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4096)
+      .refine((value) => !value.includes("\u0000"), {
+        message: "A project path cannot contain a NUL byte.",
+      }),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export const UpdateProjectRequestSchema = z
   .object({
     sidebarExpanded: z.boolean(),
@@ -416,6 +464,26 @@ export const LiveSnapshotRequiredSchema = z.object({
   type: z.literal("snapshot_required"),
   threadId: ThreadIdSchema,
 });
+/**
+ * The payload of a `diagnostic` live event.
+ *
+ * `LiveEventSchema.payload` is `unknown` because four event types share the
+ * envelope, so the shape has to be asserted per type at the point of use --
+ * exactly as `TranscriptItemSchema` is for `transcript`. The server
+ * republishes the runtime's whole diagnostic event (`workspace.ts`
+ * `onRuntimeEvent`), which is why the redundant `type` discriminator is still
+ * on the payload.
+ *
+ * `code` is optional because it post-dates the field it explains: a runtime
+ * that predates it still sends level and message.
+ */
+export const LiveDiagnosticSchema = z.object({
+  type: z.literal("diagnostic"),
+  level: z.enum(["info", "warning", "error"]),
+  message: z.string().min(1).max(2_000),
+  code: z.string().min(1).max(80).optional(),
+});
+export type LiveDiagnostic = z.infer<typeof LiveDiagnosticSchema>;
 
 /**
  * What a terminal may be resized to.

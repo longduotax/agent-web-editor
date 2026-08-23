@@ -88,6 +88,18 @@ export function WorkspaceView(props: {
       current.assignThreadToPane(focusedPaneId, threadId);
       return;
     }
+    // An assignment for this thread is already in flight, so the pane that
+    // will receive it exists (or is about to). Calling newPane() again would
+    // make a SECOND one and only the second would get the thread, leaving an
+    // orphan "New chat" pane beside it.
+    //
+    // This is the same hazard `handledNewChatEntryRef` guards below, for the
+    // same reason: newPane() is a functional setState, so under StrictMode's
+    // mount -> cleanup -> mount the second invocation still reads the
+    // pre-update layout and takes the same branch. It only becomes reachable
+    // when this effect runs against an EMPTY surface, which is exactly what
+    // closing the last pane and letting the route re-resolve produces.
+    if (pendingThreadAssignmentRef.current === threadId) return;
     pendingThreadAssignmentRef.current = threadId;
     current.newPane();
   }, []);
@@ -117,6 +129,7 @@ export function WorkspaceView(props: {
     };
   }, []);
 
+  const params = useParams();
   // Closing a pane is a PURE LAYOUT OPERATION. It used to archive the pane's
   // thread as a side effect, behind a button labelled only "Close", via a
   // fire-and-forget archiveThread() with no .catch and no error surface --
@@ -133,12 +146,56 @@ export function WorkspaceView(props: {
   const handleClose = useCallback(
     (paneId: PaneId) => {
       removeDraft(newChatDraftKey(projectId, paneId));
-      controllerRef.current.close(paneId);
+      const closedThreadId =
+        controllerRef.current.layout.panes[paneId]?.threadId ?? null;
+      // The close is computed once, by the controller, and the result is what
+      // decides the route. Recomputing closePane() here as well was correct
+      // only for as long as the controller's close stayed identical to it.
+      const after = controllerRef.current.close(paneId);
+      // Closing a pane is an instruction, and the URL has to stop describing
+      // what was closed -- otherwise a reload re-resolves that URL and brings
+      // the pane straight back (N2). This is NOT specific to the new-chat
+      // pane: the same thing happens to a thread pane whose thread the URL
+      // names. The route only moves when it actually addressed the closed
+      // pane; closing a split that the URL was never about must not
+      // renavigate underneath the user.
+      const routeAddressedClosedPane =
+        closedThreadId === null
+          ? isNewChatRoute
+          : params.threadId === closedThreadId;
+      if (!routeAddressedClosedPane) return;
+      const nextPaneId = after.focusedPaneId;
+      if (nextPaneId === null) {
+        // Nothing is left open, and the two last-pane cases are not the same
+        // route problem.
+        //
+        // `/…/threads/:threadId` NAMES something. It is the only record of
+        // where the user was, it is what a bookmark or a shared link carries,
+        // and NEW-R3-3 depends on it still naming that thread so the sidebar
+        // row for it re-opens the pane. It is kept.
+        //
+        // `/…/new` names nothing. It is an INSTRUCTION -- "open an empty
+        // composer here" -- so leaving it in place means a reload re-issues an
+        // instruction the user just countermanded by closing the pane, which
+        // is N2 verbatim. It goes to the project route, whose own resolution
+        // then decides what to show; whatever that is, it is not the blank
+        // pane that was just dismissed, and the URL and the surface agree
+        // again after a reload.
+        if (isNewChatRoute)
+          void navigate(`/projects/${projectId}`, { replace: true });
+        return;
+      }
+      const nextThreadId = after.panes[nextPaneId]?.threadId ?? null;
+      void navigate(
+        nextThreadId === null
+          ? `/projects/${projectId}/new`
+          : `/projects/${projectId}/threads/${nextThreadId}`,
+        { replace: true },
+      );
     },
-    [projectId],
+    [isNewChatRoute, navigate, params.threadId, projectId],
   );
 
-  const params = useParams();
   // Depends on `location.key` as well as the thread id (NEW-R3-3). Clicking a
   // sidebar row for the thread the URL ALREADY addresses navigates to the
   // same path, so `params.threadId` does not change and an effect keyed only
