@@ -130,6 +130,8 @@ class ControlledRuntime implements AgentRuntime {
 
 class DeferredPty implements PtyProcess {
   public killed = false;
+  /** No pid, so nothing observes this fake's working directory (WSP-07). */
+  public readonly pid = null;
   public write(): void {
     return undefined;
   }
@@ -328,8 +330,10 @@ describe("run coordination", () => {
     const factory = new DeferredPtyFactory();
     const terminals = new ProjectTerminalManager(factory);
     const context = await fixture(terminals);
-    const attach = terminals.attach(context.project.id, context.projectPath, {
-      send: () => undefined,
+    const attach = terminals.attach({
+      projectId: context.project.id,
+      executionRoot: context.projectPath,
+      attachment: { send: () => undefined },
     });
 
     await vi.waitFor(() => {

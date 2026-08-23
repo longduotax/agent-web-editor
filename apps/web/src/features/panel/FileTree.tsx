@@ -29,10 +29,35 @@ import type { TabContext } from "./panelTabs.js";
 /**
  * How many children of one directory are painted at once.
  *
- * A render budget, not a filter: the notice row below always names the true
- * total, so a bounded view never reads as a complete one (WSP-09).
+ * A render budget, not a filter: the notice row below always says what it
+ * left out, so a bounded view never reads as a complete one (WSP-09).
  */
 export const FILE_LIST_RENDER_LIMIT = 200;
+
+/**
+ * What a bounded listing says about itself.
+ *
+ * Two different bounds meet here, and the sentence has to be true under
+ * both. The render budget above is ours and we know the true total, so we
+ * name it. The **read boundary's own traversal limit** is the server's, and
+ * when it engages the count we were handed is not a count of what is on
+ * disk — so naming it as one would be the same lie J7 found in the File
+ * tab's line notice, in the place WSP-05 v2 explicitly forbids it: "a
+ * listing that quietly under-reports what is on disk is not acceptable, in
+ * the tree or in a search result count". Found while checking whether that
+ * wording was reused elsewhere. It was, and the `truncated` flag the read
+ * boundary has always returned was not being read by anything.
+ */
+export function boundedListingNotice(
+  returned: number,
+  stoppedShort: boolean,
+  noun: "entries" | "files",
+): string {
+  if (!stoppedShort)
+    return `Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(returned)} ${noun}. Search to narrow the list.`;
+  const shown = Math.min(returned, FILE_LIST_RENDER_LIMIT);
+  return `Showing ${String(shown)} ${noun}. The workspace stopped listing at its own limit before the end, so this is not all of them.`;
+}
 
 export interface FileTreeProps {
   context: TabContext;
@@ -267,13 +292,17 @@ function TreeLevel({
       {entries.slice(0, FILE_LIST_RENDER_LIMIT).map((entry) => (
         <TreeRow key={entry.path} entry={entry} depth={depth} level={level} />
       ))}
-      {entries.length > FILE_LIST_RENDER_LIMIT && (
+      {(entries.length > FILE_LIST_RENDER_LIMIT || listing.data.truncated) && (
         <StateRow
           rowKey={stateRowKey(path, "capped")}
           depth={depth}
           level={level}
           disabled
-          label={`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(entries.length)} entries. Search to narrow the list.`}
+          label={boundedListingNotice(
+            entries.length,
+            listing.data.truncated,
+            "entries",
+          )}
         />
       )}
     </>

@@ -2,13 +2,34 @@
 
 **Current version:** None
 
-**Proposed version:** 2
+**Proposed version:** 3
 
-**Proposal status:** Approved
+**Proposal status:** Draft
 
 **Implementation status:** In progress
 
-**Product approval:** Approved for specification version 2 — the bounded
+**Product approval:** Pending for specification version 3 — the line-number
+gutter in the File tab's source view **and the soft-wrap toggle in that view
+and in the Diff tab**, both drafted 2026-08-23 from the standing hands-on
+passes at a real repository. Each is a **scope addition, not a defect fix**:
+nothing in version 1 or 2 requires line numbers or wrapping, and the reviewer
+who found each of them said so. The coordinator approved adding them, on the
+reasoning that line numbers and width are two of the three things that push a
+reader out of these tabs and back into their editor or their terminal, that the
+user's stated goal for this work is a VS-Code-like surface, and that milestone 6
+puts line numbers on the diff side, where a file view without them would read as
+inconsistent. The two arrived from different passes — line numbers from
+milestone 5's, soft wrap from milestone 6's — and are carried in one revision
+because they are unapproved, from the same source, and the same kind of
+affordance: what a read-only view owes a reader who wants to stay in it.
+**The user has not been asked** about either. Both are recorded here rather
+than added silently so that the question is in front of them, and version 3
+stays Draft until they answer. They are implemented ahead of that approval on
+the coordinator's instruction, exactly as version 2 was, and the same rule
+applies: a discrepancy between this document and what the user actually wants
+resolves in favour of the user.
+
+**Specification version 2 remains approved** — the bounded
 Files-tab revision below (navigable tree, ignore rules honoured by default, flat
 search, accessible naming), drafted 2026-08-22 after a hands-on pass at a real
 repository — by the user on 2026-08-23. The approval is of **the behaviour as
@@ -408,6 +429,12 @@ browsing.
   The user may **explicitly opt into showing ignored files**, and while ignored
   files are hidden the tab **says so** — a listing that quietly under-reports
   what is on disk is not acceptable, in the tree or in a search result count.
+  **A file the repository tracks is never hidden by an ignore rule**, because
+  the repository does not hide one either: a file committed before the rule
+  that now matches it is in the repository, and a tree that says otherwise is
+  telling the user their own committed file does not exist. Where the project
+  is not a repository, or the tracked set cannot be read, the rules alone
+  decide and nothing is shown that they would hide.
 - **Search stays flat.** While a search term is active the tab shows flat
   matching paths rather than a tree, because a tree of sparse matches is harder
   to read than a list. Clearing the search returns to the tree **at its previous
@@ -462,6 +489,223 @@ Continuing the numbering of the version 1 list above.
     state), and every tab in every tab strip exposes an accessible name equal to
     the text it displays, confirmed by computing the accessible name rather than
     by an automated rule scan alone.
+15. A file the repository tracks appears in the tree and in a search even when
+    an ignore rule matches it, and the listing agrees path for path with what
+    the repository itself reports as tracked or untracked-and-not-ignored.
+16. At the panel's minimum width, a row nested deep enough for its indent to
+    exceed the panel shows its whole name — reached by scrolling the tree, with
+    no horizontal overflow of the page.
+17. Opening a file from the tree with the keyboard leaves focus on the tab it
+    opened, and no action that hides a tab body leaves focus on `<body>`.
+
+## Proposed revision (version 3) — the source view is numbered, and long lines may wrap
+
+**Proposal status:** Draft. **Product approval is pending**: the coordinator
+approved both scope additions on 2026-08-23 and the user has not been asked. See
+the Product approval field above, which states the reasoning and the fact that
+they are scope additions rather than defect fixes.
+
+**Scope.** This revision adds two paragraphs and two acceptance criteria to
+[WSP-05's File-tab rules](#wsp-05--files-and-file-tabs-revised-by-version-2):
+a line-number gutter in the source view, and a soft-wrap toggle in that view.
+The soft-wrap paragraph also governs **WSP-06's Diff tab**, whose lines are the
+same kind of content read in the same narrow column; that is the only reach
+outside WSP-05, and it adds a view control to WSP-06 without altering anything
+WSP-06 requires. It reopens nothing else: WSP-01 through WSP-04 and WSP-07
+through WSP-10 are untouched, as are the non-goals — a gutter and a wrap
+toggle are decorations on read-only views, add no editing affordance, and are
+not steps towards one.
+
+**Why the gutter.** It originated in the standing hands-on UI pass of milestone
+5, on 2026-08-23, where it was reported explicitly **not** as a defect: version
+1 and version 2 both describe a source view without line numbers, and the tab
+implemented what they describe. The reviewer's judgement, which the coordinator
+accepted, is that line numbers are one of the three things that send a reader
+out of this tab and back into their editor; that the user's stated goal for this
+work is a VS-Code-like surface, and this is one of the places it visibly is not
+one; and that milestone 6 puts old-side and new-side line numbers on the Diff
+tab (WSP-06), so a file view without them would be inconsistent with the diff
+view of the same file.
+
+**Why soft wrap.** It originated the same way, in the standing hands-on UI pass
+of milestone 6 on 2026-08-23, and was reported the same way: not as a defect,
+because nothing in versions 1 or 2 says a long line wraps. The reviewer's
+judgement, which the coordinator accepted, is that **width is the main thing
+that would stop someone using these tabs instead of `git diff` and their
+editor**. At the panel's 400px default a diff line shows roughly 40 characters
+of code once the two gutters and the prefix have taken their column, and about
+25 at the 280px floor; a terminal at 120 columns needs no scrolling at all. The
+same pass's first finding — that a horizontally scrolled diff left the add and
+remove distinction to the colour wash alone, which WSP-06 forbids — was fixed
+by pinning that column, and that fix makes scrolled reading _correct_ without
+making it pleasant. Wrapping is what makes the scrolling unnecessary. It is
+offered as a toggle rather than imposed because both readings are legitimate:
+a diff of a data file is easier to follow unwrapped, and a reader who wants
+column alignment should keep it.
+
+### WSP-05 — the source view's line numbers (added by version 3)
+
+A File tab's **source view** shows a line number against every line it paints.
+The markdown **preview** does not: a rendered document has paragraphs, not
+lines, and numbering them would number something the file does not contain.
+
+- The numbers are **not part of the file's text**. Copying the file, or
+  selecting part of it and copying that, yields the file's own characters and
+  no numbers.
+- The numbers agree with the file: line 1 is the file's first line, and the
+  numbering is unaffected by whether highlighting has arrived.
+- The gutter costs the view nothing it already had. The horizontal scrollbar
+  stays reachable at every panel width (the finding that closed against
+  version 1), the scroll offset still survives a tab switch and a drag
+  (WSP-09), the plain-text-then-highlight upgrade stays geometrically the
+  same, and the line and character bounds still apply — a bounded view is
+  numbered up to its bound and says what it left out, as it already does.
+
+### WSP-05 and WSP-06 — long lines may be wrapped (added by version 3)
+
+A File tab's **source view** and a **Diff** tab each offer an explicit
+**soft-wrap toggle**. It is off by default: scrolling is what both views did
+before the toggle existed, and a reader who has not asked for wrapping gets
+the view they had.
+
+- The toggle is **per tab and persisted**, exactly as the markdown source
+  toggle is (WSP-04): it survives a switch to another tab and back, a reload,
+  and a drag between tab groups. Two tabs on two files may be set differently.
+- While it is on, **nothing scrolls horizontally** — not the view, not the tab
+  body, and not the page — including for a line with no spaces in it to break
+  at.
+- A **continuation row is visibly not a new line**. It is indented to where
+  the line's own code begins, past the gutters and past a diff's `+`/`-`
+  prefix, and marked as continuing rather than starting. A wrapped row that
+  reads as a new line is worse than scrolling.
+- The **gutter numbers the logical line once**, however many rows that line
+  takes on screen, and a diff's two gutters and prefix stay where they are —
+  they carry the add and remove distinction (WSP-06) and wrapping must not
+  cost them.
+- Wrapping is a layout decision and nothing else: the text a copy yields is
+  the file's own characters, or the patch, unchanged either way, and the
+  render bounds still apply exactly as they did.
+- The markdown **preview** offers no such toggle: a rendered document already
+  wraps as prose, and a control that does nothing there is the same untruth as
+  a line number on a paragraph.
+
+### Acceptance criteria added by version 3
+
+Continuing the numbering of the lists above.
+
+18. A File tab's source view renders a line number against every painted line,
+    in both themes and at the panel's minimum width; the markdown preview
+    renders none; a selection over the whole file yields the file's characters
+    with no numbers in them; the numbering is identical before and after
+    highlighting arrives, as is the geometry of the text; and the horizontal
+    scrollbar remains on screen with the gutter present.
+19. A File tab's source view and a Diff tab each offer a soft-wrap toggle that
+    is off by default and survives a tab switch, a reload, and a drag between
+    groups; with it on, neither the view, nor the tab body, nor the page
+    scrolls horizontally at 400px or at the panel's minimum width, including
+    for a line with no break opportunity in it; every continuation row begins
+    at the line's own code column rather than at the view's left edge and is
+    marked as continuing; the gutter numbers each logical line once however
+    many rows it takes; a diff keeps its two gutters and its `+`/`-` prefix;
+    the copied text is unchanged by the toggle; and the markdown preview
+    offers no toggle at all.
+
+## Findings against the milestone-6 Diff tab
+
+The standing hands-on UI pass of milestone 6, on 2026-08-23, drove the Diff tab
+in a real browser against real `git diff` output and reported five items, every
+one measured: four defects and one scope addition. The scope addition — soft
+wrap — is folded into proposed version 3 above. **All four defects were defects
+against what version 1 already requires**, and none of them changed this
+document:
+
+- **A horizontally scrolled diff carried the add and remove distinction in
+  colour alone.** Both line-number gutters and the `+`/`-` character scrolled
+  out of view, leaving a background wash measuring 1.04:1 (light) and 1.06:1
+  (dark) between an added line and a removed one. WSP-06 says that distinction
+  is never carried by colour alone and has no "unless you scroll" clause. Fixed
+  by pinning the gutters and the prefix as a sticky first column.
+- **Every change-kind chip in the Changes tab was below the WCAG AA bar in the
+  light theme, and two of the six in dark** — 2.76:1 at worst. WSP-06 asks for
+  the kind to be carried by a letter as well as a colour, and a letter nobody
+  can read carries it no better than the colour does. Nothing was lost to
+  assistive technology: the letter is `aria-hidden` and every row names its
+  kind as a word.
+- **A selection spanning two hunks copied the disclosure's chrome** — the
+  twisty, the `+15 -0` tally, and across a section boundary the bare word
+  `Unstaged` — so a copied two-hunk diff would not apply.
+- **The hunk disclosure's accessible name ran its header into its tally**, so a
+  screen reader read "…period plus two minus zero". WSP-10's naming
+  requirement, not a new one.
+
+Two further items in the same pass were **checked and refuted rather than
+fixed**, and are recorded so they are not re-reported: a scroll offset that
+appeared to be lost when a tab moved between groups was an artefact of an
+occluded window delivering no `scroll` events for the panel to record, and the
+accessibility-tree dump reporting hunk toggles as unnamed buttons was the fourth
+occurrence of that tool blanking a name-from-content role — the computed names
+were correct. The measurements, the mechanisms, and two regressions the fixes
+themselves produced are in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section.
+
+## Findings against the milestone-5 File tab
+
+The standing hands-on UI pass of milestone 5, on 2026-08-23, drove the File tab
+in a real browser against a real repository and reported eleven items, every one
+measured: ten defects and one scope addition. The scope addition is proposed as
+version 3 above. **Nine of the ten defects were defects against what versions 1
+and 2 already require** — a path that wrapped instead of ellipsising, a light
+syntax palette six of whose nine tokens were below the WCAG AA bar on the
+surface they are painted on, muted document prose below it too, copy actions
+with no outcome and a swallowed rejection, a render budget that bounded lines
+but not characters and so painted 2,097,096 of them into one element, a
+truncated read described as if it were the file, a binary-and-oversized pair of
+notices that contradicted each other, two tabs on two files that computed the
+same accessible name, and a refused path echoed as though it were a
+workspace-relative one. All are fixed, and their measurements, mechanisms and
+reasoning are in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section.
+
+The tenth changed no requirement but did change a **sentence this
+specification's behaviour depends on**: an in-document `#fragment` link was
+rendered inert and told the reader it "does not point anywhere the workspace can
+open", which is true of the workspace and false of the link. WSP-05 requires a
+preview's links to be answered honestly and does not say a fragment must be
+inert, so making it scroll to its heading is inside the contract rather than a
+change to it.
+
+One item was **checked and confirmed working** rather than fixed, and is
+recorded so it is not re-reported: in development, the first code file opened
+makes Vite's dependency optimizer discover Shiki and forces a full page reload.
+Panel state survives it, and a production build pre-bundles, so it is a
+development-server artefact and not a defect. So is a 503 from a recursive
+ignored-inclusive search over `node_modules`: that read legitimately exceeds the
+deadline, and the tab says "The workspace did not answer in time. Try again."
+with a Retry, which is the specified behaviour.
+
+## Findings against version 2
+
+A hands-on pass of 2026-08-23 drove the file tree against a real repository
+and reported seven defects, every one measured. All seven are fixed, and the
+measurements, the two whose mechanism turned out not to be the reported one,
+and the reasoning behind each fix are in the
+[implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)'s
+Discoveries section. Three of them changed what this document requires and are
+written into WSP-05 above and into acceptance criteria 15 to 17: a tracked file
+is never hidden by an ignore rule, a deep row stays readable at every panel
+width, and opening a file leaves the keyboard somewhere. The other four —
+a requested path exempt from the rules its entries obey, an unbounded read that
+could leave a row loading for ever, an untyped not-found, and a drag that could
+outlive its gesture — were defects against what versions 1 and 2 already
+require, and needed no contract change.
+
+One figure in the record was corrected rather than fixed. The `README.md`
+search was reported as returning 7 matches in one place and 9 in another; both
+are right, about different working trees, because the number is a property of
+the repository being browsed and not of the feature. What it was cited for is
+unchanged and verified in both: the project's own files, no dependency copies.
 
 ## Findings against version 1
 

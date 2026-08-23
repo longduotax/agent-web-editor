@@ -15,7 +15,7 @@ import {
   splitGroupWithTab,
 } from "./panelModel.js";
 import type { GroupId, PanelState } from "./panelModel.js";
-import { tabTitle } from "./panelTabs.js";
+import { tabTitles } from "./panelTabs.js";
 import type { TabId } from "./panelTabs.js";
 
 // The keyboard half of WSP-10: every panel command is a pure state
@@ -88,8 +88,10 @@ function labelOf(state: PanelState, groupId: GroupId): string {
 }
 
 function titleOf(state: PanelState, tabId: TabId): string {
-  const tab = state.tabs[tabId];
-  return tab === undefined ? "tab" : tabTitle(tab);
+  // The same name the strip shows, disambiguated against every other open
+  // tab (J6): an announcement that says "Closed README.md" while two tabs
+  // are called that is no more use than a strip that does.
+  return tabTitles(Object.values(state.tabs))[tabId] ?? "tab";
 }
 
 function activeTabOf(state: PanelState): {

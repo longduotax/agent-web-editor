@@ -31,6 +31,7 @@ URL-probe boundaries those tabs require
 `apps/server/src/terminal/manager.ts`, new `apps/server/src/browser/probe.ts`,
 `apps/server/src/app.ts`, `apps/server/src/inspector/files.ts`, new
 `apps/server/src/inspector/ignoreRules.ts`, new
+`apps/server/src/inspector/trackedFiles.ts`, new
 `apps/web/src/features/panel/FileTree.tsx`,
 `apps/web/src/features/panel/FilesTab.tsx`,
 `packages/contracts/src/index.ts` (terminal client and
@@ -787,7 +788,17 @@ including its `"full"` default and a rejected value; `panelStorage.test.ts` for
 the v2 → v3 migration and the v1 → v3 chain; `FileTree.test.tsx` for expand,
 collapse, expansion surviving a reload, the row name versus its tooltip, flat
 search, expansion restored on clearing the search, the ignored-files notice and
-opt-in, computed accessible names, and `aria-expanded`. Then the **standing
+opt-in, computed accessible names, and `aria-expanded`. From the hands-on pass:
+`trackedFiles.test.ts` and `files.test.ts` for a tracked file an ignore rule
+matches, the tracked-only contents of an excluded directory, and the requested
+root refused as `.git`, as ignored, and as absent; `app.test.ts` for each of
+those over HTTP; `client.test.ts` for the read deadline and the retry policy;
+`FileTree.test.tsx` for the error row under that policy and for a 404;
+`WorkspacePanel.test.tsx` for focus after an activation, after a tab chord, and
+after the panel closes; `useTabDrag.test.tsx` for an interrupted gesture; and
+end-to-end cases for the deep-row measurement at `PANEL_MIN_WIDTH`, the failing
+listing and its retry, the deleted directory, keyboard focus after opening a
+file, and the interrupted drag with a real pointer. Then the **standing
 hands-on UI pass**, which for this milestone is the exact scenario that produced
 the finding: open the Files tab on a repository containing `node_modules`,
 search `README.md`, and confirm the project's own README is in the first screen
@@ -861,6 +872,22 @@ values, sticky header counts, and truncation; axe in both themes. Then the
 **standing hands-on UI pass**: open a Diff tab on a real working tree with a
 staged and an unstaged change, collapse and re-expand hunks, switch to another
 tab and back, and read the accessibility tree of the hunk disclosures.
+
+**Added by that pass, on 2026-08-23** (K1 to K5; the measurements and the two
+regressions the fixes themselves produced are in Discoveries from the
+milestone-6 hands-on UI pass): the two gutters and the `+`/`-` prefix become a
+pinned first column, so a horizontal scroll cannot leave the add/remove
+distinction to the colour wash alone (K1, a WSP-06 violation); the Changes
+tab's `.change-kind` chips take the diff's own measured pairs and join the
+contrast test, whose colour reader learns `color-mix()`, Chrome's
+`color(srgb …)` serialisation, and how to refuse a colour it cannot measure
+(K2); the disclosure's twisty, tally, section heading, bounded-view notices and
+name separator become unselectable so a cross-hunk copy is patch text (K3); the
+hunk toggle gains a visually hidden separator between its header and its tally
+(K4); and both the Diff tab and the File tab's source view gain a **soft-wrap
+toggle**, persisted per tab like the markdown `view` toggle, which takes the
+panel record from version 3 to **version 4** with a `wrap: false` default (K5,
+a scope addition recorded in specification version 3 — see the decision log).
 
 ### Milestone 7 — Many terminals per scope, cwd probe, terminal tab
 
@@ -1403,12 +1430,30 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
 
 ## Progress
 
-- [ ] Milestone 1 — generic binary tree, tab model, panel model, storage
-- [ ] Milestone 2 — panel shell, ported tabs, inspector deleted
-- [ ] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
-      verification, close-control question confirmed
+- [x] Milestone 1 — generic binary tree, tab model, panel model, storage.
+      Reviewed 2026-08-22; six defects found and fixed, three of them at the
+      persistence boundary (unclamped width and split fractions, a tree deep
+      enough to poison storage on every read, and `updateTab` walking through
+      the dedupe that `openTab` enforces).
+- [x] Milestone 2 — panel shell, ported tabs, inspector deleted. Reviewed
+      2026-08-22; fourteen defects found and fixed, the worst being that any
+      change of tree shape unmounted the tab bodies in a group and killed
+      running terminals.
+- [x] Milestone 3 — drag and drop with keyboard equivalents, accessible-name
+      verification, close-control question confirmed. Its standing hands-on UI
+      pass was performed on 2026-08-22 and found six defects, all fixed: scroll
+      offsets lost on a switch and a drag (a regression from F2 moving the
+      scrolling element inward), a drag ghost drawn off-screen by a transformed
+      ancestor, a fast flick dropping the gesture before pointer capture, a
+      refused drop announcing success, four narration gaps, and a 9x16px close
+      target.
 - [x] Milestone 4 — file tree, directory-scoped listing, ignore rules, flat
-      search. Implemented on the coordinator's instruction ahead of the recorded
+      search. Its standing hands-on UI pass was performed on 2026-08-23 and
+      found seven defects, all fixed and pinned: a tracked file hidden by an
+      ignore rule, a requested path exempt from the rules its entries obey, an
+      unreadable indent at the panel's floor, focus dropped on opening a file,
+      an unbounded read, an untyped not-found, and a drag that outlived its
+      gesture. See Discoveries and blockers. Implemented on the coordinator's instruction ahead of the recorded
       approval of specification version 2; that approval was given by the user
       on 2026-08-23 and the gate is now satisfied (see Discoveries and
       blockers). Shipped 2026-08-23: `apps/server/src/inspector/ignoreRules.ts`
@@ -1418,10 +1463,82 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       against a real working tree. The deferral in
       [Inspector and terminal boundaries](../../design/inspector-and-terminal.md)
       is retired and that bullet rewritten, as this milestone required.
-- [ ] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
-      fixed
-- [ ] Milestone 6 — Diff tab, structured unified diff
-- [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
+- [x] Milestone 5 — File tab, markdown preview, lazy Shiki, long-line overflow
+      fixed. Shipped 2026-08-23: `fileLanguage.ts` (a closed language union
+      chosen from the extension, never from the response's `language` field),
+      `markdownLinks.ts` (a repository link resolved under the read boundary's
+      own path rules), `syntaxHighlight.ts` (Shiki behind a dynamic import,
+      themed from `--code-*` CSS variables, one grammar module per language),
+      `FilePreviewMarkdown.tsx` (the preview's own renderer, not the
+      transcript's), and a rewritten `FileTab.tsx` carrying every state the
+      read boundary can produce. 69 new unit cases and four new end-to-end
+      cases; the three existing `wide.json` cases now settle the highlighting
+      before they measure and still pass, so G1 holds with highlighted content
+      in the `pre`. The long-line overflow item is **not** re-fixed here: F2
+      already fixed it, the existing case still measures the scrollbar on
+      screen at both widths, and the markdown preview joins the `pre` as the
+      other bounded scrolling region rather than adding a second one.
+      Its standing hands-on UI pass was performed on 2026-08-23 and found
+      eleven items — ten defects, all fixed and pinned, and one scope
+      addition. The defects: a header path that wrapped instead of
+      ellipsising, six of nine light syntax tokens below the AA bar (plus two
+      the report did not list), muted document prose below it too, copy
+      actions with no outcome and a swallowed rejection, a render budget that
+      bounded lines but not characters, a truncated read described as if it
+      were the file, a binary-and-oversized pair of notices that contradicted
+      each other, two tabs on two files with one accessible name, a refused
+      path echoed as a workspace-relative one, and a fragment link told
+      inaccurately that it pointed nowhere. The scope addition — line numbers
+      in the source view — is proposed as **specification version 3, Draft,
+      product approval pending**. See Discoveries and blockers.
+- [x] Milestone 6 — Diff tab, structured unified diff. Shipped 2026-08-23:
+      `parseUnifiedDiff.ts` (a pure reader with 26 cases over fixtures
+      captured from real `git diff` output), a rewritten `DiffTab.tsx`
+      (labelled sections, per-hunk disclosures, two `::before` gutters, a
+      pinned header with the file's own add and delete counts, and an
+      explicit notice for every bound and every refusal), `HeaderPath.tsx`
+      (the File tab's two-span path, extracted rather than copied, so J1
+      cannot come back in a second header), the diff palette and its
+      contrast cases in `styles.test.ts`, and `inspector/git.test.ts`
+      against a real repository. 55 new unit cases and six new end-to-end
+      cases; `DiffText.tsx` and `components/diffLines.ts` are deleted, the
+      parser having superseded both. Two gaps in the Changes half were
+      closed while verifying it: a kind letter that gave `C` to both
+      "copied" and "conflicted", and a status list with no render budget.
+      **Its standing hands-on UI pass is done**, on 2026-08-23, and found
+      five more things the automated suite could not: a horizontally
+      scrolled diff carrying the add/remove distinction in colour alone
+      (K1, a WSP-06 violation), change-kind chips below the AA bar in both
+      themes with a colour reader that could not see them (K2), a
+      cross-hunk selection copying the disclosure's chrome so the patch
+      would not apply (K3), a hunk toggle whose name ran its header into
+      its tally (K4), and a soft-wrap toggle for the diff and the source
+      view (K5, a scope addition folded into specification version 3).
+      All five are shipped, with the three shapes the pass could not
+      reach — the character bound, a real merge's `@@@` diff, and a status
+      list past the render budget — covered by tests rather than left
+      unproven. See Discoveries from the milestone-6 hands-on UI pass.
+- [x] Milestone 7 — many terminals per scope, cwd probe, terminal tab.
+      Shipped 2026-08-23: `apps/server/src/terminal/cwd.ts` (the bounded
+      platform probe and the reduction of an absolute path to a
+      workspace-relative one) with 16 cases, a rekeyed
+      `ProjectTerminalManager` owning terminals by `TerminalId` with a
+      `scopeId -> Set<TerminalId>` index and a per-scope cap of eight, the
+      `create` frame, the optional `terminalId`/`cwd` on `attach`, the
+      optional `cwd` on `restart`, a typed `code` on the `error` frame, a
+      `cwd` server frame, `GET .../terminals`, and a `TerminalView` that
+      claims its recorded shell, shows the directory it is in, and says when
+      that directory is the one it started in rather than a live one. 49 new
+      unit cases and three new end-to-end cases against a real PTY. The
+      panel record's shape is unchanged, so it stays at **version 4** — but
+      a restored terminal id is no longer discarded, which is what makes a
+      reload re-attach instead of orphan. Two things were found while
+      verifying it and are recorded below: a tab whose middle was its own
+      close control (M1), and a suite that filled the shared execution scope
+      because terminals outlive their pages (M2). **Its standing hands-on UI
+      pass is still owed** — two shells in one worktree, a `cd` the tab
+      follows, a reload, and the ninth terminal refused, driven by hand in a
+      real browser.
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
       workaround retired
 - [ ] Milestone 9 — browser tab, probe endpoint, CSP, sandbox
@@ -1939,10 +2056,1018 @@ one. Nothing implemented is being undone by this entry — the approved behaviou
 and the built behaviour are the same behaviour — but the sequence is not erased,
 because the next reader is entitled to know that the document trailed the work.
 
+**2026-08-23 — milestone 4's standing hands-on UI pass, and the seven defects
+it found in the file tree.** A reviewer drove the running application against
+a real repository and measured every finding before reporting it. Each was
+reproduced from that measurement before anything was changed, each is pinned
+by a test that fails without its fix, and two of them turned out to be
+different defects from the ones reported — which is recorded here rather than
+tidied away, because both times the reported symptom was real and the
+mechanism behind it was not what it looked like.
+
+1. **The tree hid files the repository tracks (H1).** `backend/cert.pem` and
+   `backend/key.pem` are tracked — `git ls-files --error-unmatch` succeeds,
+   commit `e48ff2e3` — and match `backend/.gitignore:185:*.pem`. Git never
+   ignores a tracked file; a pure pattern matcher always does. Measured over
+   the whole reporting repository: panel-visible 1899 against git-visible
+   1901, the difference exactly those two, and **zero** files shown that Git
+   would ignore. So the matcher is faithful everywhere else, and this is the
+   one systematic divergence — and it is the worst kind, because the user
+   knows the file is in the repository and the tree says it is not.
+
+   **Decided: consult the index, and say why that is not the rejected
+   call.** The plan rejects `git check-ignore`, and that rejection stands
+   untouched: it is a per-path oracle, one process or one long-lived pipe
+   consulted for every entry of every listing, on the hot path. `git ls-files
+-z --cached` is a different call in every respect that made the first one
+   unacceptable — **one** bounded listing per working tree, cached and served
+   from memory thereafter — and it answers a question the matcher cannot
+   answer at all rather than re-answering one it already answers correctly.
+   Measured on this repository: 226 tracked paths, 8,947 bytes, 7 ms, against
+   a 5 MiB output limit and a 10-second timeout it already inherits from the
+   Git process policy `git status` uses.
+
+   Invalidation is the identity of `.git/index` — the file `ls-files` reads,
+   and the file every `add`, `commit`, `rm`, and `checkout` writes — with a
+   five-second lifetime where it cannot be stamped (a linked worktree keeps
+   its index elsewhere), a one-minute ceiling regardless, four working trees
+   cached, and 50,000 paths each. Every failure degrades to the matcher
+   alone: no Git, no repository, a non-zero exit, a timeout, truncated
+   output, or too many paths all yield no index, and no index exempts
+   anything. A non-Git project is bit-for-bit what it was.
+
+   One thing came out of building it that the report did not name. Once a
+   tracked file can pull the walk into an excluded directory, the directory's
+   untracked siblings become visible too — a floating pattern like `dist`
+   matches the directory and not the paths beneath it, and the shipped code
+   relied on never descending. So the walk now carries "am I inside an
+   excluded directory", and inside one only tracked paths are shown. That is
+   Git's own rule that a path under an excluded directory cannot be
+   re-included, and it is pinned by a case that lists `dist/keep.js` and not
+   `dist/stale.js`.
+
+2. **The requested path obeyed no rule of its own (H2).** The filter was
+   applied to entries met while walking and never to the path the request
+   named: `?path=.git&depth=1&showIgnored=false` answered 200 with the
+   repository's machinery, `?path=.git/refs&depth=1` answered 200,
+   `/file?path=.git/config` returned the config including the remote URL, and
+   `?path=frontend/node_modules&showIgnored=false` returned 390 entries.
+   Refused now at the resolve step every file route shares.
+
+   **One deliberate divergence from the instruction, recorded rather than
+   made quietly.** The single-file read applies the `.git` refusal and _not_
+   the ignore filter. A File tab is opened from a tree that may legitimately
+   be showing ignored paths — that is what the opt-in is for — it is durable,
+   and it carries no ignore mode of its own; a check that every real caller
+   would have to bypass is not a boundary, it is a parameter with one value.
+   The ignore rules govern what a **listing** offers, which is what WSP-05
+   and the read policy actually require of them. Written into the read policy
+   so the boundary states what it holds.
+
+3. **Deep rows were unreadable at the panel's floor (H3).** At
+   `PANEL_MIN_WIDTH` a level-14 row computed `padding-inline-start: 11.05rem`
+   inside a 248px line, leaving a 44px name column for a name 128px wide;
+   level 13 left 58px, and about 13.6px goes per level. The tree did not
+   scroll sideways (`scrollWidth === clientWidth === 259`) and the page did
+   not overflow, so the only recovery was the row's tooltip and ten
+   consecutive rows read `eleme… playw… reque… sessi…`.
+
+   **Chosen: scroll, not compress.** A row is as wide as its own content and
+   never narrower than the tree. Capping or compressing the indent past some
+   depth was the alternative and was rejected: the indent is the only thing
+   on screen that says how deep a row is, and flattening it exactly where the
+   tree is deepest trades one unreadable thing for another; a smaller unit
+   only moves the width at which the same failure happens. Scrolling keeps
+   both the depth and the name, which is what the editor this tab is
+   modelled on does.
+
+   The trap was the one this feature has already fallen into once. A
+   horizontal scroller whose height is unbounded puts its scrollbar at the
+   bottom of the whole list, hundreds of pixels below the visible area — F2,
+   exactly. So the Files tab became a column, the arrangement the file
+   preview already uses, and the tree is a bounded box whose scrollbars are
+   at the edges of the panel. Measured at the floor: the name is not clipped,
+   the tree scrolls, its bottom edge is on screen, and the page's own
+   horizontal overflow is still zero.
+
+4. **Focus dropped to `<body>` after opening a file (H4).** F5's defect on
+   the path F5 did not cover: it fixed the structural chords, and an
+   activation hides a body just as surely as a split does. Opening a tab now
+   asks the panel for focus. Two further paths hide a body the keyboard may
+   be inside, and both are covered: the tab-switching chord, which moves
+   focus only when the keyboard was in the body it just hid — read from
+   `document.activeElement` before the command runs, so a chord issued from
+   elsewhere on the page still does not steal focus into the panel — and
+   closing the panel, whose own close control is inside the panel that is
+   about to become inert.
+
+5. **The failing-listing report was true about the symptom and wrong about
+   the cause (H5).** Investigated before anything was changed, as the report
+   asked. The error row and its retry are **reachable**: under the
+   application's own retry policy a rejecting listing settles in about three
+   seconds and the row reads "Could not list src. Activate this row to try
+   again." — in jsdom, and against the real server in a real browser, where
+   the row's retry also recovers. So "30+ seconds still Listing…" cannot be
+   explained by a failing request at all.
+
+   What it is explained by is a request that never **settles**. React Query
+   can retry a rejected promise and then fail it; it can do nothing with a
+   pending one, and nothing in the client bounded how long a read would wait.
+   That is a permanent "Listing…" row with no error, no retry, and no
+   recovery short of a reload — including the part of the report that looked
+   strangest, that unpatching the server changed nothing, because the promise
+   already in flight never settles either. The most likely origin of the
+   observation is the patched `fetch` itself: a stand-in `Response` whose
+   `json()` never resolves produces precisely this and is invisible from the
+   page.
+
+   Fixed where the gap actually is: a panel read carries a ten-second
+   deadline — the same one the server gives its own Git calls — and aborts
+   the request rather than abandoning it, reporting a typed `request_timeout`.
+   The retry policy moved out of `main.tsx` into `shouldRetryRequest`, where
+   it is unit-tested: a client error and a timeout go to the view's error
+   state at once, everything else is retried twice. The old policy
+   special-cased 401 and retried a 404 three times.
+
+6. **A path that is not there was an internal error (H6).** `path=does/not/
+exist` answered `500 {"error":{"code":"internal_error"}}`. Typed now:
+   `path_not_found` (404) for a path that is gone, `path_not_directory` and
+   `file_not_regular` (400) for one that exists and is the wrong kind,
+   `path_unreadable` (403) for one that cannot be read; the tree renders that
+   row's own error state on the first answer, because a client error is not
+   worth repeating twice before saying so. Containment was never at fault:
+   `path=../../../etc` was a correct 400 before and still is.
+
+   Worth recording, because it changes what the defect is: the realistic
+   trigger the report names — a persisted expansion pointing at a deleted
+   directory — does **not** reach the server. A collapsed-away path is only
+   requested when a row for it exists, and the row comes from its parent's
+   listing, which no longer holds it. The reachable case is narrower and
+   real: a directory deleted while the tab is open, whose row the tab is
+   still showing from the listing it read before. That is what the
+   end-to-end case drives.
+
+7. **An interrupted drag stranded the panel, and it is reachable by a real
+   pointer (H7).** Reported as unconfirmed for real input because the
+   reporting harness could not deliver a second real `pointerdown`. It is
+   confirmed: Chrome delivers it, and a second `mouse.down()` mid-drag
+   reproduces the stranded state exactly — the drop zones still mounted, the
+   ghost still on screen, the source tab still at 0.45 opacity, and Escape
+   inert. The mechanism is the one the reviewer identified in code, verified
+   line by line: a second press replaces `tracking.current` with a
+   non-dragging record, its `pointerup` takes the "never became a drag" early
+   return and nulls tracking without clearing `drag`, and `cancel()` — which
+   begins by reading `tracking.current` — early-returns for ever, so Escape,
+   whose whole job is to cancel, cannot. A press now ends whatever the
+   previous gesture left behind, a release and a `pointercancel` clear a drag
+   they find stranded, and `cancel()` clears drag state on its own terms when
+   there is no tracking record to clear it through.
+
+**The `README.md` search figure, corrected by measuring it twice.** The pull
+request's table says 7 matches; the pass reported 9 against its own ground
+truth. Both are right, about different working trees, and the figure is a
+property of the tree rather than of the code: on **this** repository the
+search returns exactly 7, and `git ls-files` plus untracked-not-ignored
+contains exactly 7 paths matching `README.md` — checked independently, and
+they agree path for path. The pass's 9 belongs to the repository its other
+measurements come from, the one with `backend/` and `frontend/node_modules/`.
+What the figure supports is unchanged and verified in both places: no
+dependency copies, project files first. The lesson is the small one — a
+number measured against one working tree is not a property of the feature —
+and the documentation now says which tree it counted.
+
+**What this pass says about the last one.** Two of the seven reports
+described a real symptom and a mechanism that was not there (H5's failing
+listing, H6's persisted expansion), and one described a mechanism precisely
+while doubting it could happen at all (H7). All three were settled the same
+way: by reproducing the measurement first and only then reading the code, or
+by driving the real browser at the exact sequence in question. The standing
+instruction to confirm a finding before it becomes work earned its place
+again — and so did its converse, that a finding whose mechanism is wrong is
+still a finding, because the symptom was real every time.
+
+**2026-08-23 — what milestone 5 found while building the File tab.** None of
+these came from a hands-on pass; the pass for this milestone is still owed.
+Each is recorded because it changed a decision.
+
+1. **A theme cannot be handed to Shiki as CSS variables — except that it
+   can.** The expectation, from vscode-textmate's history, was that a theme's
+   `foreground` had to parse as a hex colour and that anything else would be
+   dropped, which would have meant sentinel colours and a reverse map from
+   sentinel to variable. Measured before building on it: `@shikijs/vscode-textmate`
+   10.0.2 carries a theme colour through tokenization as an opaque string, so
+   `var(--code-keyword)` arrives intact on the token and reaches the DOM as an
+   inline `color:`, where the cascade resolves it. That is what makes a theme
+   switch re-map a highlighted file with **no re-highlight, no listener, and no
+   reload** — pinned end to end by switching `prefers-color-scheme` and
+   re-reading the same node's computed colour. Recorded because the sentinel
+   design was one commit away from being written, and because the property it
+   depends on is a library behaviour rather than a documented contract: if a
+   future Shiki drops non-hex colours, the symptom is uncoloured text and the
+   fix is the sentinel map.
+2. **react-markdown's own URL sanitiser refuses `data:`, which settled the
+   image question.** The plan said the image renderer should refuse "any
+   non-`data:` remote URL", i.e. that an inline `data:` image would be shown. It
+   is not: `defaultUrlTransform` empties a `data:` `src` before the renderer
+   sees it, and re-enabling it would have meant passing a custom `urlTransform`
+   for arbitrary working-tree content. **Decided the other way instead: no
+   image element is rendered at all**, and every reference — remote, inline, or
+   relative — becomes a labelled placeholder naming what would have been there.
+   A file preview then has exactly one element class it cannot be made to
+   fetch, and the reader is told what is missing rather than shown a gap.
+3. **A `pre` that is highlighted is still the same `pre`, and that is what the
+   scroll cases depend on.** Swapping plain text for ~8,000 token spans
+   replaces the children of the element `PanelBodies` records the offset of,
+   not the element itself, so G1's mechanism is untouched. The three existing
+   `wide.json` cases nevertheless now wait for the tokens before they measure:
+   they passed either way, but whichever content they happened to catch was a
+   race, and a measurement of content the user is no longer looking at is not
+   the measurement the case claims to make.
+4. **`.file-preview pre` had to become `.file-preview > pre`.** The rule that
+   strips a preview `pre`'s margin, border and radius matched a fenced code
+   block **inside** a previewed markdown document too, which is a box in a
+   document rather than the file filling the tab. The same applied to the
+   header-button rule, which would have restyled a document's in-repository
+   links, since those are buttons. Both are direct-child selectors now.
+
+**2026-08-23 — milestone 5 against this repository, measured rather than
+described.** Driven through a real browser against this working tree, with the
+project registered the way a user registers one. First paint is the number
+that matters: WSP-05 requires highlighting never to block it.
+
+| File                                                   | Size                              | Plain text on screen   | Highlighted | Tokens |
+| ------------------------------------------------------ | --------------------------------- | ---------------------- | ----------- | ------ |
+| `apps/web/src/styles.css`                              | 2,736 lines                       | 218 ms after the click | +81 ms      | 7,851  |
+| `e2e/workspace-panel.spec.ts`                          | 2,376 lines, the heaviest grammar | 72 ms                  | +1,029 ms   | 9,343  |
+| `docs/exec-plans/active/2026-08-22-workspace-panel.md` | 2,376 lines, rendered             | 261 ms                 | n/a         | n/a    |
+
+The TypeScript case is the interesting one: its grammar chunk is 181 kB and
+tokenizing 2,000 lines of it takes about a second, during which the file is
+fully readable and scrollable as plain monospace text. That is the whole shape
+of the requirement, and it is why the upgrade is a swap of the `pre`'s children
+rather than a gate on rendering it.
+
+The rest of what that pass measured: both large files were bounded to 2,000
+lines with the notice naming the true count (2,736 and 2,376); the `pre`'s
+bottom edge and the visible bottom of the tab body were the same pixel (720),
+so the horizontal scrollbar is on screen while 243 px of content extend past
+the right edge; the page's own horizontal overflow was 0 in every case; and the
+exec plan's preview rendered 1,832 elements, **zero** image elements, and 27
+in-repository links — every one of this plan's own relative document links,
+turned into a control that opens that file in its own File tab.
+
 - No blockers. Milestone 4's gate is **satisfied** as of 2026-08-23; it was
-  never blocked, only waiting on a normal lifecycle step.
+  never blocked, only waiting on a normal lifecycle step. Its standing
+  hands-on UI pass is no longer owed either: it was performed, and the seven
+  defects it found are fixed above. **Milestone 5's standing hands-on UI pass
+  is no longer owed**: it was performed on 2026-08-23 by a separate agent, and
+  the ten defects it found are fixed and pinned below. One **open product
+  question** comes out of it, and it is a question rather than a blocker: the
+  line-number gutter (J11) is a scope addition the coordinator approved and the
+  user has not seen. It ships as specification version 3, Draft, with product
+  approval **pending**, and the answer changes only whether that revision is
+  approved or reverted — nothing else in the milestone depends on it.
+
+### 2026-08-23 — milestone 5's standing hands-on UI pass
+
+A reviewer drove the File tab in a real browser against a real repository and
+reported eleven items, every one measured: ten defects and one scope addition.
+What each of them turned out to be, and what now pins it, is recorded here.
+Two things the same pass looked at and found working are recorded at the end,
+so neither is re-reported as a bug.
+
+**J1 — the header wrapped the path instead of ellipsising it.**
+`.file-preview > header span` carried `overflow: hidden` and
+`text-overflow: ellipsis` with **no `white-space: nowrap`**, and
+`text-overflow` is inert while the computed `white-space` is `normal`. So the
+span wrapped. Measured against a markdown file, whose header carries three
+buttons:
+
+| panel width     | path span  | header height |
+| --------------- | ---------- | ------------- |
+| 280 (the floor) | 0 × 88px   | 107px         |
+| 352             | 58 × 73px  | 92px          |
+| 400             | 106 × 59px | 78px          |
+| 544             | 250 × 29px | 48px          |
+
+At 280–328px the path rendered **one character per line** in a 10px column and
+the header took 107px — 83px of the file's own reading area — to say nothing.
+Fixed by nowrapping the path, and then by deciding where the ellipsis should
+fall: the tail of a path names the file and the head names a hundred files, so
+the header now paints `docs/product-specs/` and `workspace-panel.md` as two
+spans, the directories carrying a shrink factor 999 times the name's, and the
+whole path on the element's `title`. The header's controls moved into a
+wrapping group of their own, so at the floor the header becomes two short rows
+rather than one tall one. Re-measured, same file tab, at three widths:
+
+| panel width | path span  | header height |
+| ----------- | ---------- | ------------- |
+| 550         | 347 × 15px | 37.6px        |
+| 400         | 197 × 15px | 37.6px        |
+| 280         | 256 × 15px | 58.2px        |
+
+The file name is whole at every one of them (135.75px painted against 136px
+needed) and the tab body's horizontal overflow is 0. Pinned twice, because the
+defect has two halves that fail in different places: `styles.test.ts` reads the
+stylesheet and asserts the declaration that was missing, since **jsdom applies
+no author CSS at all and cannot tell a missing rule from a present one**; and
+an end-to-end case measures the rendered header at 550, 400 and 280.
+
+**J2 and J3 — most of the light theme's coloured text was below AA.** Measured
+against the resolved `.file-preview > pre` background (`rgb(244,244,245)` in
+light, `rgb(31,33,39)` in dark) at 12.48px weight 400, which is normal text and
+therefore a 4.5:1 bar: **six of nine syntax tokens failed in light**, and the
+two carrying the most text failed hardest. Not a corner case — in one real file,
+of 735 coloured spans, **178 were strings and 202 comments, both at 3.13:1**. The
+majority of coloured text in the light theme was the failing part, which is what
+"reads as washed out rather than as structure" was describing. `--code-punctuation`
+and `--code-attribute`, which the report did not list, failed too.
+
+The mechanism was that most `--code-*` tokens were **aliases of the status
+palette** — `var(--green)`, `var(--amber)`, `var(--red)`, `var(--accent)`,
+`var(--muted)` — and those hues are chosen against the page's white, not
+against the preview's `--hover` panel. So they are no longer aliases: the light
+values are the same hues darkened until each clears the bar with margin, and
+the dark values, every one of which already passed, are written out beside them.
+The full palette, measured:
+
+| token                | light   | ratio | dark    | ratio |
+| -------------------- | ------- | ----- | ------- | ----- |
+| `--code-plain`       | #3a3a3e | 10.30 | #c3c5cb | 9.32  |
+| `--code-keyword`     | #8a2fb0 | 6.13  | #cba6f7 | 7.92  |
+| `--code-type`        | #0b6a77 | 5.72  | #4dc3d4 | 7.72  |
+| `--code-function`    | #1a5fd0 | 5.32  | #6aa0ff | 6.20  |
+| `--code-constant`    | #b32d22 | 5.76  | #e0645c | 4.71  |
+| `--code-tag`         | #b32d22 | 5.76  | #e0645c | 4.71  |
+| `--code-string`      | #187038 | 5.60  | #4ec06f | 6.97  |
+| `--code-number`      | #8a5510 | 5.64  | #d6a53a | 7.13  |
+| `--code-attribute`   | #8a5510 | 5.64  | #d6a53a | 7.13  |
+| `--code-comment`     | #63636a | 5.42  | #8b8d95 | 4.86  |
+| `--code-punctuation` | #63636a | 5.42  | #8b8d95 | 4.86  |
+
+J3's muted prose is the same defect on a different surface. `--muted` is
+3.44:1 on the panel's white, which is tolerable for a label beside something
+else and not for the words of a sentence — one real README renders 23 inert
+links inside running prose. A second token, `--muted-body` (5.96:1 light,
+6.15:1 dark), now carries the text that is prose: `.md-inert-link`,
+`.md-image-missing`, `.panel-state`, `.empty`, and `.panel-announcement`, which
+is also where a copy that worked or failed now says so (J4). `--muted` itself
+is unchanged and still carries chrome. `.md-external-link` was left on
+`--accent`: 4.57:1 is a pass, thin but a pass, and the test now holds it there.
+
+**The test is the deliverable, not the palette.** A palette is re-tuned by eye
+and regresses silently, and the existing suites could not see this at all —
+jsdom applies no author stylesheet, so a colour token is not a thing a
+component test can measure. `apps/web/src/styles.test.ts` reads `styles.css`
+itself, resolves `var()` chains through the light and dark blocks the way the
+cascade does, and computes WCAG contrast for every `--code-*` token and every
+prose surface above against its own resolved background, in both themes,
+failing below 4.5:1. Two further cases guard the two ways a fix like this rots:
+one asserts the hues stay **apart from each other**, since a palette that
+passes contrast by collapsing into six near-identical darks would satisfy the
+first case and destroy what highlighting is for; and one asserts the **two dark
+blocks agree**, because `styles.css` writes the dark theme twice — once under
+`prefers-color-scheme` for the System setting and once under `[data-theme]`
+for the pinned one — so a palette edited in one and not the other would ship
+two different dark themes (CWS-02).
+
+**J4 — Copy path and Copy contents had no outcome at all.** Both were
+`void navigator.clipboard.writeText(…)` with no `.catch`, which swallows every
+way a clipboard write refuses: a denied permission, a document that is not
+focused, an insecure context. Driven in the browser, a failing write produced
+an `unhandledrejection` and **nothing on screen changed**; a succeeding one
+changed nothing either, and `document.querySelectorAll('[aria-live]')` returned
+0 elements. WSP-10 requires defined states, and "it worked" and "it did not"
+are two of them.
+
+Both outcomes now say so in the panel's existing `role="status"` region — the
+one the split refusal and the drag narration already share. A second live
+region on one surface interrupts the first, which is why this reuses it rather
+than adding one, and it is a visible bar as well as an announced one, so the
+signal is not carried by assistive technology alone. The insecure-context route
+is handled separately from the rejection route because it **throws** on
+property access rather than rejecting a promise, and both land on the same
+sentence. Pinned in jsdom for all three routes, and end to end for the two that
+are claims about the screen.
+
+**J7 — the line notice described the truncated read as if it were the file.**
+A 69,037-line file, truncated by the read boundary at 2 MiB, showed "Showing the
+first 2000 of **55477** lines. Copy contents takes the whole file." Both
+sentences were false. 55,477 is the line count **of the first 2 MiB**, not of
+the file; and Copy contents copies what reached the browser, which is those
+same 2 MiB. Now the truncation notice says that everything below it is about
+the portion and not about the file, the line notice reads "Showing the first
+2000 of the 55477 lines in the 2 MiB that were read", the copy sentence becomes
+"Copy contents takes those 2 MiB", and the copy announcement (J4) says the same
+thing. Where nothing was truncated the original wording stands, because there
+it was true.
+
+**The same wording was reused elsewhere, with the same defect.** J7 asked for
+that check and it found one: the Files tab's tree and its flat search both say
+"Showing the first 200 of N entries/files", with N taken from the response —
+and the read boundary's own traversal limit can stop that walk early, which is
+exactly what its `truncated` flag reports. **Nothing in the web client was
+reading that flag.** So a directory the walk stopped short of was reported with
+a total that was itself short, in the one place WSP-05 v2 names explicitly: "a
+listing that quietly under-reports what is on disk is not acceptable, in the
+tree or in a search result count". Both now say "Showing 200 entries. The
+workspace stopped listing at its own limit before the end, so this is not all
+of them." when the flag is set, and keep the counted sentence when it is not.
+
+**J5 — a huge single-line file was bounded by the wrong unit.** A 4.7 MB
+bundle, server-truncated to 2 MiB, put **2,097,096 characters into one `pre`**:
+the 2,000-line budget never engaged, because 2 MiB of that file is only 293
+lines. Longest line 878,586 characters, `pre.scrollWidth` 6,594,300px.
+Highlighting was correctly declined by the 256 KiB bound — no hang, no error —
+but the reader was told nothing about the decline or about the line, and
+silence reads as broken.
+
+Lines are a proxy for size; the fix is to bound the size itself.
+`FILE_PREVIEW_CHARACTER_LIMIT` is 512 KiB, applied to what the line bound
+leaves, so whichever bites first is the one the notice names — and the notice
+switches unit with it, because "the first 2,000 of 293 lines" says nothing
+about a bundle. The highlighter's bound moved to `fileLanguage.ts`, which the
+tab may import statically, so the tab now knows **before** the dynamic import
+that the answer would be no: it skips fetching the chunk entirely and says why
+nothing is coloured. `boundedLines` also stopped counting hidden LINES as its
+trigger — cutting a one-line bundle in half hides no lines while hiding almost
+all of the file — and now records whether anything was cut at all.
+
+Re-measured in headless Chromium against a 3 MB one-line fixture, truncated by
+the server to the same 2 MiB:
+
+| measurement                                                  | before        | after            |
+| ------------------------------------------------------------ | ------------- | ---------------- |
+| characters in the `pre`                                      | 2,097,152     | 524,288          |
+| `pre.scrollWidth`                                            | 15,757,146px  | 3,939,306px      |
+| switching **onto** the huge tab                              | 110/114/116ms | 28.5/29.8/28.9ms |
+| switching between three other tabs, huge tab closed          | 15/13/10/17ms | 14/14/14/13ms    |
+| switching between three other tabs, huge tab open and hidden | 14/13/13/16ms | 14/10/10/10ms    |
+
+**The reported hidden-tab cost did not reproduce here, and that is worth
+recording rather than glossing.** The report measured 319/545/147ms with the
+huge tab mounted and hidden against 122/357/132ms with it closed — roughly
+150–200ms of tax on every tab switch anywhere in the panel. In this
+environment a hidden body costs nothing measurable either way, before or after
+the fix, because `.panel-tabpanel[hidden]` is `display: none` and a body with
+no box takes no part in layout. The report's own baseline is an order of
+magnitude above the one measured here (122–357ms against 10–17ms), so the two
+runs are not the same machine under the same load, and the honest conclusion
+is that **the hidden-body claim is unconfirmed** rather than refuted. What is
+confirmed, and what the fix is justified by on its own, is the cost of the tab
+itself: 110ms to activate, down to 29ms, and a DOM node a quarter the size.
+WSP-09's bounded-render requirement is about what is rendered, not about what
+it happens to cost on one machine.
+
+**J9 — the binary and oversized notices contradicted each other.** A 4.9 MB PDF
+rendered "Only its first 2 MiB were read." directly above "Binary file preview
+is unavailable.": one sentence saying there is a readable portion, the other
+saying there is nothing to read. Copy contents was correctly disabled
+throughout. The truncation notice is now suppressed for a binary file and the
+size is folded into the one statement that is true — "Binary file preview is
+unavailable. This file is also larger than the 2 MiB preview limit, so only its
+first 2 MiB were examined." The size is still worth naming, because it is why
+Copy contents is disabled for a file the reader may believe is small enough to
+copy.
+
+**J10 — a refused path was echoed as if it were a workspace-relative one.** A
+tab restored at `../../../etc/hosts` is correctly refused by the read boundary
+("The request is malformed.", with a Retry) and **containment holds** — but the
+header rendered the raw spelling in the place that means "the
+workspace-relative path of what you are looking at", and Copy path was ready to
+put it on the clipboard. Only reachable by editing the persisted panel record,
+which is device-local storage any script on the origin can write.
+
+The tab now validates its own record against `RelativePathSchema` — the same
+schema the read boundary parses with, imported from `@pi-web/contracts` rather
+than restated, so the two cannot drift — and shows the server's normalized
+answer when it has one, the validated record while the read is in flight, and
+"This tab's path is not a workspace path." with Copy path disabled when the
+record is not one. The request is still issued and still refused by the server:
+the boundary stays the authority on what may be read, and this is only about
+what may be displayed and copied as a path.
+
+**J6 — two File tabs on two different files were indistinguishable.**
+`docs/README.md` and `frontend/node_modules/flatted/README.md` both computed
+the accessible name "README.md", the tab element carried **no `title` at all**,
+and both close controls read "Close README.md". Browsing a repository produces
+that collision constantly — `README.md`, `index.ts`, `package.json` — and the
+file-tree row that opens the tab carries the full path on its own tooltip while
+the tab it opened did not.
+
+A tab's label is now computed against every other open tab in the panel, not
+just its own strip: a basename until two tabs share one **while addressing
+different things**, and then each grows parent directories until the labels
+differ — `docs/README.md` and `flatted/README.md`, `web/src/index.ts` and
+`server/src/index.ts`. That label is what the strip paints, what the close
+affordance and the strip's close button name, what the drag ghost carries, and
+what the panel announces on close, so no route to the tab is ambiguous while
+another is not. The full path is on the tab's `title`, which does not touch the
+accessible name because `tab` is a name-from-content role.
+
+**Two tabs on the SAME file are deliberately left alone.** That is one file
+open against two worktrees, which WSP-02 answers with the worktree chip;
+prefixing both with an identical directory would add noise and disambiguate
+nothing.
+
+**J8 — fragment links were told, inaccurately, that they point nowhere.**
+`](#anchor)` rendered inert with the tooltip "This link does not point anywhere
+the workspace can open" — a true sentence about the workspace and a false one
+about the link, which points at a heading in the document on screen. The
+rendering was correct in refusing to emit an anchor; the sentence was not.
+
+**Decided: make them work.** The reviewer offered either "say what is true" or
+"make in-document fragments actually scroll to their heading", and the second
+is what a reader expects — a table of contents is the commonest thing a
+repository document has, and every entry in one was being called a dead end. A
+`#fragment` is now a fourth link kind alongside file, external and inert. It
+renders as a control (not an anchor: it navigates nothing) and, on activation,
+the tab finds the heading whose GitHub-style slug matches, scrolls the document
+box to it by arithmetic — not `scrollIntoView`, which would also scroll every
+scrollable ancestor including the panel — and **moves focus to it**, because a
+jump nobody's cursor followed is not a jump for a keyboard or screen-reader
+user. Duplicate headings get GitHub's `-1`, `-2` treatment, which is why
+`#overview-1` is a link people write.
+
+Resolution is against the **rendered DOM**, not the source: a heading element
+carries exactly the text a slug is computed from, with inline markup already
+resolved, so `## The **hard** part` and its `#the-hard-part` link agree without
+this re-implementing inline parsing. And when nothing matches, the tab says so
+in the panel's live region — "This document has no section called “x”." —
+rather than doing nothing, which was the failure mode the inert rendering was
+trying to avoid and did not.
+
+**J11 — line numbers in the source view. A SCOPE ADDITION, recorded as one.**
+Not a defect: neither version 1 nor version 2 of WSP-05 asks for line numbers,
+and the tab implemented what they describe. The reviewer said so explicitly and
+argued for adding them anyway — they are one of the three things that send a
+reader out of this tab and back into their editor, the user's stated goal for
+this work is a VS-Code-like surface, and milestone 6 is about to put old-side
+and new-side numbers on the Diff tab, which would leave the file view of the
+same file inconsistent with its diff. The coordinator approved the addition;
+**the user has not been asked**, and
+[the specification](../../product-specs/workspace-panel.md) says so: proposed
+version 3, Draft, product approval **pending**, with its own acceptance
+criterion 18, following the lifecycle version 2 used.
+
+The mechanism is the whole of why it is safe. The number is `data-line` on each
+line element and the stylesheet draws it with `content: attr(data-line)` on a
+`::before` — **generated content, which a selection cannot reach and
+`textContent` does not contain**, so the numbers cannot be copied out with the
+code. A number rendered as a text node would be. The gutter's width comes from
+the file's line count rather than from the 2,000-line budget, so a twelve-line
+file does not pay four characters of indent.
+
+The plain-text rendering was rewritten to use the same per-line elements the
+highlighted rendering already used, which is what keeps the upgrade
+geometrically identical: the swap now replaces each line's contents rather than
+the shape of the box around them. That required checking that Shiki's tokenizer
+splits into the same number of lines as `text.split("\n")`, including for text
+with a trailing newline — verified against the real highlighter, which it does
+in every case tried. Measured across the swap in a real browser: same line
+count, same numbers, same first-line position, same `scrollWidth` and
+`scrollHeight`, and the same selection text — with one caveat now written into
+the case, that one text node and a row of spans holding the same characters
+shape to sub-pixel-different widths (191.59375px against 191.625px), so the
+geometry assertions hold to within a pixel rather than exactly.
+
+### The two things the pass checked and found working
+
+Recorded so neither is re-reported as a bug.
+
+- **In development, the first code file opened forces a full page reload.**
+  Vite's dependency optimizer discovers Shiki at that moment and re-optimizes,
+  which reloads the page; panel state survives it, and a production build
+  pre-bundles, so it never happens to a user. A development-server artefact,
+  not a defect.
+- **A recursive ignored-inclusive search over `node_modules` returns 503.**
+  That read legitimately exceeds the deadline, and the tab renders "The
+  workspace did not answer in time. Try again." with a Retry. Working as
+  designed.
+
+## Discoveries from milestone 6
+
+Recorded here rather than in a commit message because each is a trap the
+next milestone can walk into.
+
+- **The `.file-list` class belongs to two tabs, and a hidden tab is still in
+  the DOM.** The end-to-end README search asserted `.file-list li` had
+  exactly one row. It had six the moment the fixture became a real
+  repository, because the Changes tab uses the same markup and WSP-09 keeps
+  a hidden body **mounted** — the whole reason a tab keeps its scroll
+  position. Every panel selector in an end-to-end spec has to be scoped to
+  `[role="tabpanel"]:not([hidden])`, and the ones that are not are latent
+  failures waiting for another tab to have content.
+- **`npx playwright test` runs the last build, not the working tree.** Half
+  an hour went into a Diff tab that rendered its previous version, because
+  `pnpm test:e2e` builds first and running Playwright directly does not.
+  Anything measured against a stale bundle is measured against the last
+  milestone.
+- **A test that waits for a control is not waiting for the content.** The
+  milestone-5 bundle case waited for the `Copy contents` button, which the
+  File tab renders while the read is still in flight; it passed by timing.
+  It now waits for the truncation notice, which exists only once the read
+  has answered. Nothing about the tab changed.
+- **`git status` is not a stable premise for `git diff`.** The design
+  boundary says the server makes no such claim, and the browser now shows
+  what that means: `git_path_not_changed` is rendered as an ordinary state —
+  "this file has no changes in this worktree any more" with a Retry — and
+  not as an error, because a file that was reverted or committed between the
+  list and the fetch is a thing that happens, not a fault.
+- **A hidden hunk body is still findable.** `getByText(...).toHaveCount(0)`
+  passes only if the element is gone; the collapse hides it, so the
+  assertion is `toBeHidden()`. Unmounting it instead would have made the
+  test simpler and the product worse: expanding would re-do the layout every
+  time.
+- **The design document describes an untracked preview the server does not
+  build.** [Inspector and terminal](../../design/inspector-and-terminal.md)
+  said untracked files "use an application-generated `/dev/null`-style
+  unified preview from bounded file content"; the server has always used
+  Git's own `--no-index` comparison against `/dev/null`, which is a
+  different mechanism with the same shape and the same bounds. The sentence
+  is corrected to describe what runs. The call also gained `--no-ext-diff`,
+  which it was the only Git call in this application missing — a user's
+  `diff.external` would otherwise have decided what an untracked file's
+  preview looks like.
+- **The Changes tab's kind letter collided, and its list had no bound.**
+  Both found while verifying that WSP-06's Changes half still held. The
+  letter was the first character of the kind's name, which gives `C` to
+  "copied" and to "conflicted": between those two the distinction really was
+  carried by colour alone, which is the thing WSP-06 forbids. The letters
+  are Git's own now (`?` untracked, `U` unmerged) and each row carries the
+  kind as a word as well. The list painted every path the status returned,
+  where WSP-09 names status lists in the same breath as file listings and
+  diffs; it is bounded at 200 with a notice, and the summary above it still
+  counts every change.
+- **Left undone, deliberately: the change-kind chips are not in the contrast
+  test.** `.change-kind` paints its colours through `color-mix()`, which
+  `styles.test.ts` cannot resolve — its colour reader understands hex and
+  `rgb()`. The chips predate this milestone and are unchanged by it, but
+  they are the one remaining place in the panel where a colour that carries
+  meaning is not measured. Either the test learns `color-mix`, or the chips
+  become resolved tokens like the diff's. **Closed by K2 below**, by doing
+  both: every chip was below the AA bar in light and two were in dark, and
+  the reader had a second trap in it that a colour change alone would not
+  have closed.
+
+## Discoveries from the milestone-6 hands-on UI pass
+
+The standing hands-on pass of milestone 6, on 2026-08-23, drove the Diff tab
+in a real browser against real `git diff` bytes and reported five items:
+four defects (K1 to K4) and one scope addition (K5). All five are done. What
+follows is what each one cost to find or to fix, and what the next reader
+should not have to rediscover.
+
+- **K1 — a sideways scroll left the add/remove distinction in colour alone.**
+  WSP-06 says it never is, and this was the normal reading path rather than
+  a corner: at `PANEL_MIN_WIDTH` on a real Python diff, `.diff-body`'s
+  scrollWidth/clientWidth was 757/259 — 498px of range — with the `+` at
+  x=50, so any `scrollLeft` past ~58px hid the prefix and both gutters for
+  the remaining 88% of the range. What was left is a wash measuring 1.04:1
+  (light) and 1.06:1 (dark) between add and delete, 1.04–1.13:1 against the
+  plain surface. Fixed by pinning the two gutters and the prefix as a
+  `position: sticky` first column. The prefix needed a box of its own to be
+  pinned and stays a REAL text node in it, because a prefix is patch content
+  a copy must carry — the exact opposite of the numbers beside it.
+- **`position: sticky` does not apply to a `::before` whose `content`
+  resolves to the empty string** (K1, measured in Chromium). The box is
+  still laid out and still takes its declared width — the parent's
+  `getBoundingClientRect` proves it — but it does not stick, and the
+  scrolled code is painted over its column. Every CHANGED line has one empty
+  gutter, an added line no old number and a deleted line no new one, so the
+  cells that silently failed were exactly the ones the fix exists for. With
+  `content: "9" attr(data-old)` it pinned; the shipped answer is a trailing
+  zero-width space, which costs no width, is generated content and so cannot
+  be copied, and makes the box non-empty for every line. The end-to-end
+  probe reads gutters through `elementFromPoint` rather than through a
+  computed rule, which is the only reason this was seen at all.
+- **`.diff-lines`'s own padding never applied** (found while doing K1).
+  `.markdown pre, .activity pre, .diff-view pre, .file-preview pre` sets
+  `padding: 0.8rem`, which beats a bare `.diff-lines` on specificity however
+  far down the file it sits, so the `padding: 0.3rem 0.7rem` written for the
+  diff's lines had been inert since it was written. It mattered once the
+  column was pinned: a padding on the `pre` scrolls away with the content,
+  so the column jumped 12.8px left the moment the body moved. The rows are
+  full-bleed now and the inset lives inside the pinned cell.
+- **K2 — every change-kind chip failed AA in light, and two in dark**, at the
+  10.24px/400 they actually paint: `?` 2.76:1, `D`/`U` 3.44:1, `M`/`R`/`C`
+  3.51:1 light; `D`/`U` 3.79:1 dark. They now take the diff's own measured
+  pairs (5.01–5.90:1 light, 5.51–6.84:1 dark), so a modified file's chip and
+  the diff it opens are one palette and there is one set of numbers to keep
+  honest. Mitigation worth keeping in view so nobody over-corrects: the
+  letter is `aria-hidden` and every row names its kind as a word, so nothing
+  was lost to assistive technology.
+- **Chrome serialises a `color-mix()` result as `color(srgb 0.836863
+0.887059 0.984314)`, not as `rgb()`** (K2, and the trap the reviewer hit
+  first time round). A colour reader that knows hex and `rgb()` and then
+  falls back to something plausible reports the contrast of a colour that is
+  not on screen: four of the six failing chips read as passes that way.
+  `styles.test.ts` now carries out an `in srgb` mix itself, reads the
+  `color(srgb …)` form, and — the part that matters most — **throws** on a
+  colour it cannot measure instead of guessing one. The chips' contrast case
+  was written against the old values first and reported exactly the six
+  numbers above.
+- **K3 — a selection spanning two hunks copied the disclosure's chrome**: the
+  twisty, the `+15 -0` tally, and across a section boundary the bare word
+  `Unstaged`. Inside one hunk the copy was already exactly right. The `@@`
+  header stays selectable because `git apply` needs it; everything the panel
+  draws around it does not. Bounded-view notices went the same way, one item
+  beyond the report, on the same reasoning: a notice is the panel explaining
+  itself, and it sits between two hunks where a drag will cross it.
+- **K4's fix re-created K3, and only the end-to-end selection case saw it.**
+  The visually hidden `", "` that separates the hunk header from its tally
+  is text added for the accessible-name computation, and it landed in a
+  cross-hunk copy as a bare `,` line the day it was added. Every unit and
+  component case stayed green. The rule to carry forward: **text added for a
+  name computation is not text a copy should carry**, so `.sr-only` inside
+  copyable content needs `user-select: none` from the start.
+- **The two name computations disagree about the separator's whitespace, and
+  both are right** (K4). jsdom's trims each node and yields `@@ … @@,+1 -1`;
+  Chrome puts a space either side of the out-of-flow `.sr-only` box and
+  yields `@@ … @@ , +1 -1`. The assertions are tolerant of the spacing and
+  strict about what it separates, exactly as the Changes tab's kind-word
+  case already was.
+- **K5 — soft wrap, and how a continuation row is told from a new line.** The
+  wrong answer is available and cheap: make each line a block, and a wrapped
+  row becomes indistinguishable from a new one. The shipped mechanism is
+  that the line's TEXT moves into a box bounded to the width the pinned
+  column leaves it, so it wraps inside itself and every continuation row
+  begins at the code column; the line's real newline character still ends
+  the logical line, so the gutter numbers it once however many rows it
+  takes, and the copied text is unchanged. `overflow-wrap: anywhere`,
+  because a minified line has nothing to break at and "wrapped" has to mean
+  no horizontal scrolling for that line too.
+- **A Range answers per visual row; an `inline-block` does not** (K5). The
+  wrapped text lives in an `inline-block`, which has exactly one border box
+  however many rows its content takes, so `element.getClientRects()` reports
+  1 and proves nothing. `range.selectNodeContents(text).getClientRects()`
+  reports one rectangle per line box — and can report more than one per row,
+  so they are grouped by rounded `y` and the leftmost of each row is taken.
+- **A third action button clipped the File tab's header path** (K5, caught by
+  the full end-to-end run). At 400px the header still fitted on one line and
+  squeezed the path to 118px of the 136px the file name needs. The path's
+  `flex-basis` decides when that header WRAPS, not how much it finally gets
+  — `flex-grow: 1` gives it the remainder either way — and 6rem was under a
+  file name's own width. It is 12rem now, so the actions take a line of
+  their own before the name is cut.
+- **Two reported items were refuted rather than fixed.** A scroll offset
+  measured as 180 → 0 across a move between groups is an artefact of an
+  occluded window: `PanelBodies` records offsets from a capture-phase
+  `scroll` listener, and a backgrounded tab delivers no scroll events at
+  all, so nothing was ever recorded. Dispatching a synthetic `scroll` before
+  the move made the offset survive intact. And the accessibility-tree dump
+  reporting hunk toggles as unnamed buttons is the fourth occurrence of that
+  tool blanking a name-from-content role; the computed names were correct.
+- **Three shapes the pass could not reach are now covered by tests**, because
+  each had only ever been proved by a fixture this project wrote for itself:
+  a diff bounded by the 256 KiB CHARACTER bound rather than the line bound,
+  with the wording the reader sees; a genuine `@@@` combined diff, built
+  from a real merge conflict in `git.test.ts` and carried into the parser's
+  and the tab's fixtures as the exact bytes Git wrote; and a status list of
+  250 real untracked files past the 200-row budget. The bulk files are named
+  to sort after every other fixture and are removed by the test that makes
+  them: Git's status order is path order, and a bulk directory sorting first
+  would push the fixtures the other tests open out of the painted 200.
+
+## Discoveries from milestone 7
+
+Recorded here rather than in a commit message because each is a trap the
+next milestone can walk into.
+
+- **M1 — the middle of a tab was its own close control.** Clicking the
+  centre of a tab named `src` closed it instead of switching to it, which the
+  new two-terminals case caught on its first run. Two errors compounded.
+  The comment justifying `min-width: 3.5rem` said it left "~3px of clearance
+  at the narrowest tab the strip can produce"; the hit area reaches 26.6px in
+  from a tab's right edge, so a 56px tab clears its own centre by 1.4px, and
+  a click at the exact centre is inside the rounding. Raising the floor did
+  not help, which is how the second error surfaced: `.panel-tab` is a flex
+  row with `justify-content: flex-start`, so the width a `min-width` adds
+  becomes empty space **after** the close control, and every calculation
+  about "how far in from the right edge" was about a glyph that was not at
+  the right edge. Measured: an 80px tab with the glyph's centre 43px from its
+  left. The close is now pinned with `margin-left: auto`, the floor is 5rem,
+  and the end-to-end case **measures** the clearance from the tab's centre
+  rather than trusting a comment. Milestone 7 is what exposed it: a terminal
+  tab titles itself from the directory it is in, so three-character tab names
+  stopped being a corner case.
+- **M2 — a terminal outlives the page that opened it, and a suite is many
+  pages.** That is WSP-07 working, and it means every end-to-end test that
+  opens a terminal leaves a shell running against this spec file's single
+  shared execution scope: the project scope, because these threads are
+  shared. Eight fill it and the ninth is refused, so the suite began failing
+  on whichever test happened to run ninth — a failure that does not reproduce
+  when the test is run alone. `ServerContext` now exposes the terminal
+  manager so the spec's `afterEach` can leave the server as it found it.
+  Nothing about it is reachable over HTTP.
+- **A bare `attach` no longer means "give me the scope's terminal".** It
+  means "give me a new one", exactly as `create` does; naming a terminal is
+  what claims an existing one. Anything counting `attach` frames as "times
+  the page asked for a shell" — `attachFrameCount` in the panel spec did —
+  under-counts by every first connection. It counts both spellings now.
+- **The fake PTY reports no pid, and that is the point.** `PtyProcess` gained
+  `readonly pid: number | null`; the fake returns `null`, so every manager
+  test that does not care about the working directory exercises the
+  unobservable path for free, and the probe is never scheduled for it. The
+  cases that do care set a pid on the factory **before** the terminal is
+  created, because the poll is started when the first client attaches and a
+  process with no id never starts one.
+- **`resolveContained` refuses `.git`, and a spawn directory goes through
+  it.** A terminal therefore cannot be started inside the repository's own
+  machinery, which is the same answer the file routes give and was not a
+  decision this milestone had to make separately.
 
 ## Decision and revision log
+
+- 2026-08-23: **`restart` carries the spawn directory, and the client is the
+  one that supplies it.** The design boundary requires that a restart's
+  replacement start in the tab's recorded directory, and left open which
+  frame carries it; the milestone's own contract list named only `attach` and
+  `create`. The `restart` frame gains the same optional `cwd`. The
+  alternative — having the server reuse the disposed terminal's **observed**
+  directory — was rejected because that value is `null` wherever the platform
+  cannot answer, and the whole point of the tab's record is that it is not.
+  A restart would then silently drop back to the execution root on exactly
+  the platforms WSP-07 wrote its "shows the directory it was started in"
+  clause for.
+
+- 2026-08-23: **The panel record stays at version 4, and a restored terminal
+  id is no longer discarded.** The shape is unchanged — `terminal` tabs have
+  carried `cwd` and `terminalId` since version 1 of the record — so there is
+  nothing to migrate and no chain to break. What changed is meaning:
+  `restoreTab` used to null the id on the reasoning that "the process belongs
+  to the server, not to the record", which was right about ownership and
+  wrong about the consequence, because it made a reload orphan the shell it
+  had been watching. The id is now restored and treated as a **claim**: the
+  server answers `terminal_gone` for anything it does not own in that project
+  and scope, and the tab renders its restart action. Both fields are still
+  parsed on the way out of storage, because both become a request.
+
+- 2026-08-23: **The scope id is compared, not parsed.** `activeOwner` used to
+  run the scope id through `TerminalIdSchema`, which passed only because all
+  three brands are UUIDs and proved nothing about the value it checked. The
+  scope id is derived by the execution-context resolver from a thread record
+  and never appears on the wire, so there is no untrusted input to parse; the
+  terminal id, which does come from the client, is parsed exactly as before.
+  Resolving now requires the owner's project **and** scope to equal the
+  request's, which is what makes a live id from another worktree a rejection
+  rather than a back door.
+
+- 2026-08-23: **A listed terminal's `cwd` is nullable, and is the observed
+  value rather than the spawn directory.** The listing exists so a reloaded
+  browser can re-attach by identity, and the browser already knows what it
+  recorded; reporting a spawn directory as though it were current would be
+  the one thing WSP-07 forbids, in a DTO instead of in the toolbar. `null`
+  therefore means the same thing here as in the `cwd` frame: not observable.
+
+- 2026-08-23: **Soft wrap is a toggle, off by default, rather than the way a
+  long line is always shown** (K5). Both readings are legitimate: a diff of
+  a data file is easier to follow unwrapped, column alignment is worth
+  keeping for a reader who wants it, and wrapping is what the reader asks
+  for when the panel is too narrow for the line in front of them. Off by
+  default because scrolling is what both tabs did before the toggle existed,
+  and a reader who has not asked for a different view should not be given
+  one by an upgrade. Rejected: wrapping whenever the line exceeds the box,
+  which would make the geometry of a diff depend on the panel's width and
+  change under a drag.
+
+- 2026-08-23: **Soft wrap is recorded in specification version 3 rather than
+  in a version 4** (K5). Version 3 is Draft with product approval pending on
+  the user, it is unapproved, it came from the same source — the standing
+  hands-on passes of 2026-08-23 — and line numbers and wrapping are the same
+  kind of affordance: what a read-only view owes a reader who wants to stay
+  in it rather than go back to their editor or their terminal. Opening a
+  fourth version would put two unapproved revisions in front of the user for
+  one question. The scope statement now says the soft-wrap paragraph also
+  governs WSP-06's diff — the only reach outside WSP-05 — and acceptance
+  criterion 19 is added. Approval stays pending on the user, who has not
+  been asked about either half; the coordinator approved the scope addition.
+
+- 2026-08-23: **The change-kind chips take the diff's palette rather than a
+  palette of their own** (K2). They needed resolved tokens either way, and
+  inventing six new ones would have meant a second contrast matrix to keep
+  honest, tuned by eye, against the same surfaces. The diff's pairs are
+  already chosen against the wash they are painted on and already measured,
+  and reusing them says something true: a modified file's chip and the diff
+  it opens are one thing. Rejected: darkening the existing `color-mix()`
+  percentages, which would have left the colours unmeasurable by the
+  stylesheet's own test — the reason they went unmeasured for a milestone.
+
+- 2026-08-23: **A hunk is identified by its own changed lines, not by its
+  position or its header.** The collapse a user sets has to survive a
+  refetch, a reload, and a drag between groups (WSP-04), which means the
+  identity has to be stable across those. An index churns the moment a hunk
+  is added above it: every collapse below would move down one hunk. The
+  header churns for the same reason in different clothes, because
+  `@@ -12,7 +12,9 @@` is rewritten whenever anything above the hunk changes
+  size — so an edit somewhere else in the file would lose a collapse the
+  user set here. The identity is therefore `section:digest:ordinal`, where
+  the digest is a 32-bit FNV-1a of the hunk's `+`/`-` lines and the ordinal
+  distinguishes two hunks making the identical change. The context lines are
+  excluded on purpose: two edits close enough for Git to merge their hunks
+  read as one hunk with more context, and a collapse should survive that.
+  What this identity does NOT survive is an edit to the hunk's own change —
+  which is the case where re-expanding is the honest default, because what
+  the user collapsed is not what is there any more. Rejected: hashing the
+  whole hunk, which churns on the common case to fix the rare one.
+
+- 2026-08-23: **No syntax highlighting inside the diff, stated rather than
+  omitted.** WSP-06 does not ask for it, and consistency with the File tab
+  is a real argument for it. It is declined on three grounds. The diff
+  already paints two backgrounds that carry meaning, and a token colour
+  chosen against the plain code surface is not the same colour against a
+  green or a red wash — so `styles.test.ts` would have to measure eleven
+  `--code-*` tokens against three surfaces in two themes, and several of
+  them would fail, which is the J2 defect re-created deliberately. The
+  reader of a diff is reading the change, and the `+`/`-` prefix plus the
+  wash is what carries it. And a lazy grammar chunk per language, per hunk,
+  inside a bounded render is a cost this tab does not need to pay to be
+  legible. If it is ever added, the contrast matrix is the gate, not the
+  appearance.
+
+- 2026-08-23: **The render budget is applied to what is materialized, and
+  the counts are of the whole change.** The parser walks the entire section
+  either way — the walk is one pass over a string — but stops building line
+  objects at 1,000 lines or 256 KiB, whichever bites first, and names the
+  one that did. So the header's "12 added, 3 deleted" is the file's own
+  change even when the body below it is a bounded portion, and the notice
+  says what portion of what. Counting the painted portion and presenting it
+  as the total is exactly the defect J7 fixed on the File tab. The two
+  bounds are half the File tab's, because a Diff tab paints two sections and
+  should cost what one file preview costs.
+
+- 2026-08-23: **A merge's combined diff is shown as Git wrote it, and said
+  to be.** `git diff` on an unmerged path emits `@@@` headers and two prefix
+  columns, in which "the old side" is not one file. A two-gutter rendering
+  of that would be a confident lie, so the section renders as raw text with
+  a sentence explaining why. The same route carries anything else the parser
+  cannot account for, which is how "degrades to the raw text rather than
+  throwing" is implemented: there is no input for which this tab shows
+  nothing.
+
+- 2026-08-23: **The collapsed-hunk record is bounded at 200 entries.**
+  Identity is content-derived, so editing a file leaves behind the
+  identities of the hunks it used to have, and a device-local record that
+  only ever grows is a defect with a long fuse. The most recent entries are
+  kept, because they are the ones that still name something on screen.
+
+- 2026-08-23: **A previewed markdown file gets its own renderer, not the
+  transcript's.** `components/Markdown.tsx` renders assistant messages: content
+  this application produced in this session, whose links are addresses. A File
+  tab renders arbitrary bytes out of the working tree, including files the user
+  did not write, whose links and images are **repository paths**. Reusing the
+  transcript's renderer would have been safe and wrong: it sends every `href`
+  to `window.open` as a URL, so `../design/notes.md` would resolve against the
+  workspace's own origin and navigate the workspace to a page that does not
+  exist. So `FilePreviewMarkdown` shares the plugin set and the
+  no-raw-HTML rule — that part must not drift — and answers links in three
+  ways: an in-repository path opens another File tab (WSP-05's own rule for
+  activating a file, applied to a link), an `http`/`https`/`mailto` address
+  goes to a real browser tab with `rel="noreferrer noopener"` and says where it
+  goes **in its accessible name**, and everything else — `javascript:`,
+  `data:`, `file:`, a fragment the preview gives no ids for, a path that leaves
+  the workspace — is inert text rather than a link that silently does nothing.
+  Rejected: rendering an inert case as a live anchor carrying its original
+  `href`, which is the one thing the classifier exists to prevent.
+
+- 2026-08-23: **No image element is rendered in a file preview, of any kind.**
+  The plan allowed an inline `data:` image; react-markdown's own sanitiser
+  refuses one, and re-enabling it for untrusted content buys a rare case at the
+  price of the single element class that can carry bytes. Every reference
+  becomes a labelled placeholder naming the resolved target instead, so a
+  document whose diagram is missing says what was there — a blank space reads
+  as a rendering fault, and this one is a decision.
+
+- 2026-08-23: **The highlighting theme names CSS variables rather than
+  colours.** WSP-05 requires highlighting "derived from the active theme's
+  tokens". A bundled Shiki theme carries hex colours chosen against its own
+  background and would ignore `styles.css` entirely; resolving the tokens in
+  JavaScript at highlight time would work but would need a `matchMedia`
+  listener and a re-highlight on every theme change, because this application
+  has three theme blocks and one of them is a media query. Naming
+  `var(--code-*)` in the theme puts the resolution in the cascade, where a
+  theme switch is free. The `--code-*` tokens are aliases of the existing
+  palette except for two hues it has no member for, which are redefined in both
+  dark blocks like every other literal in that file.
+
+- 2026-08-23: **Twenty-one grammars, one dynamic import each, selected by
+  extension through a closed union.** The language id becomes a module
+  specifier, so it may never be a value that arrived over the wire: the
+  file-preview response's `language` falls back to the bare extension for
+  anything the server does not recognise, and it is not used for this at all.
+  `languageForPath` maps an extension to one member of `CodeLanguage` or to
+  `null`, and the grammar table is a `Record` over that union, so a language
+  with no grammar cannot compile. Measured: the entry chunk contains no Shiki,
+  the highlighter is a 148 kB chunk of its own, and each grammar is a chunk of
+  its own from 2.8 kB (JSON) to 797 kB (C++) — none of which is requested until
+  a file of that language is opened.
+
+- 2026-08-23: **Markdown is deliberately absent from the grammar table.** A
+  markdown file's default view is the rendered preview, and its source view
+  exists to show the raw characters; highlighting it would load the markdown
+  grammar, which embeds a dozen others, for the one view a reader switches to
+  in order to stop seeing rendering. It is also what makes "the chunk is not
+  requested until a non-markdown file is opened" a testable claim.
 
 - 2026-08-23: **Tab body hosts are positioned over their group's rectangle, not
   relocated into it.** Decided by the user, from the two options milestone 9's

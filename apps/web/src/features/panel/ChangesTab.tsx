@@ -1,5 +1,6 @@
 import { memo, type JSX } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import type { GitFileStatus } from "@pi-web/contracts";
 
 import { getStatus } from "../../api/client.js";
 import { summarizeChanges } from "../../components/changesSummary.js";
@@ -10,6 +11,46 @@ import type { TabBodyProps } from "./tabBody.js";
 // The working-tree status of one execution scope (WSP-06). Labelled as the
 // current state of a named worktree, never as the thread's output — the two
 // are different claims, and only the first one is true.
+
+/**
+ * How many changed paths are painted at once.
+ *
+ * WSP-09's render budget, which names status lists alongside file listings
+ * and diffs. A working tree with more changes than this is unusual and a
+ * generated one is not — and the notice below always says what was left
+ * out, so a bounded list never reads as a complete one.
+ */
+export const CHANGES_RENDER_LIMIT = 200;
+
+/**
+ * The letter each change kind carries, so the distinction is never in the
+ * colour alone (WSP-06).
+ *
+ * Git's own letters rather than the first letter of the kind's name: `git
+ * status --short` writes `?` for untracked and `U` for unmerged, and taking
+ * initials instead gave `C` to both "copied" and "conflicted" — two kinds
+ * one letter cannot tell apart.
+ */
+const CHANGE_LETTERS: Record<GitFileStatus["kind"], string> = {
+  added: "A",
+  modified: "M",
+  deleted: "D",
+  renamed: "R",
+  copied: "C",
+  untracked: "?",
+  conflicted: "U",
+};
+
+/** The same distinction in words, for a reader who cannot see the letter. */
+const CHANGE_WORDS: Record<GitFileStatus["kind"], string> = {
+  added: "Added",
+  modified: "Modified",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  copied: "Copied",
+  untracked: "Untracked",
+  conflicted: "Conflicted",
+};
 
 export const ChangesTab = memo(function ChangesTab({
   tab,
@@ -68,7 +109,7 @@ export const ChangesTab = memo(function ChangesTab({
         <div className="empty">No changes in this worktree.</div>
       )}
       <ul className="file-list">
-        {files.map((file) => (
+        {files.slice(0, CHANGES_RENDER_LIMIT).map((file) => (
           <li key={file.path}>
             <button
               type="button"
@@ -81,17 +122,31 @@ export const ChangesTab = memo(function ChangesTab({
                   context,
                   path: file.path,
                   collapsedHunks: [],
+                  wrap: false,
                 });
               }}
             >
-              <span className={`change-kind ${file.kind}`}>
-                {file.kind[0]?.toUpperCase()}
+              {/* The change kind, carried by a letter as well as a colour
+                  (WSP-06). The letter is Git's own — `?` for untracked and
+                  `U` for unmerged — because the first letter of the kind's
+                  name gave `C` to both "copied" and "conflicted", which is
+                  a distinction carried by colour alone in everything but
+                  name. The word beside it is what a screen reader reads:
+                  "M" is a letter, not a sentence. */}
+              <span className={`change-kind ${file.kind}`} aria-hidden="true">
+                {CHANGE_LETTERS[file.kind]}
               </span>
+              <span className="sr-only">{`${CHANGE_WORDS[file.kind]}: `}</span>
               <span>{file.path}</span>
             </button>
           </li>
         ))}
       </ul>
+      {files.length > CHANGES_RENDER_LIMIT && (
+        <p className="panel-state">
+          {`Showing the first ${String(CHANGES_RENDER_LIMIT)} of ${String(files.length)} changed files.`}
+        </p>
+      )}
       {files.length > 0 && (
         <p className="panel-state">Select a file to view its diff.</p>
       )}

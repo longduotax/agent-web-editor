@@ -500,6 +500,47 @@ export const TERMINAL_MAX_COLUMNS = 500;
 export const TERMINAL_MIN_ROWS = 2;
 export const TERMINAL_MAX_ROWS = 200;
 
+/**
+ * How many terminals one execution scope may hold at once (WSP-07).
+ *
+ * Exported for the same reason the size bounds are: the browser states the
+ * limit to the user when it is reached, and a number the message invents
+ * separately from the number the server enforces would eventually disagree
+ * with it. Shared threads count against their project scope, isolated
+ * threads against their worktree scope.
+ */
+export const TERMINAL_MAX_PER_SCOPE = 8;
+
+/**
+ * A workspace-relative display path, where `""` is the execution root.
+ *
+ * {@link RelativePathSchema} rejects the empty string, because an empty
+ * segment is how traversal spellings start. A DISPLAYED directory, though,
+ * genuinely can be the root itself, so the root is spelled `""` in what the
+ * server reports and by OMITTING the field in what the client asks for.
+ * Absolute server paths never appear in a browser DTO, here or anywhere.
+ */
+export const WorkspaceDisplayPathSchema = z.union([
+  z.literal(""),
+  RelativePathSchema,
+]);
+
+/**
+ * The terminal rejections a client has to act on differently.
+ *
+ * Reaching the per-scope cap, naming a terminal that is gone, and asking for
+ * a spawn directory outside the execution root each need their own state in
+ * the tab — a cap message, a restart action, a refused path. They used to be
+ * one untyped string, which a client could only tell apart by matching on
+ * prose (D-2).
+ */
+export const TerminalErrorCodeSchema = z.enum([
+  "terminal_limit_reached",
+  "terminal_gone",
+  "terminal_cwd_invalid",
+]);
+export type TerminalErrorCode = z.infer<typeof TerminalErrorCodeSchema>;
+
 /** A proposed size brought inside {@link TerminalClientFrameSchema}'s bounds. */
 export function clampTerminalSize(
   columns: number,
@@ -530,6 +571,21 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     type: z.literal("attach"),
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
+    /**
+     * Which terminal to re-attach to (WSP-07). With one, this claims that
+     * existing terminal — the reload path, which replays its scrollback.
+     * Without one, it takes a new terminal, exactly as `create` does.
+     */
+    terminalId: TerminalIdSchema.optional(),
+    /** Spawn directory for a terminal this frame creates; root when absent. */
+    cwd: RelativePathSchema.optional(),
+  }),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("create"),
+    projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
+    cwd: RelativePathSchema.optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -558,6 +614,15 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
+    /**
+     * Where the replacement starts. A restart disposes the process and
+     * creates another, so the replacement has no directory of its own to
+     * inherit — the tab supplies the one it recorded, which is what makes
+     * "restart carries the working directory forward" true (WSP-07). The
+     * observed directory cannot serve here: it is `null` wherever the
+     * platform cannot answer, and the tab's record is not.
+     */
+    cwd: RelativePathSchema.optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -598,9 +663,42 @@ export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
     type: z.literal("error"),
     projectId: ProjectIdSchema.optional(),
     message: z.string().max(500),
+    code: TerminalErrorCodeSchema.optional(),
+  }),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("cwd"),
+    projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
+    /**
+     * The directory the shell is in, reduced against its execution root:
+     * `""` for the root itself, a relative path for a descendant, and `null`
+     * where it cannot be observed — an unsupported platform, a process the
+     * server cannot see, or a shell that has `cd`'d out of the worktree. A
+     * `null` is not a stale value: the tab shows the directory it was
+     * STARTED in and says so, rather than presenting one as the other.
+     */
+    cwd: WorkspaceDisplayPathSchema.nullable(),
   }),
 ]);
 export type TerminalServerFrame = z.infer<typeof TerminalServerFrameSchema>;
+
+/**
+ * One live terminal of an execution scope, as the listing route reports it.
+ *
+ * The route exists so a reloaded browser can reclaim the shells it has the
+ * ids of rather than orphaning them (WSP-07). `cwd` is the same observed,
+ * workspace-relative value the `cwd` frame carries, and is `null` for the
+ * same reasons.
+ */
+export const TerminalDescriptorSchema = z.object({
+  id: TerminalIdSchema,
+  cwd: WorkspaceDisplayPathSchema.nullable(),
+});
+export const TerminalsResponseSchema = z.object({
+  terminals: z.array(TerminalDescriptorSchema),
+});
+export type TerminalDescriptor = z.infer<typeof TerminalDescriptorSchema>;
 
 export function parseContract<T>(schema: z.ZodType<T>, value: unknown): T {
   return schema.parse(value);

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProjectIdSchema,
   TerminalClientFrameSchema,
+  TerminalIdSchema,
   ThreadIdSchema,
 } from "@pi-web/contracts";
 
@@ -86,7 +87,9 @@ import { TerminalView } from "./TerminalView.js";
 
 const projectId = ProjectIdSchema.parse("10000000-0000-4000-8000-000000000001");
 const threadId = ThreadIdSchema.parse("30000000-0000-4000-8000-000000000001");
-const terminalId = "20000000-0000-4000-8000-000000000001" as const;
+const terminalId = TerminalIdSchema.parse(
+  "20000000-0000-4000-8000-000000000001",
+);
 
 class MockWebSocket extends EventTarget {
   public static readonly OPEN = 1;
@@ -374,9 +377,297 @@ describe("TerminalView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
     expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
       version: 1,
-      type: "attach",
+      type: "create",
       projectId,
       threadId,
     });
+  });
+
+  // WSP-07: a reload re-attaches the tab to its still-running process rather
+  // than orphaning it or starting a second shell. Which of the two happens
+  // is decided by whether the tab has an id to claim.
+  it("claims the terminal it recorded, and creates one only when it has none", () => {
+    stubEnvironment();
+    const { unmount } = render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        terminalId={terminalId}
+        cwd="apps/web"
+      />,
+    );
+    const reattached = MockWebSocket.instances[0];
+    if (reattached === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      reattached.open();
+    });
+    expect(JSON.parse(reattached.sent[0] ?? "{}")).toEqual({
+      version: 1,
+      type: "attach",
+      projectId,
+      threadId,
+      terminalId,
+    });
+    unmount();
+
+    render(
+      <TerminalView projectId={projectId} threadId={threadId} cwd="apps/web" />,
+    );
+    const created = MockWebSocket.instances[1];
+    if (created === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      created.open();
+    });
+    // A create carries the directory the tab recorded, which is what makes
+    // the terminal come back where it was left.
+    expect(JSON.parse(created.sent[0] ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "apps/web",
+    });
+  });
+
+  // The tab's own record of where it is: reported outwards so it survives a
+  // reload, and shown so the user can see it.
+  it("shows and reports the directory the server observes", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        onTerminalId={onTerminalId}
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "apps/web",
+      });
+    });
+
+    expect(onTerminalId).toHaveBeenCalledWith(terminalId);
+    expect(onCwd).toHaveBeenCalledWith("apps/web");
+    expect(screen.getByText("apps/web")).toBeInTheDocument();
+    expect(screen.getByText(/Working directory/)).toBeInTheDocument();
+  });
+
+  // WSP-07: "where the platform cannot observe a running shell's working
+  // directory, the tab shows the directory it was started in and does not
+  // present it as the live one".
+  it("labels an unobservable directory as the one it started in", () => {
+    stubEnvironment();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        cwd="apps/web"
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: null,
+      });
+    });
+
+    expect(screen.getByText(/start directory/)).toBeInTheDocument();
+    expect(screen.getByText("apps/web")).toBeInTheDocument();
+    // Nothing is recorded from an observation that did not happen: the tab
+    // keeps the directory it already had.
+    expect(onCwd).not.toHaveBeenCalled();
+  });
+
+  // The execution root is a real directory and needs a name a user can read.
+  it("names the execution root rather than showing an empty directory", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "",
+      });
+    });
+    expect(screen.getByText("workspace root")).toBeInTheDocument();
+  });
+
+  // WSP-07: a process that is genuinely gone is reported as gone, with an
+  // explicit restart action — and the stale id is dropped, so the restart
+  // creates a shell rather than claiming the dead one again.
+  it("reports a process that is gone, and starts another rather than claiming it", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        terminalId={terminalId}
+        cwd="apps/web"
+        onTerminalId={onTerminalId}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message: "That terminal is no longer running.",
+        code: "terminal_gone",
+      });
+    });
+
+    expect(screen.getByText("Terminal is gone")).toBeInTheDocument();
+    expect(
+      screen.getByText("That terminal is no longer running."),
+    ).toBeInTheDocument();
+    expect(onTerminalId).toHaveBeenCalledWith(null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "apps/web",
+    });
+  });
+
+  // WSP-07: reaching the per-scope limit is "reported as a clear message
+  // rather than a silent failure".
+  it("states the per-scope limit rather than failing silently", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message:
+          "Up to 8 terminals can run in one worktree. Close one to open another.",
+        code: "terminal_limit_reached",
+      });
+    });
+
+    expect(
+      screen.getByText(/Up to 8 terminals can run in one worktree/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No terminal is running")).toBeInTheDocument();
+  });
+
+  // A recorded directory that no longer exists must not wedge the tab: it is
+  // forgotten, so the next start goes to the execution root.
+  it("forgets a directory the workspace refused", () => {
+    stubEnvironment();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        cwd="apps/gone"
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message: "That directory is not available in this worktree.",
+        code: "terminal_cwd_invalid",
+      });
+    });
+
+    expect(onCwd).toHaveBeenCalledWith("");
+    fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+    });
+  });
+
+  // WSP-07: a restart starts the replacement in the tab's recorded
+  // directory, and the tab adopts the new id from the `ready` frame.
+  it("restarts into the directory it last observed, under the new id", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        onTerminalId={onTerminalId}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "apps/web",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "restart",
+      projectId,
+      threadId,
+      terminalId,
+      cwd: "apps/web",
+    });
+
+    const replacement = "20000000-0000-4000-8000-000000000002";
+    act(() => {
+      socket.message({
+        version: 1,
+        type: "ready",
+        projectId,
+        terminalId: replacement,
+      });
+    });
+    expect(onTerminalId).toHaveBeenLastCalledWith(replacement);
   });
 });

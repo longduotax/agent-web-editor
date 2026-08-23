@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { promisify } from "node:util";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
@@ -10,6 +12,7 @@ import type {
   RuntimeEvent,
 } from "../packages/agent-runtime/src/index.js";
 
+import { TERMINAL_MAX_PER_SCOPE } from "../packages/contracts/src/index.js";
 import { buildServer, type WorkspaceServer } from "../apps/server/src/app.js";
 import { parseConfig } from "../apps/server/src/config.js";
 
@@ -93,10 +96,53 @@ async function availablePort(): Promise<number> {
   });
 }
 
+const exec = promisify(execFile);
+
+/**
+ * Git inside the fixture project, and nowhere else.
+ *
+ * The global and system configurations are cut out so a developer's own
+ * settings — a signing key, a template directory, an alias — cannot decide
+ * whether this suite passes. The identity is supplied per commit for the
+ * same reason.
+ */
+async function git(args: string[]): Promise<void> {
+  await exec("git", args, {
+    cwd: projectPath,
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
+}
+
 let server: WorkspaceServer;
 let root: string;
 let projectPath: string;
 let launchUrl: string;
+
+/**
+ * Thirteen nested directories, so the file inside the last of them is a
+ * level-14 row — the depth the hands-on pass measured as unreadable at
+ * `PANEL_MIN_WIDTH`, with names of the length it saw there.
+ */
+const DEEP_CHAIN = [
+  "packages",
+  "integration",
+  "fixtures",
+  "elements",
+  "playwright",
+  "requests",
+  "sessions",
+  "specifications",
+  "storage",
+  "test-support",
+  "utilities",
+  "verification",
+  "workspaces",
+];
 
 test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "pi-web-e2e-panel-"));
@@ -105,6 +151,16 @@ test.beforeAll(async () => {
   await mkdir(state, { mode: 0o700 });
   await mkdir(projectPath);
   await writeFile(join(projectPath, "notes.txt"), "hello\n", "utf8");
+  // The shape that produced J5: a bundle whose whole content is ONE line,
+  // far past the server's 2 MiB read limit, so the 2,000-line budget never
+  // engages and the character count is the only thing that bounds it. The
+  // reporter's file was 4.7 MB with an 878,586-character longest line; this
+  // one is 3 MB, which truncates to the same 2 MiB the server hands over.
+  await writeFile(
+    join(projectPath, "bundle.min.js"),
+    `const bundle="${"payload-".repeat(375_000)}";\n`,
+    "utf8",
+  );
   // One 937-character line, the shape that reproduced F2: the preview's
   // `pre` scrolled horizontally, but its scrollbar sat ~1600px below the
   // visible area of the tab body, so nothing could reach it with a pointer.
@@ -118,18 +174,38 @@ test.beforeAll(async () => {
   // project README beside two hundred dependency copies of the same name,
   // with an ignore rule that says which is which.
   await writeFile(join(projectPath, ".gitignore"), "node_modules\n", "utf8");
-  // Not a working repository — nothing here reads Git — but a real `.git`
-  // directory, so "`.git` is excluded in both modes" is a claim this suite
-  // can actually falsify.
-  await mkdir(join(projectPath, ".git"));
-  await writeFile(
-    join(projectPath, ".git", "HEAD"),
-    "ref: refs/heads/main\n",
-    "utf8",
-  );
   await writeFile(
     join(projectPath, "README.md"),
     "# The project's own README\n",
+    "utf8",
+  );
+  // A document with everything a previewed markdown file has to answer for:
+  // a heading, a link into the repository, a link out of it, and an image
+  // that must never be fetched.
+  await mkdir(join(projectPath, "docs"));
+  await writeFile(
+    join(projectPath, "docs", "guide.md"),
+    [
+      "# Workspace guide",
+      "",
+      "A paragraph, a [local reference](../src/main.ts) and an",
+      "[external one](https://example.com/docs).",
+      "",
+      "![A missing diagram](https://example.com/diagram.png)",
+      "",
+      "- [Down the page](#the-far-heading)",
+      "",
+      // Enough document between the link and its target that a jump is a
+      // real scroll rather than a no-op (J8).
+      ...Array.from({ length: 60 }, (_, index) => `Filler ${String(index)}.\n`),
+      "## The far heading",
+      "",
+      "The end.",
+      "",
+      // And enough after it that the box can actually put the heading at its
+      // top, rather than hitting the end of the document first.
+      ...Array.from({ length: 60 }, (_, index) => `Tail ${String(index)}.\n`),
+    ].join("\n"),
     "utf8",
   );
   await mkdir(join(projectPath, "src", "features"), { recursive: true });
@@ -141,6 +217,20 @@ test.beforeAll(async () => {
   await writeFile(
     join(projectPath, "src", "features", "panel.ts"),
     "export const panel = 1;\n",
+    "utf8",
+  );
+  // Two ordinary directories that exist only to be failed and to be deleted
+  // (H5, H6), and one chain deep enough to reproduce the unreadable indent
+  // at the panel's minimum width (H3): the reported case was level 14, whose
+  // 11.05rem of padding left 44px for a name 128px wide.
+  await mkdir(join(projectPath, "ops"));
+  await writeFile(join(projectPath, "ops", "deploy.sh"), "#!/bin/sh\n", "utf8");
+  await mkdir(join(projectPath, "gone"));
+  await writeFile(join(projectPath, "gone", "leaving.txt"), "bye\n", "utf8");
+  await mkdir(join(projectPath, DEEP_CHAIN.join("/")), { recursive: true });
+  await writeFile(
+    join(projectPath, ...DEEP_CHAIN, "session-storage.spec.ts"),
+    "export const deep = 1;\n",
     "utf8",
   );
   for (let index = 0; index < 200; index += 1) {
@@ -156,6 +246,99 @@ test.beforeAll(async () => {
       "utf8",
     );
   }
+  // The diff fixtures, and the repository they need. Milestone 6 is about
+  // reading real `git diff` output, so this project is a real working tree:
+  // a fabricated `.git` directory would exercise the parser against a string
+  // this suite wrote itself, which is the one thing a unit test already does
+  // better. It is a temporary directory, created and removed by this file,
+  // and no command here touches any repository of the user's.
+  await writeFile(
+    join(projectPath, "diff-target.txt"),
+    `${Array.from({ length: 40 }, (_, index) => `line ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond\nthird\n",
+    "utf8",
+  );
+  // Long on BOTH sides, so the diff has a wide `-` line as well as a wide
+  // `+` one: the two gutters are empty on opposite lines, and K1 has to pin
+  // an empty cell as reliably as a numbered one.
+  await writeFile(
+    join(projectPath, "wide-diff.json"),
+    `[\n  {"note":"${"unreachable-without-horizontal-scrolling-".repeat(24)}"}\n]\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(projectPath, "long-diff.txt"),
+    `${Array.from({ length: 400 }, (_, index) => `original ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  await git(["init", "-q", "-b", "main"]);
+  await git(["add", "-A"]);
+  await git([
+    "-c",
+    "user.name=Workspace panel e2e",
+    "-c",
+    "user.email=e2e@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--no-verify",
+    "-m",
+    "fixture",
+  ]);
+  // Two edits far enough apart that Git writes two hunks, which is what a
+  // per-hunk disclosure needs to be a claim about anything.
+  await writeFile(
+    join(projectPath, "diff-target.txt"),
+    `${Array.from({ length: 40 }, (_, index) =>
+      index === 1
+        ? "line 2 CHANGED"
+        : index === 29
+          ? "line 30 CHANGED"
+          : `line ${String(index + 1)}`,
+    ).join("\n")}\n`,
+    "utf8",
+  );
+  // A staged change, so the tab has both of its labelled sections.
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond STAGED\nthird\n",
+    "utf8",
+  );
+  await git(["add", "staged-target.txt"]);
+  // ...and then edited again, so the same file has a staged change AND an
+  // unstaged one and the tab has to label both.
+  await writeFile(
+    join(projectPath, "staged-target.txt"),
+    "first\nsecond STAGED\nthird UNSTAGED\n",
+    "utf8",
+  );
+  // One diff line far wider than the panel, which is the shape F2 was about.
+  await writeFile(
+    join(projectPath, "wide-diff.json"),
+    `[\n  {"note":"${"reachable-only-by-horizontal-scrolling-".repeat(24)}"}\n]\n`,
+    "utf8",
+  );
+  // A diff taller than the panel, so "the header stays put while the body
+  // scrolls" is a claim about something that scrolls. 400 changed lines is
+  // 800 diff lines, inside the render budget on purpose: this case is about
+  // the geometry and not about the bound.
+  await writeFile(
+    join(projectPath, "long-diff.txt"),
+    `${Array.from({ length: 400 }, (_, index) => `rewritten ${String(index + 1)}`).join("\n")}\n`,
+    "utf8",
+  );
+  // A file Git does not track at all, which the read boundary answers with a
+  // `/dev/null`-style preview: all additions, and no old side.
+  await writeFile(
+    join(projectPath, "untracked-note.txt"),
+    "brand new\nsecond line\n",
+    "utf8",
+  );
   const port = await availablePort();
   const config = parseConfig({
     argv: ["--port", String(port)],
@@ -171,6 +354,16 @@ test.beforeAll(async () => {
   });
   await server.listen({ host: config.host, port });
   launchUrl = server.workspaceContext.launchUrl;
+});
+
+test.afterEach(() => {
+  // A terminal outlives the page that opened it — that is WSP-07, and the
+  // reload cases here depend on it — so every test that opens one leaves a
+  // shell running against this file's single shared execution scope. Eight
+  // of them fill it, and the ninth is refused with the cap message: the
+  // suite would start failing on whichever test happened to run ninth.
+  // Each test therefore leaves the server as it found it.
+  server.workspaceContext.terminals.close();
 });
 
 test.afterAll(async () => {
@@ -203,15 +396,28 @@ interface ProbeElement {
 }
 declare const document: {
   head: { appendChild(node: unknown): void };
+  activeElement: ProbeElement | null;
   documentElement: ProbeElement;
   createElement(tag: string): { textContent: string };
   querySelector(selector: string): ProbeElement | null;
   querySelectorAll(selector: string): Iterable<ProbeElement>;
   elementFromPoint(x: number, y: number): ProbeElement | null;
+  createRange(): {
+    selectNodeContents(node: ProbeElement): void;
+    /** One rectangle per VISUAL row of the selected text (K5). */
+    getClientRects(): Iterable<{ x: number; y: number; width: number }> & {
+      length: number;
+    };
+  };
 };
-declare function getComputedStyle(element: ProbeElement): {
+declare function getComputedStyle(
+  element: ProbeElement,
+  pseudoElement?: string,
+): {
+  content: string;
   display: string;
   fontSize: string;
+  color: string;
   getPropertyValue(property: string): string;
   borderTopColor: string;
   backgroundColor: string;
@@ -221,7 +427,16 @@ declare function getComputedStyle(element: ProbeElement): {
   paddingTop: string;
   paddingBottom: string;
 };
-declare const window: { __sentFrames?: string[] };
+declare const window: {
+  __sentFrames?: string[];
+  innerHeight: number;
+  innerWidth: number;
+  getSelection(): {
+    removeAllRanges(): void;
+    addRange(range: unknown): void;
+    toString(): string;
+  } | null;
+};
 declare const WebSocket: {
   prototype: { send: (this: unknown, data: unknown) => void };
 };
@@ -598,10 +813,22 @@ function closeAffordanceHitBox() {
     return steps;
   };
   const right = reach(1, 0);
+  const left = reach(-1, 0);
   return {
     glyphWidth: Math.round(rect.width),
     glyphHeight: Math.round(rect.height),
-    hitWidth: reach(-1, 0) + right + 1,
+    hitWidth: left + right + 1,
+    /**
+     * How far the hit area's left edge sits to the RIGHT of the tab's own
+     * centre (M1).
+     *
+     * The `min-width` on `.panel-tab` exists to keep this positive, and the
+     * comment that justified it was wrong by a pixel: at 3.5rem a tab named
+     * `src` cleared its own centre by 1.4px, and clicking the middle of one
+     * closed it. Measured here, on the narrowest tab the strip can produce,
+     * so the next person to change either number finds out.
+     */
+    centreClearance: Math.round(cx - left - (tabRect.x + tabRect.width / 2)),
     hitHeight: reach(0, -1) + reach(0, 1) + 1,
     // How far the hit area reaches past the tab's own right edge: anything
     // over zero would put a close control on top of the next tab.
@@ -645,6 +872,9 @@ test("panel tab: the close affordance is big enough to hit", async ({
   // never over the next one.
   expect(box.hitHeight).toBeLessThanOrEqual(box.tabHeight);
   expect(box.pastTabRight).toBe(0);
+  // M1: nor over the tab's own middle, which is where a pointer aiming at
+  // the tab lands. Measured on the shortest title the strip can show.
+  expect(box.centreClearance).toBeGreaterThanOrEqual(8);
   // The strip is still exactly the header token's height: growing the hit
   // area with a pseudo-element rather than with padding is what keeps it
   // there.
@@ -689,11 +919,11 @@ test.describe("on a device with no hover", () => {
  * the middle of that element would land on whichever child is there. The row
  * as the user sees it is its own line.
  */
-function treeRow(page: Page, name: string) {
+function treeRow(page: Page, name: string | RegExp) {
   return page.getByRole("treeitem", { name });
 }
 
-async function clickTreeRow(page: Page, name: string) {
+async function clickTreeRow(page: Page, name: string | RegExp) {
   await treeRow(page, name).locator(".file-tree-line").first().click();
 }
 
@@ -772,7 +1002,10 @@ test("panel files search: the project's own README, not two hundred dependency c
   // Exactly one match, and it is the project's own. Before the ignore rules
   // this search returned two hundred rows, every one of them under
   // `node_modules`, and the project's README was on none of them.
-  const matches = page.locator(".file-list li");
+  // Scoped to the tab that is showing: the Changes tab uses the same
+  // `.file-list` markup and is still mounted behind this one (WSP-09 keeps
+  // a hidden body alive), so an unscoped selector counts its rows too.
+  const matches = page.locator('[role="tabpanel"]:not([hidden]) .file-list li');
   await expect(matches).toHaveCount(1);
   await expect(
     matches.getByRole("button", { name: "README.md" }),
@@ -841,11 +1074,547 @@ test("panel files: the keyboard walks, opens, and closes tree rows", async ({
   // Activating a file opens a File tab, which takes the group; the tree is
   // still there, exactly as it was, behind its own tab.
   await expect(page.getByRole("tab", { name: "main.ts" })).toBeVisible();
+  // H4. The row that opened it is inside the Files body the new tab has just
+  // hidden, so focus used to land on `<body>` and the keyboard user had to
+  // re-issue the focus-panel chord for every file they opened.
+  await expect(page.getByRole("tab", { name: "main.ts" })).toBeFocused();
   await page.getByRole("tab", { name: "Files" }).click();
 
   await src.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(src).toHaveAttribute("aria-expanded", "false");
+});
+
+// H3. At `PANEL_MIN_WIDTH` a level-14 row computed `padding-inline-start:
+// 11.05rem` inside a 248px line, leaving 44px for a name whose natural width
+// is 128px — and the tree did not scroll sideways, so ten consecutive rows
+// read `eleme… playw… reque… sessi…` and the only recovery was the tooltip.
+test("panel files: a deep row stays readable at the panel's minimum width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  // The panel's floor, reached the way a keyboard user reaches it.
+  await page
+    .getByRole("separator", { name: "Resize workspace panel" })
+    .press("Home");
+  for (const name of DEEP_CHAIN) await clickTreeRow(page, name);
+  const deepFile = "session-storage.spec.ts";
+  await expect(page.getByRole("treeitem", { name: deepFile })).toBeVisible();
+  // The indent still encodes the depth; that is what it is for.
+  await expect(page.getByRole("treeitem", { name: deepFile })).toHaveAttribute(
+    "aria-level",
+    String(DEEP_CHAIN.length + 1),
+  );
+
+  const measured = await page.evaluate((name: string) => {
+    const tree = document.querySelector(".file-tree");
+    const rows = [...document.querySelectorAll(".file-tree-name")];
+    const label = rows.find((row) => row.textContent === name) ?? null;
+    const page_ = document.documentElement;
+    const treeRect = tree?.getBoundingClientRect() ?? null;
+    return {
+      // The name is painted in full rather than clipped to an ellipsis...
+      nameClipped: label === null || label.scrollWidth > label.clientWidth + 1,
+      // ...because the tree scrolls sideways to reach it...
+      treeScrolls: tree !== null && tree.scrollWidth > tree.clientWidth,
+      // ...inside its own box, whose bottom edge — and therefore whose
+      // horizontal scrollbar — is on screen (the F2 defect, not repeated).
+      treeBottom:
+        treeRect === null ? -1 : Math.round(treeRect.y + treeRect.height),
+      viewportHeight: window.innerHeight,
+      // ...and the page itself still does not scroll sideways.
+      pageOverflow: page_.scrollWidth - page_.clientWidth,
+    };
+  }, deepFile);
+
+  expect(measured.nameClipped).toBe(false);
+  expect(measured.treeScrolls).toBe(true);
+  expect(measured.treeBottom).toBeLessThanOrEqual(measured.viewportHeight);
+  expect(measured.pageOverflow).toBe(0);
+});
+
+// H5. The pass saw a row that read "Listing ops…" thirty seconds after the
+// server began answering 500 for it, and never saw the error row. Driven
+// here against the real server with the real client, where the recovery half
+// the pass could not confirm is also checked: the row's own retry.
+test("panel files: a failing listing reaches its error row, and the row retries", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("treeitem", { name: "ops" })).toBeVisible();
+
+  let failing = true;
+  await page.route(
+    (url) => url.pathname.endsWith("/files") && url.search.includes("path=ops"),
+    async (route) => {
+      if (!failing) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "internal_error", message: "No." },
+        }),
+      });
+    },
+  );
+
+  await clickTreeRow(page, "ops");
+  await expect(
+    page.getByRole("treeitem", { name: /Could not list ops/ }),
+  ).toBeVisible({ timeout: 15_000 });
+  // One unreadable directory costs its own row and not the tree.
+  await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+
+  failing = false;
+  await clickTreeRow(page, /Could not list ops/);
+  await expect(page.getByRole("treeitem", { name: "deploy.sh" })).toBeVisible();
+});
+
+// H6. A path that is not there answered 500 `internal_error`. The realistic
+// trigger is a directory the tab is still showing because its parent listing
+// was read before the directory was deleted.
+test("panel files: expanding a directory that has been deleted shows its error row", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("treeitem", { name: "gone" })).toBeVisible();
+
+  await rm(join(projectPath, "gone"), { recursive: true, force: true });
+  await clickTreeRow(page, "gone");
+
+  await expect(
+    page.getByRole("treeitem", { name: /Could not list gone/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: /Listing gone/ }),
+  ).toHaveCount(0);
+  // The rest of the tree is untouched.
+  await expect(page.getByRole("treeitem", { name: "README.md" })).toBeVisible();
+});
+
+/**
+ * J1. The File tab's header, at a given panel width.
+ *
+ * The reported defect is a layout one and therefore invisible to jsdom: the
+ * header's path span had `text-overflow: ellipsis` and no
+ * `white-space: nowrap`, so the ellipsis never applied. Measured at the
+ * panel's 280px floor, the path rendered ONE CHARACTER PER LINE in a 10px
+ * column and the header grew from ~24px to 107px — 83px of the file's own
+ * reading area.
+ */
+function headerGeometry() {
+  const body = document.querySelector('[role="tabpanel"]:not([hidden])');
+  const header = document.querySelector(".file-preview > header");
+  const path = document.querySelector(".file-preview > header .file-path");
+  const name = document.querySelector(".file-preview > header .file-path-name");
+  if (body === null || header === null || path === null || name === null)
+    return null;
+  return {
+    headerHeight: header.getBoundingClientRect().height,
+    pathHeight: path.getBoundingClientRect().height,
+    pathWidth: path.getBoundingClientRect().width,
+    // What the name would need against what it was given: the tail of the
+    // path is the half that has to survive the squeeze.
+    nameWidth: name.getBoundingClientRect().width,
+    nameNeeds: name.scrollWidth,
+    nameText: name.textContent ?? "",
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    lineHeight: Number.parseFloat(getComputedStyle(path).fontSize),
+  };
+}
+
+/** Drags the panel's own separator to an exact outer width. */
+async function setPanelWidth(page: Page, width: number) {
+  const separator = page.getByRole("separator", {
+    name: "Resize workspace panel",
+  });
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  const viewport = await page.evaluate(() => window.innerWidth);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(viewport - width, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+}
+
+test("panel file tab: a long path ellipsises to its file name at every panel width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  for (const name of DEEP_CHAIN) await clickTreeRow(page, name);
+  const deepFile = "session-storage.spec.ts";
+  await clickTreeRow(page, deepFile);
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const fullPath = [...DEEP_CHAIN, deepFile].join("/");
+  // Whatever the header has room to paint, it can still say the whole of it.
+  await expect(
+    page.locator(".file-preview > header .file-path"),
+  ).toHaveAttribute("title", fullPath);
+
+  // 550 is the width the reporter's own panel was saved at; 400 and 280 are
+  // the two the defect was measured at, 280 being PANEL_MIN_WIDTH.
+  for (const width of [550, 400, 280]) {
+    await setPanelWidth(page, width);
+    const geometry = await page.evaluate(headerGeometry);
+    expect(geometry).not.toBeNull();
+    if (geometry === null) return;
+
+    // One line. The defect was 88px of path at 280px and 59px at 400px.
+    expect(geometry.pathHeight).toBeLessThan(geometry.lineHeight * 2);
+    // The header itself never eats the reading area again: 107px measured,
+    // and the ceiling here is well below it at every width.
+    expect(geometry.headerHeight).toBeLessThan(100);
+    // The informative half of the path is whole, not clipped: the ellipsis
+    // is spent on the directories in front of it.
+    expect(geometry.nameText).toBe(deepFile);
+    expect(geometry.nameWidth).toBeGreaterThanOrEqual(geometry.nameNeeds - 1);
+    // And none of it is bought with overflow the panel then has to scroll.
+    expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
+  }
+});
+
+/**
+ * J11. The source view's lines, and what a copy of them contains.
+ *
+ * The numbers are `::before` content generated from `data-line`, which is
+ * exactly why a selection cannot reach them — and that is a claim only a real
+ * browser can settle, because jsdom renders no pseudo-elements and has no
+ * selection to speak of.
+ */
+function sourceGeometry() {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview pre',
+  );
+  const first = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview .file-line',
+  );
+  if (pre === null || first === null) return null;
+  const rect = first.getBoundingClientRect();
+  const selection = window.getSelection();
+  let selected = "";
+  if (selection !== null) {
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    selected = selection.toString();
+    selection.removeAllRanges();
+  }
+  return {
+    lines: [...document.querySelectorAll(".file-line")].length,
+    firstNumber: getComputedStyle(first, "::before").content,
+    lineX: rect.x,
+    lineY: rect.y,
+    lineWidth: rect.width,
+    preScrollWidth: pre.scrollWidth,
+    preScrollHeight: pre.scrollHeight,
+    // What a copy of the file would carry, which must be the file.
+    selectionStart: selected.slice(0, 20),
+    selectionLength: selected.length,
+    text: (pre.textContent ?? "").slice(0, 20),
+  };
+}
+
+test("panel file tab: the source view is numbered, and the numbers are not part of the text", async ({
+  page,
+}) => {
+  // Held until the plain text has been measured: the upgrade to highlighted
+  // output must be geometrically identical, and that is only a claim about
+  // the two states if both are measured.
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/syntaxHighlight-.*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "export const main = 1;",
+  );
+
+  const plain = await page.evaluate(sourceGeometry);
+  expect(plain).not.toBeNull();
+  if (plain === null) return;
+  // The gutter is drawn, and it is drawn from the attribute.
+  expect(plain.firstNumber).toBe('"1"');
+  // A selection over the whole `pre` yields the file and nothing else: no
+  // "1", no "2", no gutter at all. This is the requirement that rules out
+  // rendering the number as a text node.
+  expect(plain.selectionStart).toBe("export const main = ");
+  expect(plain.text).toBe("export const main = ");
+
+  release();
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+
+  const highlighted = await page.evaluate(sourceGeometry);
+  expect(highlighted).not.toBeNull();
+  if (highlighted === null) return;
+  // The same geometry across the swap: same lines, same numbers, same box,
+  // same first line in the same place. Within a pixel rather than exactly,
+  // because one text node and a row of spans holding the same characters
+  // shape to sub-pixel-different widths — 191.59375 against 191.625,
+  // measured — and no reader can see a thirtieth of a pixel.
+  expect(highlighted.lines).toBe(plain.lines);
+  expect(highlighted.firstNumber).toBe(plain.firstNumber);
+  const within = (after: number, before: number) =>
+    Math.abs(after - before) <= 1;
+  expect(within(highlighted.lineX, plain.lineX)).toBe(true);
+  expect(within(highlighted.lineY, plain.lineY)).toBe(true);
+  expect(within(highlighted.lineWidth, plain.lineWidth)).toBe(true);
+  expect(within(highlighted.preScrollWidth, plain.preScrollWidth)).toBe(true);
+  expect(within(highlighted.preScrollHeight, plain.preScrollHeight)).toBe(true);
+  // And the decoration did not join the text either.
+  expect(highlighted.selectionLength).toBe(plain.selectionLength);
+  expect(highlighted.selectionStart).toBe(plain.selectionStart);
+});
+
+test("panel file tab: a fragment link moves inside the document it is written in", async ({
+  page,
+}) => {
+  // J8. These rendered inert with the tooltip "This link does not point
+  // anywhere the workspace can open" — a true sentence about the workspace
+  // and a false one about the link, which points at a heading in the
+  // document on screen. End to end because the outcome is a scroll offset,
+  // and jsdom has no scrolling.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  const before = await page.evaluate(() => {
+    const document_ = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown',
+    );
+    return document_ === null ? -1 : document_.scrollTop;
+  });
+  expect(before).toBe(0);
+
+  await page.getByRole("button", { name: "Down the page" }).click();
+
+  const after = await page.evaluate(() => {
+    const document_ = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown',
+    );
+    const heading = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-markdown h2',
+    );
+    if (document_ === null || heading === null) return null;
+    return {
+      scrollTop: document_.scrollTop,
+      // The heading is at the top of the box that scrolls, within a pixel.
+      offset:
+        heading.getBoundingClientRect().y - document_.getBoundingClientRect().y,
+      focused: document.activeElement === heading,
+    };
+  });
+  expect(after).not.toBeNull();
+  if (after === null) return;
+  expect(after.scrollTop).toBeGreaterThan(0);
+  expect(Math.abs(after.offset)).toBeLessThanOrEqual(1);
+  // And the reader is actually there, not merely looking at it.
+  expect(after.focused).toBe(true);
+});
+
+test("panel file tab: a one-line bundle is bounded by characters and says what it left out", async ({
+  page,
+}) => {
+  // J5. The line budget is a proxy for size, and a minified bundle is where
+  // the proxy fails: 2 MiB of this file is 293 lines, so the 2,000-line cap
+  // never engaged and the tab painted 2,097,096 characters into one `pre`
+  // with a `scrollWidth` of 6,594,300px. Measured in a real browser because
+  // `scrollWidth` is a layout answer and jsdom has no layout.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "bundle.min.js");
+  // The read itself, not the header that appears while it is in flight: the
+  // notice below is the first thing that exists only once the content has
+  // arrived, and measuring the `pre` before then measures nothing.
+  await expect(page.getByText(/Only its first 2 MiB were read/)).toBeVisible();
+
+  const painted = await page.evaluate(() => {
+    const pre = document.querySelector(
+      '[role="tabpanel"]:not([hidden]) .file-preview pre',
+    );
+    return {
+      characters: (pre?.textContent ?? "").length,
+      scrollWidth: pre === null ? 0 : pre.scrollWidth,
+      notices: [
+        ...document.querySelectorAll(
+          '[role="tabpanel"]:not([hidden]) .panel-state',
+        ),
+      ].map((element) => element.textContent ?? ""),
+    };
+  });
+
+  expect(painted.characters).toBe(512 * 1024);
+  // It is still a very wide line — that is what the file is — but a bounded
+  // one: 3.9M px against the 15.7M px this same fixture produced before.
+  expect(painted.scrollWidth).toBeLessThan(4_500_000);
+  // Three true sentences, in the same style: what the server read, what this
+  // tab painted of it, and why none of it is coloured. Silence about the
+  // last of those reads as broken.
+  expect(painted.notices.join(" ")).toContain("Only its first 2 MiB were read");
+  expect(painted.notices.join(" ")).toContain(
+    "Showing the first 512 KiB of the 2 MiB that were read",
+  );
+  expect(painted.notices.join(" ")).toContain(
+    "Syntax highlighting is off for this file",
+  );
+});
+
+test("panel file tab: a copy that works and a copy that fails both say so", async ({
+  page,
+  context,
+}) => {
+  // J4. Reported from the running application: a failing `writeText`
+  // produced an `unhandledrejection` and NOTHING on screen changed, and a
+  // succeeding one changed nothing either. Both halves are checked here
+  // rather than only in jsdom, because "nothing on screen changed" is a
+  // claim about the screen.
+  await context.grantPermissions(["clipboard-write"]);
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "notes.txt");
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+
+  const status = page.locator(".panel-announcement");
+  await page.getByRole("button", { name: "Copy path" }).click();
+  await expect(status).toHaveText("Copied the file path to the clipboard.");
+  // The panel's ONE live region, shared with the split refusal and the drag
+  // narration rather than a second one competing with it.
+  await expect(status).toHaveAttribute("role", "status");
+
+  // A clipboard that refuses, which is an ordinary state: a denied
+  // permission, an unfocused document, an insecure context.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error("denied")),
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Copy contents" }).click();
+  await expect(status).toHaveText(
+    "Could not copy the file's contents: the browser refused access to the clipboard.",
+  );
+});
+
+/**
+ * The File tab's source view, wrapped (K5).
+ *
+ * The diff's twin, measured the same way and for the same reason: a Range
+ * over the text answers per visual row, where the `inline-block` that bounds
+ * it has exactly one border box.
+ */
+function previewWrapGeometry() {
+  const pre = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .file-preview > pre',
+  );
+  // The file's LONGEST line, not its first: `wide.json` opens with `[`, and
+  // a line that fits is not a line that wraps.
+  let text: ProbeElement | null = null;
+  for (const candidate of pre?.querySelectorAll(".file-line-text") ?? [])
+    if ((candidate.textContent ?? "").length > (text?.textContent ?? "").length)
+      text = candidate;
+  if (pre === null || text === null) return null;
+  const box = pre.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const byRow = new Map<number, number>();
+  for (const row of range.getClientRects()) {
+    const y = Math.round(row.y);
+    byRow.set(y, Math.min(byRow.get(y) ?? Number.POSITIVE_INFINITY, row.x));
+  }
+  const lefts = [...byRow.values()].map((left) => Math.round(left - box.x));
+  return {
+    overflowX: pre.scrollWidth - pre.clientWidth,
+    rows: byRow.size,
+    // Every row begins at the same place, past the gutter — which is what
+    // makes a continuation row read as one.
+    distinctLefts: [...new Set(lefts)],
+    // The gutter is generated content, so its width is measured through the
+    // first row's own offset rather than read off an element.
+    textLeft: Math.round(text.getBoundingClientRect().x - box.x),
+    numbered: [
+      ...document.querySelectorAll(
+        '[role="tabpanel"]:not([hidden]) .file-preview > pre .file-line',
+      ),
+    ].length,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  };
+}
+
+test("panel file tab: the source view wraps on request, numbering the logical line once", async ({
+  page,
+}) => {
+  // K5 on the other half of the scope addition. Same three claims as the
+  // diff's: nothing scrolls sideways, a logical line keeps ONE number
+  // however many rows it takes, and every row begins past the gutter so a
+  // continuation cannot read as a new line.
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await page.getByRole("treeitem", { name: "wide.json" }).click();
+  await expect(
+    page.getByRole("button", { name: "Copy contents" }),
+  ).toBeVisible();
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  const scrolling = await page.evaluate(previewWrapGeometry);
+  expect(scrolling).not.toBeNull();
+  if (scrolling === null) return;
+  expect(scrolling.overflowX).toBeGreaterThan(0);
+  expect(scrolling.rows).toBe(1);
+
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  const wrapped = await page.evaluate(previewWrapGeometry);
+  expect(wrapped).not.toBeNull();
+  if (wrapped === null) return;
+  expect(wrapped.overflowX).toBeLessThanOrEqual(0);
+  expect(wrapped.pageOverflowX).toBeLessThanOrEqual(0);
+  expect(wrapped.rows).toBeGreaterThan(1);
+  // One number for the logical line, not one per row.
+  expect(wrapped.numbered).toBe(scrolling.numbered);
+  // Every row starts in the same column, and that column is past the gutter.
+  expect(wrapped.distinctLefts).toHaveLength(1);
+  expect(wrapped.distinctLefts[0]).toBeGreaterThanOrEqual(wrapped.textLeft);
+  expect(wrapped.textLeft).toBeGreaterThan(0);
+
+  // And it is the tab's own state (WSP-04).
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("panel file preview: a long line's scrollbar is on screen at every panel width", async ({
@@ -857,6 +1626,10 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   // Overlay scrollbars cost nothing visible; the reporter's machine does not
   // have them, and neither does this measurement.
@@ -885,6 +1658,204 @@ test("panel file preview: a long line's scrollbar is on screen at every panel wi
     expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
     expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
   }
+});
+
+// Milestone 5: the File tab (WSP-05, acceptance 5).
+//
+// End to end because none of it exists in jsdom: whether a chunk was
+// requested, when it was requested, and what colour a token actually
+// computes to are all questions about a real browser loading real assets.
+
+/**
+ * What a highlighted token is painted, against what the body text is, and
+ * against what the stylesheet's own token says in the active theme.
+ *
+ * One function, because it is serialized into the page: a helper it called
+ * would not travel with it.
+ */
+function tokenColours() {
+  const token = document.querySelector(".file-preview .file-token");
+  const pre = document.querySelector(".file-preview pre");
+  if (token === null || pre === null) return null;
+  return {
+    token: getComputedStyle(token).color,
+    plain: getComputedStyle(pre).color,
+    declaredKeyword: getComputedStyle(document.documentElement)
+      .getPropertyValue("--code-keyword")
+      .trim(),
+  };
+}
+
+/** `#rrggbb` as the `rgb(r, g, b)` a computed style reports. */
+function asRgb(hex: string): string {
+  const value = Number.parseInt(hex.replace("#", ""), 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgb(${String(red)}, ${String(green)}, ${String(blue)})`;
+}
+
+test("panel file tab: markdown renders formatted, fetches no image, and its source view survives a reload", async ({
+  page,
+}) => {
+  const fetched: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("example.com")) fetched.push(request.url());
+  });
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+
+  // Formatted output, not the file's characters.
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+  await expect(page.locator(".file-preview pre")).toHaveCount(0);
+
+  // No image element exists, so no request was ever issued for one — the
+  // absence of the element is the mechanism, and the absence of the request
+  // is what it buys.
+  await expect(page.locator(".file-preview img")).toHaveCount(0);
+  await expect(page.getByText(/A missing diagram — not loaded/)).toBeVisible();
+  expect(fetched).toEqual([]);
+
+  // An address leaves for a real browser tab and says so; a repository path
+  // is not an address at all.
+  const external = page.getByRole("link", { name: /external one/ });
+  await expect(external).toHaveAttribute("target", "_blank");
+  await expect(external).toHaveAttribute("rel", "noreferrer noopener");
+  await expect(
+    page.getByRole("button", { name: /local reference/ }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "View source" }).click();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+
+  // The choice is on the tab record, so it is still there after a reload
+  // (WSP-04) — and the way back is still offered.
+  await page.reload();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+  await page.getByRole("button", { name: "View preview" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+});
+
+test("panel file tab: a link into the repository opens that file in its own tab", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: /local reference/ }).click();
+
+  // `../src/main.ts` from `docs/guide.md`, resolved against the file it was
+  // written in, opened as a File tab of its own rather than navigating.
+  const opened = page.getByRole("tab", { name: "main.ts" });
+  await expect(opened).toBeVisible();
+  await expect(opened).toHaveAttribute("aria-selected", "true");
+  // The VISIBLE body: every mounted tab keeps its own, and the one the user
+  // is looking at is the one that must name the file that was linked.
+  await expect(
+    page.locator(
+      '[role="tabpanel"]:not([hidden]) .file-preview > header .file-path',
+    ),
+  ).toHaveText("src/main.ts");
+});
+
+test("panel file tab: a code file is readable before highlighting arrives, and coloured from the theme after", async ({
+  page,
+}) => {
+  // The chunk is held until the assertions about the plain text have run:
+  // WSP-05 requires the file to be readable throughout, and "highlighting
+  // never blocks first paint" is only a claim about the time before it
+  // arrives.
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/syntaxHighlight-.*\.js$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+
+  const preview = page.locator(".file-preview pre");
+  await expect(preview).toContainText("export const main = 1;");
+  await expect(page.locator(".file-preview .file-token")).toHaveCount(0);
+
+  release();
+
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+  // The text is still the file's own text, unchanged by the decoration.
+  await expect(preview).toContainText("export const main = 1;");
+
+  const light = await page.evaluate(tokenColours);
+  expect(light).not.toBeNull();
+  if (light === null) return;
+  // The colour is the stylesheet's token, resolved by the cascade — not a
+  // colour the highlighter brought with it (WSP-05).
+  expect(light.token).toBe(asRgb(light.declaredKeyword));
+  expect(light.token).not.toBe(light.plain);
+
+  // And a theme switch re-maps it with no reload and no re-highlight: the
+  // same DOM node, the same inline `var(--code-keyword)`, the other block's
+  // value.
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await page.evaluate(tokenColours);
+  expect(dark).not.toBeNull();
+  if (dark === null) return;
+  expect(dark.declaredKeyword).not.toBe(light.declaredKeyword);
+  expect(dark.token).toBe(asRgb(dark.declaredKeyword));
+});
+
+test("panel file tab: the highlighter is not requested until a code file is opened", async ({
+  page,
+}) => {
+  const chunks: string[] = [];
+  page.on("request", (request) => {
+    if (/syntaxHighlight-|typescript-/.test(request.url()))
+      chunks.push(new URL(request.url()).pathname);
+  });
+
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await clickTreeRow(page, "docs");
+  await clickTreeRow(page, "guide.md");
+  await expect(
+    page.getByRole("heading", { name: "Workspace guide" }),
+  ).toBeVisible();
+
+  // A markdown file is rendered by the preview, and its source view is the
+  // file's characters: neither is highlighted, so neither pays for Shiki.
+  await page.getByRole("button", { name: "View source" }).click();
+  await expect(page.locator(".file-preview pre")).toContainText(
+    "# Workspace guide",
+  );
+  expect(chunks).toEqual([]);
+
+  await page.getByRole("tab", { name: "Files" }).click();
+  await clickTreeRow(page, "src");
+  await clickTreeRow(page, "main.ts");
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
+
+  // Now, and only now: the highlighter, and the one grammar this file needs.
+  expect(chunks.some((path) => path.includes("syntaxHighlight-"))).toBe(true);
+  expect(chunks.some((path) => path.includes("typescript-"))).toBe(true);
 });
 
 // G1. WSP-09's "returning to it restores its scroll position" and WSP-03's
@@ -947,6 +1918,10 @@ test("panel file tab: returning to a tab restores the scroll offset of the eleme
   await expect(
     page.getByRole("button", { name: "Copy contents" }),
   ).toBeVisible();
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   const scrolled = await page.evaluate(scrollPreview, { top: 800, left: 1200 });
   expect(scrolled).not.toBeNull();
@@ -1402,15 +2377,21 @@ async function pointsOfGroup(page: Page, index: number) {
 }
 
 /** How many times the page has opened a terminal socket and attached. */
-async function attachFrameCount(page: Page): Promise<number> {
+/**
+ * How many times the page has asked the server for a shell.
+ *
+ * Both spellings count: `create` takes a new terminal and `attach` claims a
+ * recorded one, and which of the two a view sends depends on whether its tab
+ * has an id (WSP-07). What these tests are asking is how many times it
+ * asked at all.
+ */
+async function startFrameCount(page: Page): Promise<number> {
   const frames = await page.evaluate(() => window.__sentFrames ?? []);
   return frames.filter((frame) => {
     const parsed: unknown = JSON.parse(frame);
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as { type?: unknown }).type === "attach"
-    );
+    if (typeof parsed !== "object" || parsed === null) return false;
+    const type = (parsed as { type?: unknown }).type;
+    return type === "attach" || type === "create";
   }).length;
 }
 
@@ -1558,6 +2539,52 @@ test("panel drag: Escape leaves the layout exactly as it was", async ({
   const after = await page.evaluate(panelLayout);
   expect(after).toEqual({ ...before, dropZones: 0 });
   await expect(page.getByRole("status")).toContainText("Drag cancelled");
+});
+
+// H7. A second `pointerdown` mid-drag replaced the tracking record with a
+// non-dragging one; its release took the "never became a drag" early return
+// and left the ghost, both groups' drop zones, and the source tab at 0.45
+// opacity on screen with no gesture behind them — and Escape, which cancels
+// through the same tracking record, could not clear them either. Driven with
+// a real pointer here, because whether Chrome delivers that second press at
+// all was the one thing the hands-on pass could not establish.
+test("panel drag: an interrupted gesture leaves no drag behind, and Escape recovers", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await openPanelTab(page, "Files");
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  const before = await page.evaluate(panelLayout);
+  const only = await pointsOfGroup(page, 0);
+  await dragTabOver(page, "Changes", only.right);
+  expect((await page.evaluate(panelLayout)).dropZones).toBe(1);
+
+  // The interruption: a second press, then the release that follows it.
+  await page.mouse.down();
+  await page.mouse.up();
+
+  const stranded = await page.evaluate(() => {
+    const tab = document.querySelector(".panel-tab.dragging");
+    return {
+      zones: [...document.querySelectorAll(".panel-drop-zones")].length,
+      ghost: document.querySelector(".panel-drag-ghost") !== null,
+      dimmed: tab === null ? null : getComputedStyle(tab).opacity,
+    };
+  });
+  expect(stranded).toEqual({ zones: 0, ghost: false, dimmed: null });
+  expect(await page.evaluate(panelLayout)).toEqual({
+    ...before,
+    dropZones: 0,
+  });
+
+  // And Escape recovers from any state rather than only from one whose
+  // gesture is still being tracked.
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(panelLayout)).toEqual({
+    ...before,
+    dropZones: 0,
+  });
 });
 
 test("panel drag: releasing outside every drop target changes nothing", async ({
@@ -1791,6 +2818,10 @@ test("panel drag: a dragged tab keeps the scroll offset of the element that scro
   await openPanelTab(page, "Files");
   await page.getByRole("treeitem", { name: "wide.json" }).click();
   await expect(page.getByRole("tab")).toHaveCount(3);
+  // Settle the highlighting first. It replaces the `pre`'s children once it
+  // arrives, and a measurement taken against the plain text would be about
+  // content the user is no longer looking at.
+  await expect(page.locator(".file-preview .file-token").first()).toBeVisible();
 
   // Two groups, the File tab alone in the second one, so dropping it back
   // into the first is a real move between groups.
@@ -1853,7 +2884,7 @@ test("panel drag: a dragged terminal keeps its shell and its scrollback", async 
   await expect(
     page.getByRole("separator", { name: "Resize panel groups" }),
   ).toBeVisible();
-  const attachesBefore = await attachFrameCount(page);
+  const attachesBefore = await startFrameCount(page);
   expect(attachesBefore).toBeGreaterThan(0);
 
   const first = await pointsOfGroup(page, 0);
@@ -1874,5 +2905,859 @@ test("panel drag: a dragged terminal keeps its shell and its scrollback", async 
   await expect(page.locator(".xterm-rows")).toContainText(
     "dragged-marker-6620",
   );
-  expect(await attachFrameCount(page)).toBe(attachesBefore);
+  expect(await startFrameCount(page)).toBe(attachesBefore);
+});
+
+// Milestone 6: the Diff tab (WSP-06, acceptance 6).
+//
+// End to end because every claim below is one jsdom cannot settle: a number
+// drawn as generated content, what a selection of the diff actually
+// contains, whether a header stays put while a body scrolls, and where a
+// long line's scrollbar ends up. The working tree is a real repository and
+// the diffs are real `git diff` output, for the same reason milestone 4's
+// tree was driven against real files.
+
+/** The Changes row for one path, whose name now carries the kind as a word. */
+function changeRow(page: Page, path: string) {
+  return page.getByRole("button", { name: new RegExp(`${path}$`) });
+}
+
+/**
+ * Every painted diff line: its two gutters as the browser draws them, and
+ * the text of the line itself.
+ *
+ * The numbers are `::before` content generated from `data-old` and
+ * `data-new`, which is exactly why a selection cannot reach them — and that
+ * is a claim only a real browser can settle, because jsdom renders no
+ * pseudo-elements.
+ */
+function diffLineNumbers() {
+  // The trailing zero-width space is what keeps an EMPTY gutter a box the
+  // browser will pin (K1); it is not part of the number, so it comes off
+  // here along with the quotes the serialisation adds.
+  const unquote = (value: string) =>
+    value === "none" ? "" : value.replace(/^"|"$/g, "").replace(/\u200b/g, "");
+  return [
+    ...document.querySelectorAll(
+      '[role="tabpanel"]:not([hidden]) .diff-lines .diff-line',
+    ),
+  ].map((line) => {
+    const body = line.querySelector(".diff-line-body");
+    return {
+      old: unquote(getComputedStyle(line, "::before").content),
+      new:
+        body === null
+          ? ""
+          : unquote(getComputedStyle(body, "::before").content),
+      text: (body?.textContent ?? "").replace(/\n$/, ""),
+    };
+  });
+}
+
+/** What a copy of the visible diff would carry. */
+function diffSelection() {
+  const lines = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-lines',
+  );
+  const selection = window.getSelection();
+  if (lines === null || selection === null) return null;
+  const range = document.createRange();
+  range.selectNodeContents(lines);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const selected = selection.toString();
+  selection.removeAllRanges();
+  return { selected, text: lines.textContent ?? "" };
+}
+
+/** The pinned header, the box that scrolls, and the tab body around them. */
+function diffGeometry() {
+  const body = document.querySelector('[role="tabpanel"]:not([hidden])');
+  const header = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-view > header',
+  );
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (body === null || header === null || scroller === null) return null;
+  const bodyRect = body.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  return {
+    headerY: header.getBoundingClientRect().y,
+    scrollTop: scroller.scrollTop,
+    overflowY: scroller.scrollHeight - scroller.clientHeight,
+    overflowX: scroller.scrollWidth - scroller.clientWidth,
+    scrollerBottom: scrollerRect.y + scrollerRect.height,
+    viewBottom: bodyRect.y + bodyRect.height,
+    bodyOverflowX: body.scrollWidth - body.clientWidth,
+    bodyOverflowY: body.scrollHeight - body.clientHeight,
+  };
+}
+
+/**
+ * What a copy of the WHOLE diff body would carry (K3).
+ *
+ * `diffSelection` above selects one hunk's lines, which is the case that was
+ * already right. This one selects everything inside the scrolling box, which
+ * is what a reader dragging from the top of a diff to the bottom of it
+ * actually selects: several hunks, both labelled sections, and every piece of
+ * chrome between them.
+ */
+function diffWholeSelection() {
+  const body = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  const selection = window.getSelection();
+  if (body === null || selection === null) return null;
+  const range = document.createRange();
+  range.selectNodeContents(body);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const selected = selection.toString();
+  selection.removeAllRanges();
+  return selected;
+}
+
+/**
+ * The pinned first column at one horizontal scroll offset (K1).
+ *
+ * Reported by hit-testing rather than by reading a rule, because what WSP-06
+ * requires is that the prefix and the numbers are ON SCREEN, and a
+ * `position: sticky` that a containing block quietly defeats computes
+ * exactly the same as one that works. `elementFromPoint` answers with the
+ * element that is actually painted at a point: `.diff-line` for the old
+ * gutter's `::before`, `.diff-line-body` for the new side's, and
+ * `.diff-line-prefix` for the prefix itself — and, if the pinning failed,
+ * `.diff-line-text`, which is the scrolled code that would have taken their
+ * place.
+ */
+function diffPinnedColumn(request: { scrollLeft: number; kind: string }) {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (scroller === null) return null;
+  scroller.scrollLeft = request.scrollLeft;
+  const line = document.querySelector(
+    `[role="tabpanel"]:not([hidden]) .diff-lines .diff-${request.kind}`,
+  );
+  const prefix = line?.querySelector(".diff-line-prefix") ?? null;
+  if (line === null || prefix === null) return null;
+  const box = scroller.getBoundingClientRect();
+  const rect = prefix.getBoundingClientRect();
+  const y = rect.y + rect.height / 2;
+  // Sampled across the column rather than at three guessed offsets: the
+  // cells are `ch`-sized from the diff's own largest number, so where each
+  // one ends is not a constant this file can know. The panel's own resize
+  // separator overlays the first few pixels of everything in the panel and
+  // is dropped by the caller.
+  const scan: string[] = [];
+  for (let x = box.x + 1; x < rect.x + rect.width; x += 1) {
+    const hit = document.elementFromPoint(x, y);
+    const name = hit === null ? "(nothing)" : hit.className;
+    if (scan[scan.length - 1] !== name) scan.push(name);
+  }
+  return {
+    scrollLeft: scroller.scrollLeft,
+    range: scroller.scrollWidth - scroller.clientWidth,
+    boxLeft: box.x,
+    boxRight: box.x + box.width,
+    prefixLeft: rect.x,
+    prefixRight: rect.x + rect.width,
+    prefixText: prefix.textContent,
+    scan,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  };
+}
+
+/**
+ * A wrapped diff, measured (K5).
+ *
+ * Three claims, and jsdom can settle none of them: that nothing scrolls
+ * sideways any more, that a logical line is numbered ONCE however many
+ * visual rows it takes, and that a continuation row begins under the code
+ * rather than at the panel's left edge — which is what stops a wrapped row
+ * reading as a new line.
+ */
+function diffWrapGeometry() {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  const line = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-lines .diff-add',
+  );
+  const text = line?.querySelector(".diff-line-text") ?? null;
+  const prefix = line?.querySelector(".diff-line-prefix") ?? null;
+  if (scroller === null || line === null || text === null || prefix === null)
+    return null;
+  const box = scroller.getBoundingClientRect();
+  // A Range over the text rather than the element's own rectangles: the
+  // wrapped text lives in an `inline-block`, which has exactly one border
+  // box however many rows its content takes. A range answers per line box,
+  // which is the thing being counted.
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  const rows = range.getClientRects();
+  // Grouped by row rather than taken one rect at a time: a range can report
+  // more than one rectangle for a single visual row — measured, the second
+  // rect of row one began two characters in — and the question here is where
+  // each ROW begins, which is the leftmost rectangle on that row.
+  const byRow = new Map<number, number>();
+  for (const row of rows) {
+    const y = Math.round(row.y);
+    byRow.set(y, Math.min(byRow.get(y) ?? Number.POSITIVE_INFINITY, row.x));
+  }
+  return {
+    overflowX: scroller.scrollWidth - scroller.clientWidth,
+    // How many visual rows the one logical line took...
+    rows: byRow.size,
+    // ...and where each of them starts, relative to the scrolling box.
+    rowLefts: [...byRow.values()].map((left) => Math.round(left - box.x)),
+    // Where the pinned column ends, which is where a continuation row has
+    // to begin if it is to read as a continuation.
+    codeLeft: Math.round(
+      prefix.getBoundingClientRect().x +
+        prefix.getBoundingClientRect().width -
+        box.x,
+    ),
+    // One number, for one logical line, however many rows it took.
+    numbered: [
+      ...document.querySelectorAll(
+        '[role="tabpanel"]:not([hidden]) .diff-lines .diff-line',
+      ),
+    ].length,
+    pageOverflowX:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  };
+}
+
+/** Scrolls the diff's one scrolling box, and reports where it got to. */
+function scrollDiffBody(by: number) {
+  const scroller = document.querySelector(
+    '[role="tabpanel"]:not([hidden]) .diff-body',
+  );
+  if (scroller === null) return -1;
+  scroller.scrollTop = by;
+  return scroller.scrollTop;
+}
+
+test("panel diff: two hunks, two gutters, and a collapse that survives a reload", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "diff-target.txt").click();
+  await expect(
+    page.getByRole("tab", { name: "diff-target.txt" }),
+  ).toBeVisible();
+
+  // Two edits thirty lines apart are two hunks, each under its own header.
+  const hunks = page.getByRole("button", { name: /^@@/ });
+  await expect(hunks).toHaveCount(2);
+  // K4: the header and the tally are separated in the computed name, so a
+  // screen reader does not read "…at at plus one minus one" as one run-on.
+  // It was `"@@ … @@ Ground truth is never a field on `Valuation`.+2 -0"` —
+  // "period plus two minus zero" — with nothing between the two spans.
+  await expect(
+    page.getByRole("button", { name: /^@@ -1,5 \+1,5 @@\s*,\s*\+1 -1$/ }),
+  ).toBeVisible();
+  await expect(page.getByText("2 added")).toBeVisible();
+  await expect(page.getByText("2 deleted")).toBeVisible();
+  await expect(page.getByText("Unstaged")).toBeVisible();
+
+  // The arithmetic, drawn: a context line advances both sides, a removed
+  // line only the old, an added line only the new — so the two gutters stop
+  // agreeing at the change and never agree again inside the hunk.
+  const numbers = await page.evaluate(diffLineNumbers);
+  expect(numbers.slice(0, 4)).toEqual([
+    { old: "1", new: "1", text: " line 1" },
+    { old: "2", new: "", text: "-line 2" },
+    { old: "", new: "2", text: "+line 2 CHANGED" },
+    { old: "3", new: "3", text: " line 3" },
+  ]);
+  // The second hunk starts where Git says it does, not where the first one
+  // left off.
+  const second = numbers.findIndex((line) => line.text === "-line 30");
+  expect(second).toBeGreaterThan(0);
+  expect(numbers[second]).toEqual({ old: "30", new: "", text: "-line 30" });
+  expect(numbers[second + 1]).toEqual({
+    old: "",
+    new: "30",
+    text: "+line 30 CHANGED",
+  });
+
+  // Collapsing is state the TAB owns (WSP-04), which is what carries it
+  // through a reload.
+  await hunks.first().click();
+  await expect(hunks.first()).toHaveAttribute("aria-expanded", "false");
+  // Hidden rather than unmounted, so collapsing costs no layout and
+  // expanding re-does no work (WSP-09).
+  await expect(page.getByText("-line 2", { exact: true })).toBeHidden();
+  await expect(page.getByText("-line 30", { exact: true })).toBeVisible();
+
+  await page.reload();
+
+  const restored = page.getByRole("button", { name: /^@@/ });
+  await expect(restored.first()).toHaveAttribute("aria-expanded", "false");
+  await expect(restored.nth(1)).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("-line 2", { exact: true })).toBeHidden();
+  await expect(page.getByText("-line 30", { exact: true })).toBeVisible();
+
+  // And it opens again from where it was left.
+  await restored.first().click();
+  await expect(page.getByText("-line 2", { exact: true })).toBeVisible();
+});
+
+test("panel diff: a copied selection is the diff, with no line numbers in it", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "diff-target.txt").click();
+  await expect(page.getByText("+line 2 CHANGED")).toBeVisible();
+
+  const copied = await page.evaluate(diffSelection);
+  expect(copied).not.toBeNull();
+  if (copied === null) return;
+  // The requirement that rules out rendering a number as a text node: the
+  // first line of a copy is the diff's first line, not "1 1  line 1".
+  expect(copied.selected.split("\n")[0]).toBe(" line 1");
+  expect(copied.selected).toContain("+line 2 CHANGED");
+  expect(copied.text).toBe(copied.selected);
+  // Nothing in the copy carries a gutter: no line begins with a digit,
+  // because every diff line begins with a space, a plus or a minus.
+  expect(
+    copied.selected.split("\n").filter((line) => /^\d/.test(line)),
+  ).toEqual([]);
+});
+
+test("panel diff: the staged and the unstaged change are labelled separately", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "staged-target.txt").click();
+
+  await expect(page.getByText("Staged", { exact: true })).toBeVisible();
+  await expect(page.getByText("Unstaged", { exact: true })).toBeVisible();
+  await expect(page.getByText("+second STAGED")).toBeVisible();
+  await expect(page.getByText("+third UNSTAGED")).toBeVisible();
+  // Read-only: nothing here stages, unstages, reverts or commits (an
+  // explicit product non-goal). The regex is anchored, because the tab
+  // itself is called `staged-target.txt`.
+  await expect(
+    page.getByRole("button", {
+      name: /^(stage|unstage|revert|discard|commit|apply)\b/i,
+    }),
+  ).toHaveCount(0);
+});
+
+test("panel diff: an untracked file is all additions, with no old side", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "untracked-note.txt").click();
+  await expect(page.getByText("+brand new")).toBeVisible();
+
+  await expect(page.getByText("new file mode 100644")).toBeVisible();
+  const numbers = await page.evaluate(diffLineNumbers);
+  expect(numbers).toEqual([
+    { old: "", new: "1", text: "+brand new" },
+    { old: "", new: "2", text: "+second line" },
+  ]);
+  await expect(page.getByText("2 added")).toBeVisible();
+  await expect(page.getByText("0 deleted")).toBeVisible();
+});
+
+test("panel diff: the header stays put while the body scrolls", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "long-diff.txt").click();
+  await expect(page.getByText("-original 1", { exact: true })).toBeVisible();
+
+  const before = await page.evaluate(diffGeometry);
+  expect(before).not.toBeNull();
+  if (before === null) return;
+  // There is genuinely something to scroll.
+  expect(before.overflowY).toBeGreaterThan(0);
+
+  const reached = await page.evaluate(scrollDiffBody, 400);
+  expect(reached).toBeGreaterThan(0);
+
+  const after = await page.evaluate(diffGeometry);
+  expect(after).not.toBeNull();
+  if (after === null) return;
+  // The header did not move, and the scrolling box did.
+  expect(after.headerY).toBe(before.headerY);
+  expect(after.scrollTop).toBeGreaterThan(0);
+  // And the tab body itself never became the scroller (F2): the box that
+  // scrolls is bounded to the tab's own height.
+  expect(after.bodyOverflowY).toBeLessThanOrEqual(0);
+  expect(after.scrollerBottom).toBeLessThanOrEqual(after.viewBottom + 1);
+});
+
+test("panel diff: a long diff line's scrollbar is on screen at every panel width", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+
+  // Overlay scrollbars cost nothing visible; the reporter's machine does not
+  // have them, and neither does this measurement.
+  await page.evaluate(forceClassicScrollbars);
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    const geometry = await page.evaluate(diffGeometry);
+    expect(geometry).not.toBeNull();
+    if (geometry === null) return;
+
+    // The case under test: content really does extend past the right edge...
+    expect(geometry.overflowX).toBeGreaterThan(0);
+    // ...and the bottom edge of the box that scrolls — where its scrollbar
+    // is drawn — is inside the visible area rather than a thousand pixels
+    // below it.
+    expect(geometry.scrollerBottom).toBeLessThanOrEqual(
+      geometry.viewBottom + 1,
+    );
+    // And the overflow stays contained: the panel never scrolls sideways.
+    expect(geometry.bodyOverflowX).toBeLessThanOrEqual(0);
+    expect(geometry.bodyOverflowY).toBeLessThanOrEqual(0);
+  }
+});
+
+/**
+ * What is not one of the diff's own cells.
+ *
+ * The panel's resize separator sits over the first pixels of everything in
+ * the panel, and the `pre` itself shows through a sub-pixel sliver at its own
+ * left edge, because the scroller's rectangle starts on a fraction. Neither
+ * is the scrolled code, which is the thing this scan exists to rule out.
+ */
+function notTheDiffsOwnEdge(name: string): boolean {
+  return !name.includes("panel-resizer") && !/^diff-lines\b/.test(name);
+}
+
+test("panel changes: a status list past the render budget is bounded and says so", async ({
+  page,
+}) => {
+  // WSP-09 names status lists in the same breath as file listings and
+  // diffs. The bound has a component case; what it had never had is a real
+  // working tree with more changed paths than the budget, reaching the
+  // browser through the real status boundary. 250 untracked files, named so
+  // they sort AFTER every other fixture — the list is Git's own path order,
+  // and a bulk directory sorting first would push the fixtures this file's
+  // other tests open out of the painted 200.
+  const bulk = join(projectPath, "zz-bulk");
+  await mkdir(bulk, { recursive: true });
+  try {
+    for (let index = 0; index < 250; index += 1)
+      await writeFile(
+        join(bulk, `file-${String(index).padStart(3, "0")}.txt`),
+        "bulk\n",
+        "utf8",
+      );
+
+    await openProjectWithThread(page);
+    await expect(
+      page.getByText(/Showing the first 200 of 25\d changed files\./),
+    ).toBeVisible();
+
+    // Exactly the budget is painted, and the summary above it still counts
+    // every change — a bounded list that presented its own length as the
+    // total is the defect this wording exists to avoid.
+    const rows = page.locator('[role="tabpanel"]:not([hidden]) .file-list li');
+    await expect(rows).toHaveCount(200);
+    await expect(page.getByText(/Working tree: .*25\d added/)).toBeVisible();
+  } finally {
+    await rm(bulk, { recursive: true, force: true });
+  }
+});
+
+test("panel diff: the prefix and both gutters stay on screen at any scroll offset", async ({
+  page,
+}) => {
+  // K1, and the reason it was fixed before anything else on this pass.
+  // WSP-06 says the add/remove distinction is never carried by colour alone.
+  // The `+`/`-` prefix and both line-number gutters were ordinary in-flow
+  // content, so scrolling a diff sideways carried all three off the left
+  // edge and left only the background wash — measured at 1.04:1 between add
+  // and delete in light and 1.06:1 in dark, which is no distinction at all.
+  // At the 280px floor, on a real Python diff, `.diff-body` had 498px of
+  // scroll range and the `+` sat at x=50: 12% of the range hid the meaning
+  // for the other 88%, on the ordinary reading path rather than in a corner.
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    // Both kinds, because each has ONE empty gutter and they are opposite
+    // ones: an added line has no old-side number, a deleted line no new-side
+    // one. An empty cell is the case that has to be pinned as reliably as a
+    // numbered one, and the one that was not.
+    for (const kind of ["add", "delete"] as const) {
+      const atRest = await page.evaluate(diffPinnedColumn, {
+        scrollLeft: 0,
+        kind,
+      });
+      expect(atRest).not.toBeNull();
+      if (atRest === null) return;
+      // There genuinely is somewhere to scroll to, or this proves nothing.
+      expect(atRest.range).toBeGreaterThan(0);
+
+      // Far past the point the old rendering lost the column, and past the
+      // end of the range so the browser clamps to the far edge.
+      const scrolled = await page.evaluate(diffPinnedColumn, {
+        scrollLeft: 100_000,
+        kind,
+      });
+      expect(scrolled).not.toBeNull();
+      if (scrolled === null) return;
+      expect(scrolled.scrollLeft).toBe(atRest.range);
+      // The column does not merely stay on screen, it does not MOVE: the
+      // row's left inset lives inside the pinned cell rather than on the
+      // `pre`, whose padding would have scrolled away under it.
+      expect(`${width} ${kind} ${String(scrolled.prefixLeft)}`).toBe(
+        `${width} ${kind} ${String(atRest.prefixLeft)}`,
+      );
+
+      for (const [offset, column] of [
+        ["at rest", atRest],
+        ["scrolled to the far end", scrolled],
+      ] as const) {
+        const where = `${width}, ${kind}, ${offset}`;
+        // The prefix is a real character in a box of its own, and the box is
+        // inside the visible width of the body at both offsets.
+        expect(`${where} ${String(column.prefixText)}`).toBe(
+          `${where} ${kind === "add" ? "+" : "-"}`,
+        );
+        expect(
+          `${where} left ${String(column.prefixLeft >= column.boxLeft)}`,
+        ).toBe(`${where} left true`);
+        expect(
+          `${where} right ${String(column.prefixRight <= column.boxRight + 1)}`,
+        ).toBe(`${where} right true`);
+        // And all three cells are what is actually PAINTED across that
+        // width, in order — not the code that would have scrolled over them.
+        // The old gutter is a `::before`, so it answers as its originating
+        // `.diff-line` and the new side as its `.diff-line-body`.
+        expect(
+          `${where} ${column.scan.filter(notTheDiffsOwnEdge).join(" | ")}`,
+        ).toBe(
+          `${where} diff-line diff-${kind} | diff-line-body | diff-line-prefix`,
+        );
+        // Pinning a column must not push the page itself sideways.
+        expect(`${where} page ${String(column.pageOverflowX <= 0)}`).toBe(
+          `${where} page true`,
+        );
+      }
+    }
+  }
+});
+
+test("panel diff: a selection spanning hunks and sections is still patch text", async ({
+  page,
+}) => {
+  // K3. Within one hunk the copy was already exactly right. Across a hunk
+  // boundary it took the twisty and the tally with it —
+  //
+  //     ▾
+  //     @@ -78,11 +82,26 @@ from avm_agent.v4.bracket import (
+  //     +15 -0
+  //      )
+  //
+  // — and across a section boundary the bare word `Unstaged` too, which is
+  // the difference between a copied diff that applies and one that does
+  // not. The `@@` header is legitimate patch content and stays copyable; the
+  // panel's own drawing does not.
+  await openProjectWithThread(page);
+
+  for (const [file, wanted] of [
+    // Two hunks in one section...
+    ["diff-target.txt", ["@@ -1,5 +1,5 @@", "@@ -27,7 +27,7 @@ line 26"]],
+    // ...and one hunk in each of two sections.
+    ["staged-target.txt", ["+second STAGED", "+third UNSTAGED"]],
+  ] as const) {
+    // Back to the list first: opening a diff makes the Diff tab active, and
+    // the Changes rows are in a hidden body until it is selected again.
+    await page.getByRole("tab", { name: "Changes" }).click();
+    await changeRow(page, file).click();
+    await expect(page.getByRole("tab", { name: file })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^@@/ }).first(),
+    ).toBeVisible();
+
+    const selected = await page.evaluate(diffWholeSelection);
+    expect(selected).not.toBeNull();
+    if (selected === null) return;
+
+    // The selection really does span the whole body, or it proves nothing.
+    for (const line of wanted) expect(selected).toContain(line);
+
+    // Every line of it is something `git apply` reads: a hunk header, or a
+    // context, added, removed or no-newline line. Nothing else — no `▾`, no
+    // `+2 -0` tally, no `Staged`/`Unstaged` heading, no bounded-view notice.
+    const stray = selected
+      .split("\n")
+      .filter((line) => line !== "")
+      .filter((line) => !/^(@@|[-+ \\])/.test(line));
+    expect(`${file} ${stray.join(" | ")}`).toBe(`${file} `);
+    expect(selected).not.toContain("▾");
+    expect(selected).not.toContain("▸");
+  }
+});
+
+test("panel diff: wrapped lines do not scroll, are numbered once, and are indented", async ({
+  page,
+}) => {
+  // K5, a scope addition rather than a defect: K1 made scrolled reading
+  // correct, and this is what makes it unnecessary. Three claims, and jsdom
+  // can settle none of them.
+  await openProjectWithThread(page);
+  await changeRow(page, "wide-diff.json").click();
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  await page.evaluate(forceClassicScrollbars);
+
+  const scrolling = await page.evaluate(diffWrapGeometry);
+  expect(scrolling).not.toBeNull();
+  if (scrolling === null) return;
+  // The case under test: unwrapped, this really does scroll sideways and
+  // the line really is one row.
+  expect(scrolling.overflowX).toBeGreaterThan(0);
+  expect(scrolling.rows).toBe(1);
+
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  for (const width of ["default", "minimum"] as const) {
+    if (width === "minimum") {
+      await page
+        .getByRole("separator", { name: "Resize workspace panel" })
+        .focus();
+      await page.keyboard.press("Home");
+      await page.waitForTimeout(400);
+    }
+    const wrapped = await page.evaluate(diffWrapGeometry);
+    expect(wrapped).not.toBeNull();
+    if (wrapped === null) return;
+
+    // Nothing scrolls sideways, in the body or on the page.
+    expect(`${width} body ${String(wrapped.overflowX <= 0)}`).toBe(
+      `${width} body true`,
+    );
+    expect(`${width} page ${String(wrapped.pageOverflowX <= 0)}`).toBe(
+      `${width} page true`,
+    );
+    // The one logical line now takes many rows...
+    expect(`${width} rows ${String(wrapped.rows > 1)}`).toBe(
+      `${width} rows true`,
+    );
+    // ...and is still ONE numbered line, not one per row.
+    expect(`${width} lines ${String(wrapped.numbered)}`).toBe(
+      `${width} lines ${String(scrolling.numbered)}`,
+    );
+    // Every row of it — the first and every continuation — begins where the
+    // code begins, past the pinned column, so a continuation can never be
+    // mistaken for a new line beginning at the panel's edge.
+    const strays = wrapped.rowLefts.filter(
+      (left) => left < wrapped.codeLeft || left > wrapped.codeLeft + 8,
+    );
+    expect(`${width} indent ${strays.join(",")}`).toBe(`${width} indent `);
+  }
+
+  // And it is the tab's own state, so it survives a reload (WSP-04).
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Wrap lines" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText(/reachable-only-by-horizontal-scrolling/),
+  ).toBeVisible();
+  const restored = await page.evaluate(diffWrapGeometry);
+  expect(restored).not.toBeNull();
+  expect(restored?.overflowX).toBeLessThanOrEqual(0);
+  expect((restored?.rows ?? 0) > 1).toBe(true);
+});
+
+// Milestone 7: several terminals per execution scope, each remembering the
+// directory it is in (WSP-07, acceptance 7).
+//
+// End to end because every claim here needs a real PTY: a shell that
+// actually changes directory, an operating system that can be asked where it
+// went, and a process that outlives the page that was watching it. The unit
+// suite drives a fake process against a fake platform, which settles the
+// protocol and settles nothing about this.
+
+/** The active tab body: the one terminal on screen, and what it says. */
+function activeTerminal(page: Page) {
+  return page.locator('[role="tabpanel"]:not([hidden])');
+}
+
+async function openTerminalTab(page: Page) {
+  await openPanelTab(page, "Terminal");
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+}
+
+/** Type a line into the shell on screen and run it. */
+async function runInTerminal(page: Page, command: string) {
+  await activeTerminal(page).locator(".terminal-surface").click();
+  await page.keyboard.type(command);
+  await page.keyboard.press("Enter");
+}
+
+test("panel terminal: two shells in one worktree, each with its own directory", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openTerminalTab(page);
+
+  // The first shell moves, and the tab follows it. The directory is
+  // OBSERVED — nothing in the page knows this happened until the server's
+  // probe says so.
+  await runInTerminal(page, "cd src");
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "echo first-shell-4711");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "first-shell-4711",
+    { timeout: 15_000 },
+  );
+
+  // A second terminal in the same worktree: its own process, its own
+  // directory, and none of the first one's scrollback.
+  await openTerminalTab(page);
+  await expect(page.getByRole("tab", { name: "src" })).toHaveCount(1);
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /workspace root/,
+  );
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "first-shell-4711",
+  );
+  await runInTerminal(page, "echo second-shell-8322");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "second-shell-8322",
+    { timeout: 15_000 },
+  );
+
+  // Back to the first: still where it was, still holding its own output.
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await page.getByRole("tab", { name: "src" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "first-shell-4711",
+  );
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "second-shell-8322",
+  );
+});
+
+test("panel terminal: a reload reclaims the running shell, with its scrollback", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openTerminalTab(page);
+  await runInTerminal(page, "cd src");
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "echo survives-reload-5190");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+
+  await page.reload();
+  await page.addInitScript(recordSentFrames);
+
+  // The SAME process: a second shell would have an empty screen and would
+  // be sitting in the execution root, not in `src`.
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+
+  // A restart is the other half of WSP-07: a NEW process — so the reclaimed
+  // screen is gone — starting in the directory the tab recorded.
+  await page.getByRole("button", { name: "Restart" }).click();
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "pwd");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "/src",
+    { timeout: 15_000 },
+  );
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+});
+
+test("panel terminal: the shell past the per-scope limit is refused, and says why", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  for (let index = 0; index < TERMINAL_MAX_PER_SCOPE; index += 1)
+    await openTerminalTab(page);
+
+  // The next one. WSP-07: reaching the limit is "reported as a clear
+  // message rather than a silent failure" — a tab that simply sat at
+  // "Starting terminal…" for ever would be the failure the requirement
+  // names.
+  await openPanelTab(page, "Terminal");
+  await expect(
+    activeTerminal(page).getByText(
+      new RegExp(`Up to ${String(TERMINAL_MAX_PER_SCOPE)} terminals`),
+    ),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    activeTerminal(page).getByText("No terminal is running"),
+  ).toBeVisible();
+  // And the eight that are running are untouched: the refusal is about the
+  // ninth, not about the scope.
+  await expect(page.getByRole("tab")).toHaveCount(TERMINAL_MAX_PER_SCOPE + 2);
 });

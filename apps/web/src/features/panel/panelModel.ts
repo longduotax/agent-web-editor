@@ -60,6 +60,8 @@ export interface TabPatch {
   /** The `files` tab's ignored-files opt-in (WSP-05 v2). */
   showIgnored?: boolean;
   view?: "preview" | "source";
+  /** The File and Diff tabs' soft-wrap toggle (WSP-05 version 3). */
+  wrap?: boolean;
   collapsedHunks?: string[];
   cwd?: string;
   terminalId?: TerminalId | null;
@@ -460,13 +462,17 @@ function patchTab(tab: PanelTab, patch: TabPatch): PanelTab {
     }
     case "file": {
       const view = patch.view ?? tab.view;
-      return view === tab.view ? tab : { ...tab, view };
+      const wrap = patch.wrap ?? tab.wrap;
+      return view === tab.view && wrap === tab.wrap
+        ? tab
+        : { ...tab, view, wrap };
     }
     case "diff": {
       const collapsedHunks = patch.collapsedHunks ?? tab.collapsedHunks;
-      return sameList(collapsedHunks, tab.collapsedHunks)
+      const wrap = patch.wrap ?? tab.wrap;
+      return sameList(collapsedHunks, tab.collapsedHunks) && wrap === tab.wrap
         ? tab
-        : { ...tab, collapsedHunks };
+        : { ...tab, collapsedHunks, wrap };
     }
     case "terminal": {
       const cwd = patch.cwd ?? tab.cwd;
