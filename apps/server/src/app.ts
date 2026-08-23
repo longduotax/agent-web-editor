@@ -94,6 +94,16 @@ export interface ServerContext {
   config: ServerConfig;
   store: MetadataStore;
   workspace: WorkspaceService;
+  /**
+   * The live terminals of this server.
+   *
+   * Exposed because a terminal deliberately outlives the browser that opened
+   * it (WSP-07), which means an end-to-end suite driving one server through
+   * many pages accumulates shells against a shared execution scope until the
+   * per-scope cap refuses the next one. A suite needs a way to put the
+   * server back as it found it; nothing here is reachable over HTTP.
+   */
+  terminals: ProjectTerminalManager;
   launchUrl: string;
 }
 
@@ -360,7 +370,13 @@ export async function buildServer(
     options.directoryPicker ?? createNativeDirectoryPicker();
   const launchPort = config.production ? config.port : config.devPort;
   const launchUrl = `http://127.0.0.1:${String(launchPort)}/`;
-  const context: ServerContext = { config, store, workspace, launchUrl };
+  const context: ServerContext = {
+    config,
+    store,
+    workspace,
+    terminals,
+    launchUrl,
+  };
   const server: WorkspaceServer = Object.assign(
     Fastify({ logger: options.logger ?? true, bodyLimit: config.bodyLimit }),
     { workspaceContext: context },

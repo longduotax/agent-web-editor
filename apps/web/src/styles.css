@@ -1586,9 +1586,16 @@ a:focus-visible {
   /* A floor, so the close affordance's hit area (below) can never reach the
      middle of a tab. A one-character file name would otherwise make a 36px
      tab whose centre is inside its own close control, and clicking a tab to
-     switch to it would close it instead. 3.5rem leaves ~3px of clearance at
-     the narrowest tab the strip can produce. */
-  min-width: 3.5rem;
+     switch to it would close it instead.
+
+     It was 3.5rem, claiming "~3px of clearance at the narrowest tab the
+     strip can produce". The arithmetic was wrong — the hit area reaches
+     26.6px in from the right edge, so a 56px tab clears its own centre by
+     1.4px — and the error was invisible until a terminal tab began titling
+     itself from the directory it is in (WSP-07): clicking the middle of a
+     tab named `src` closed it (M1). 5rem clears by 13px, and the e2e case
+     now MEASURES the clearance rather than trusting this comment. */
+  min-width: 5rem;
   /* Never shrinks: the strip scrolls instead. */
   flex: 0 0 auto;
   /* A touch that pans horizontally scrolls the strip — the only way a touch
@@ -1638,6 +1645,14 @@ a:focus-visible {
    instead (D3). */
 .panel-tab-close {
   position: relative;
+  /* Pinned to the tab's right edge rather than left wherever the title
+     happens to end (M1). The tab is a flex row with a `min-width`, so a
+     short title used to leave the spare width as empty space on the RIGHT
+     and park the close glyph — hit area and all — across the tab's own
+     middle: clicking the middle of a tab named `src` closed it. Everything
+     that reasoned about "how far in from the right edge the hit area
+     reaches" was reasoning about a glyph that was not at the right edge. */
+  margin-left: auto;
   flex: none;
   color: var(--muted);
   visibility: hidden;
@@ -1651,10 +1666,12 @@ a:focus-visible {
    pseudo-element rather than padding, so the glyph keeps its size, the tab
    keeps its height. It reaches exactly as far right as the tab's own
    padding and no further, because a close control overhanging the next tab
-   would close the wrong one, and the tab has a `min-width` so it can never
-   reach a tab's middle either. Measured after: 25 x 30. It inherits
-   `visibility` and `pointer-events` from the span, so an inactive tab's
-   right edge is still not a hidden close button (D3). */
+   would close the wrong one. It inherits `visibility` and `pointer-events`
+   from the span, so an inactive tab's right edge is still not a hidden close
+   button (D3). The tab's `min-width` above is what keeps it out of a tab's
+   MIDDLE — a bound that was one pixel of arithmetic away from false until
+   M1, and that the e2e case now measures rather than assumes. Measured
+   after: 25 x 30. */
 .panel-tab-close::after {
   position: absolute;
   inset: -0.45rem -0.55rem;

@@ -12,6 +12,7 @@ import type {
   RuntimeEvent,
 } from "../packages/agent-runtime/src/index.js";
 
+import { TERMINAL_MAX_PER_SCOPE } from "../packages/contracts/src/index.js";
 import { buildServer, type WorkspaceServer } from "../apps/server/src/app.js";
 import { parseConfig } from "../apps/server/src/config.js";
 
@@ -353,6 +354,16 @@ test.beforeAll(async () => {
   });
   await server.listen({ host: config.host, port });
   launchUrl = server.workspaceContext.launchUrl;
+});
+
+test.afterEach(() => {
+  // A terminal outlives the page that opened it — that is WSP-07, and the
+  // reload cases here depend on it — so every test that opens one leaves a
+  // shell running against this file's single shared execution scope. Eight
+  // of them fill it, and the ninth is refused with the cap message: the
+  // suite would start failing on whichever test happened to run ninth.
+  // Each test therefore leaves the server as it found it.
+  server.workspaceContext.terminals.close();
 });
 
 test.afterAll(async () => {
@@ -802,10 +813,22 @@ function closeAffordanceHitBox() {
     return steps;
   };
   const right = reach(1, 0);
+  const left = reach(-1, 0);
   return {
     glyphWidth: Math.round(rect.width),
     glyphHeight: Math.round(rect.height),
-    hitWidth: reach(-1, 0) + right + 1,
+    hitWidth: left + right + 1,
+    /**
+     * How far the hit area's left edge sits to the RIGHT of the tab's own
+     * centre (M1).
+     *
+     * The `min-width` on `.panel-tab` exists to keep this positive, and the
+     * comment that justified it was wrong by a pixel: at 3.5rem a tab named
+     * `src` cleared its own centre by 1.4px, and clicking the middle of one
+     * closed it. Measured here, on the narrowest tab the strip can produce,
+     * so the next person to change either number finds out.
+     */
+    centreClearance: Math.round(cx - left - (tabRect.x + tabRect.width / 2)),
     hitHeight: reach(0, -1) + reach(0, 1) + 1,
     // How far the hit area reaches past the tab's own right edge: anything
     // over zero would put a close control on top of the next tab.
@@ -849,6 +872,9 @@ test("panel tab: the close affordance is big enough to hit", async ({
   // never over the next one.
   expect(box.hitHeight).toBeLessThanOrEqual(box.tabHeight);
   expect(box.pastTabRight).toBe(0);
+  // M1: nor over the tab's own middle, which is where a pointer aiming at
+  // the tab lands. Measured on the shortest title the strip can show.
+  expect(box.centreClearance).toBeGreaterThanOrEqual(8);
   // The strip is still exactly the header token's height: growing the hit
   // area with a pseudo-element rather than with padding is what keeps it
   // there.
@@ -2351,15 +2377,21 @@ async function pointsOfGroup(page: Page, index: number) {
 }
 
 /** How many times the page has opened a terminal socket and attached. */
-async function attachFrameCount(page: Page): Promise<number> {
+/**
+ * How many times the page has asked the server for a shell.
+ *
+ * Both spellings count: `create` takes a new terminal and `attach` claims a
+ * recorded one, and which of the two a view sends depends on whether its tab
+ * has an id (WSP-07). What these tests are asking is how many times it
+ * asked at all.
+ */
+async function startFrameCount(page: Page): Promise<number> {
   const frames = await page.evaluate(() => window.__sentFrames ?? []);
   return frames.filter((frame) => {
     const parsed: unknown = JSON.parse(frame);
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as { type?: unknown }).type === "attach"
-    );
+    if (typeof parsed !== "object" || parsed === null) return false;
+    const type = (parsed as { type?: unknown }).type;
+    return type === "attach" || type === "create";
   }).length;
 }
 
@@ -2852,7 +2884,7 @@ test("panel drag: a dragged terminal keeps its shell and its scrollback", async 
   await expect(
     page.getByRole("separator", { name: "Resize panel groups" }),
   ).toBeVisible();
-  const attachesBefore = await attachFrameCount(page);
+  const attachesBefore = await startFrameCount(page);
   expect(attachesBefore).toBeGreaterThan(0);
 
   const first = await pointsOfGroup(page, 0);
@@ -2873,7 +2905,7 @@ test("panel drag: a dragged terminal keeps its shell and its scrollback", async 
   await expect(page.locator(".xterm-rows")).toContainText(
     "dragged-marker-6620",
   );
-  expect(await attachFrameCount(page)).toBe(attachesBefore);
+  expect(await startFrameCount(page)).toBe(attachesBefore);
 });
 
 // Milestone 6: the Diff tab (WSP-06, acceptance 6).
@@ -3568,4 +3600,164 @@ test("panel diff: wrapped lines do not scroll, are numbered once, and are indent
   expect(restored).not.toBeNull();
   expect(restored?.overflowX).toBeLessThanOrEqual(0);
   expect((restored?.rows ?? 0) > 1).toBe(true);
+});
+
+// Milestone 7: several terminals per execution scope, each remembering the
+// directory it is in (WSP-07, acceptance 7).
+//
+// End to end because every claim here needs a real PTY: a shell that
+// actually changes directory, an operating system that can be asked where it
+// went, and a process that outlives the page that was watching it. The unit
+// suite drives a fake process against a fake platform, which settles the
+// protocol and settles nothing about this.
+
+/** The active tab body: the one terminal on screen, and what it says. */
+function activeTerminal(page: Page) {
+  return page.locator('[role="tabpanel"]:not([hidden])');
+}
+
+async function openTerminalTab(page: Page) {
+  await openPanelTab(page, "Terminal");
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+}
+
+/** Type a line into the shell on screen and run it. */
+async function runInTerminal(page: Page, command: string) {
+  await activeTerminal(page).locator(".terminal-surface").click();
+  await page.keyboard.type(command);
+  await page.keyboard.press("Enter");
+}
+
+test("panel terminal: two shells in one worktree, each with its own directory", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openTerminalTab(page);
+
+  // The first shell moves, and the tab follows it. The directory is
+  // OBSERVED — nothing in the page knows this happened until the server's
+  // probe says so.
+  await runInTerminal(page, "cd src");
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "echo first-shell-4711");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "first-shell-4711",
+    { timeout: 15_000 },
+  );
+
+  // A second terminal in the same worktree: its own process, its own
+  // directory, and none of the first one's scrollback.
+  await openTerminalTab(page);
+  await expect(page.getByRole("tab", { name: "src" })).toHaveCount(1);
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /workspace root/,
+  );
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "first-shell-4711",
+  );
+  await runInTerminal(page, "echo second-shell-8322");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "second-shell-8322",
+    { timeout: 15_000 },
+  );
+
+  // Back to the first: still where it was, still holding its own output.
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await page.getByRole("tab", { name: "src" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "first-shell-4711",
+  );
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "second-shell-8322",
+  );
+});
+
+test("panel terminal: a reload reclaims the running shell, with its scrollback", async ({
+  page,
+}) => {
+  await page.addInitScript(recordSentFrames);
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  await openTerminalTab(page);
+  await runInTerminal(page, "cd src");
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "echo survives-reload-5190");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+
+  await page.reload();
+  await page.addInitScript(recordSentFrames);
+
+  // The SAME process: a second shell would have an empty screen and would
+  // be sitting in the execution root, not in `src`.
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+
+  // A restart is the other half of WSP-07: a NEW process — so the reclaimed
+  // screen is gone — starting in the directory the tab recorded.
+  await page.getByRole("button", { name: "Restart" }).click();
+  await expect(activeTerminal(page).getByText("Terminal running")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(activeTerminal(page).locator(".xterm-rows")).not.toContainText(
+    "survives-reload-5190",
+    { timeout: 15_000 },
+  );
+  await runInTerminal(page, "pwd");
+  await expect(activeTerminal(page).locator(".xterm-rows")).toContainText(
+    "/src",
+    { timeout: 15_000 },
+  );
+  await expect(activeTerminal(page).locator(".terminal-cwd")).toHaveText(
+    /^Working directory: src$/,
+    { timeout: 15_000 },
+  );
+});
+
+test("panel terminal: the shell past the per-scope limit is refused, and says why", async ({
+  page,
+}) => {
+  await openProjectWithThread(page);
+  await widenPanel(page);
+  for (let index = 0; index < TERMINAL_MAX_PER_SCOPE; index += 1)
+    await openTerminalTab(page);
+
+  // The next one. WSP-07: reaching the limit is "reported as a clear
+  // message rather than a silent failure" — a tab that simply sat at
+  // "Starting terminal…" for ever would be the failure the requirement
+  // names.
+  await openPanelTab(page, "Terminal");
+  await expect(
+    activeTerminal(page).getByText(
+      new RegExp(`Up to ${String(TERMINAL_MAX_PER_SCOPE)} terminals`),
+    ),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    activeTerminal(page).getByText("No terminal is running"),
+  ).toBeVisible();
+  // And the eight that are running are untouched: the refusal is about the
+  // ninth, not about the scope.
+  await expect(page.getByRole("tab")).toHaveCount(TERMINAL_MAX_PER_SCOPE + 2);
 });
