@@ -233,6 +233,22 @@ function Sidebar({
   // request could reject — so that failure surfaced nowhere at all. Each
   // entry now owns its own toast, its own 6s timer and its own named error.
   const [pendingArchives, setPendingArchives] = useState<PendingArchive[]>([]);
+  // Threads whose archive request is IN FLIGHT, kept hidden for exactly as
+  // long as it takes the listing to agree.
+  //
+  // `pendingArchives` stops hiding a row the instant the request is SENT,
+  // because the toast's dismissal both un-stages the archive and fires the
+  // mutation in one handler. But the authoritative listing does not drop the
+  // thread until the request has returned AND the invalidated ["workspace"]
+  // query has refetched. In that gap the row -- gone from the sidebar for the
+  // whole six-second undo window, its toast already faded -- came BACK, and
+  // left again 85ms later when the fresh listing landed. That flicker, and
+  // the reflow of every row beneath it, is the reported glitch.
+  //
+  // Hiding for the whole flight means the row leaves once, when the reader
+  // asked for it, and returns only if the archive actually fails -- which is
+  // what the named error notice beside it is there to explain.
+  const [archivingThreadIds, setArchivingThreadIds] = useState<ThreadId[]>([]);
   const [archiveFailures, setArchiveFailures] = useState<
     { thread: PendingArchive; error: unknown }[]
   >([]);
@@ -244,6 +260,14 @@ function Sidebar({
   const archive = useMutation({
     mutationFn: async ({ projectId, threadId }: PendingArchive) =>
       await archiveThread(projectId, threadId),
+    // One choke point for both routes into this mutation -- the toast timing
+    // out, and Retry on a failed archive's notice -- so neither can forget to
+    // hide the row it is about to remove.
+    onMutate: ({ threadId }) => {
+      setArchivingThreadIds((current) =>
+        current.includes(threadId) ? current : [...current, threadId],
+      );
+    },
     onSuccess: async (_result, variables) => {
       setThreadMenu(null);
       forgetArchiveFailure(variables.threadId);
@@ -254,22 +278,32 @@ function Sidebar({
         // apparently vanished from both lists at once.
         queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
       ]);
-      // `/new`, not `/projects/:id`. The bare project route redirects to
-      // `lastOpenedThreadId ?? threads[0]`, which put an ARBITRARY OTHER
-      // THREAD under the reader's eyes with nothing said about it: the undo
-      // toast names what was archived and never mentions that the pane now
-      // shows something else. An unfocused pane got this right already --
-      // it keeps the thread and swaps its composer for "This thread is
-      // archived. Restore it to keep working." with a Restore button -- and
-      // the asymmetry existed only because the focused pane was navigated
-      // out from under itself before it could render that.
+      // NO NAVIGATION. The focused pane keeps the thread it was showing and
+      // swaps its composer for "This thread is archived. Restore it to keep
+      // working." -- which is exactly what an unfocused pane has always done.
       //
-      // `/new` carries no thread id, so WorkspaceView's route effect does
-      // not re-point the pane, and the focused pane reaches the same
-      // ArchivedNotice the unfocused one shows. One path, one explanation,
-      // and the way back (Restore) is in the pane either way.
-      if (selectedThreadId === variables.threadId)
-        void navigate(`/projects/${variables.projectId}/new`);
+      // Archiving used to send the app to `/projects/:id`, whose redirect to
+      // `lastOpenedThreadId ?? threads[0]` put an ARBITRARY OTHER THREAD
+      // under the reader's eyes with nothing said about it. The fix for that
+      // was to navigate to `/new` instead, which carries no thread id and so
+      // does not re-point the pane. But `/new` is not inert either: it is an
+      // INSTRUCTION to open an empty composer, so WorkspaceView answered it
+      // by splitting a second pane in and moving keyboard focus into its
+      // textarea -- six seconds after a click that asked for neither.
+      //
+      // That split is what re-tiled the surface, and re-tiling re-parents the
+      // existing pane's element, which React cannot preserve across a change
+      // of parent. The pane therefore REMOUNTED, losing the latched
+      // "this thread was once listed" that is the whole basis of its archived
+      // inference, and rendered the thread it had just correctly marked
+      // Archived as live again -- its title, a green "Done", a working
+      // composer -- until the refetched snapshot 404'd 35ms later.
+      //
+      // Staying put satisfies the original requirement more directly than
+      // either destination: nothing re-points the pane because nothing
+      // navigates, the URL goes on naming the thread the reader archived (so
+      // a reload returns to it, with Restore in reach), and the pane reaches
+      // the notice by simply re-rendering.
     },
     // Recorded per thread rather than read off the mutation, which only ever
     // holds the most recent call's error and is the exact hole NEW-R3-1 fell
@@ -281,6 +315,17 @@ function Sidebar({
         ),
         { thread: variables, error },
       ]);
+    },
+    // react-query AWAITS onSuccess before running this, so on the success
+    // path the row is only allowed back once the refetched listing has
+    // already dropped it -- and it therefore never comes back at all. On the
+    // failure path nothing dropped it, so it reappears beside its error.
+    // That ordering is the whole fix; a plain onSuccess would un-hide the row
+    // before the invalidation it just awaited had reached the cache.
+    onSettled: (_result, _error, variables) => {
+      setArchivingThreadIds((current) =>
+        current.filter((id) => id !== variables.threadId),
+      );
     },
   });
   const unarchive = useMutation({
@@ -543,7 +588,8 @@ function Sidebar({
               thread.projectId === project.id &&
               !pendingArchives.some(
                 (pending) => pending.threadId === thread.id,
-              ),
+              ) &&
+              !archivingThreadIds.includes(thread.id),
           );
           return (
             <section
@@ -1061,18 +1107,43 @@ function ProjectWorkspace({
   );
 }
 
-function NewChatRoute() {
+/**
+ * `/projects/:id/new` and `/projects/:id/threads/:threadId` for ONE component,
+ * because they are one surface under two entry instructions.
+ *
+ * They used to be two route components, and React reconciles by ELEMENT TYPE:
+ * two types at the same position is an unmount and a mount, not an update. So
+ * every crossing between those paths tore the whole workspace down and built
+ * it again -- every pane's DOM replaced, every query refetched from cold, and
+ * every piece of pane-local state reset. Measured in the running app: one
+ * archive re-issued the workspace listing, the focused thread's snapshot and
+ * the new-chat preflight, and replaced the pane element twice.
+ *
+ * The state that reset is the point. `ThreadPane` infers "archived" from the
+ * thread's absence from the listing, LATCHED on having seen it there, so that
+ * a brand-new thread cannot flash "Archived" before the listing catches up.
+ * A remount puts that latch back to false. Archiving the focused thread
+ * navigates across exactly this boundary, so the pane that had correctly said
+ * "Archived" came back up saying the thread was live -- its title, a green
+ * "Done", a working composer -- and stayed wrong for the 126ms until its
+ * refetched snapshot returned 404. That is the second half of the reported
+ * glitch, and it is the precise defect c9709f8 was written to remove.
+ *
+ * One component for both paths, so React updates the surface in place. The
+ * thread id simply becomes absent on `/new`, which is what it means there.
+ * Crossings WITHIN `/threads/:threadId` already behaved: same type, so the
+ * surface was already preserved across a change of thread.
+ */
+function ProjectWorkspaceRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   if (!projectResult.success) return <NotFound />;
-  return <ProjectWorkspace projectId={projectResult.data} />;
-}
-
-function ThreadRoute() {
-  const params = useParams();
-  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  // `/new` has no thread id at all; on the thread path an unparseable one is
+  // not this route.
+  if (params.threadId === undefined)
+    return <ProjectWorkspace projectId={projectResult.data} />;
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
-  if (!projectResult.success || !threadResult.success) return <NotFound />;
+  if (!threadResult.success) return <NotFound />;
   return (
     <ProjectWorkspace
       projectId={projectResult.data}
@@ -1273,10 +1344,13 @@ export function App() {
     <Routes>
       <Route path="/" element={<EmptyRoot />} />
       <Route path="/projects/:projectId" element={<ProjectRoute />} />
-      <Route path="/projects/:projectId/new" element={<NewChatRoute />} />
+      <Route
+        path="/projects/:projectId/new"
+        element={<ProjectWorkspaceRoute />}
+      />
       <Route
         path="/projects/:projectId/threads/:threadId"
-        element={<ThreadRoute />}
+        element={<ProjectWorkspaceRoute />}
       />
       <Route path="/settings" element={<SettingsRoute />} />
       <Route path="*" element={<NotFound />} />

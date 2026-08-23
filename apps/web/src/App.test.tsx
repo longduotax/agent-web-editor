@@ -1396,8 +1396,14 @@ describe("sidebar archive", () => {
   // substitution. An unfocused pane already did the right thing: it keeps the
   // thread and swaps its composer for the archived notice.
   //
-  // `/new` carries no thread id, so WorkspaceView's route effect does not
-  // re-point the pane and the focused pane reaches that same notice.
+  // It reaches that notice by not navigating at all. `/new` was tried first
+  // and does keep the pane pointed at its own thread, but it is an
+  // instruction to open an empty composer: WorkspaceView answered it by
+  // splitting a second pane in, which re-tiled the surface, re-parented the
+  // archived pane's element and so REMOUNTED it -- resetting the latched
+  // "this thread was once listed" that its archived inference rests on, and
+  // flashing the thread back to live until the next snapshot 404. Staying put
+  // keeps the pane, its state, and the URL that names what was archived.
   it("does not swap the focused pane onto an unrelated thread when its own is archived", async () => {
     api.archiveThread.mockResolvedValue({ archived: true as const });
     const seen: string[] = [];
@@ -1464,14 +1470,23 @@ describe("sidebar archive", () => {
     vi.useRealTimers();
 
     await waitFor(() => {
-      expect(seen.at(-1)).toBe(`/projects/${projectId}/new`);
+      expect(api.archiveThread).toHaveBeenCalledTimes(1);
     });
+    // The route never moves: it goes on naming the thread that was archived,
+    // so the pane keeps it and shows the archived notice in place.
+    expect(seen.at(-1)).toBe(`/projects/${projectId}/threads/${threadId}`);
+    expect(new Set(seen)).toEqual(
+      new Set([`/projects/${projectId}/threads/${threadId}`]),
+    );
     // The bare project route is what redirects onto another thread. It is
     // never visited, so that redirect never runs.
     expect(seen).not.toContain(`/projects/${projectId}`);
     expect(seen).not.toContain(
       `/projects/${projectId}/threads/${secondThreadId}`,
     );
+    // And the `/new` instruction, which would have split a second pane in and
+    // remounted this one, is never issued either.
+    expect(seen).not.toContain(`/projects/${projectId}/new`);
   });
 
   it("restores the row and surfaces an error when the archive fails, instead of reporting success", async () => {
@@ -1595,6 +1610,196 @@ describe("sidebar archive", () => {
       screen.getByRole("link", { name: "First thread" }),
     ).toBeInTheDocument();
     expect(api.archiveThread).toHaveBeenCalledTimes(2);
+  });
+
+  // The reported glitch, first half: "after archiving a chat, a couple of
+  // seconds later there is a slight glitch."
+  //
+  // The row leaves the sidebar the moment Archive is clicked, and the reader
+  // is entitled to never see it again. It came back: `pendingArchives` was
+  // the only thing hiding it, and the toast's dismissal both un-staged the
+  // archive and fired the request in ONE handler -- so from the instant the
+  // request was sent until the ["workspace"] refetch that its response
+  // invalidates finally landed, nothing was hiding the row and the cached
+  // listing still carried the thread. Measured at 85ms in the running app:
+  // the row flashed back in, pushed every row below it down, and left again.
+  //
+  // The window is a network round trip plus a refetch, so it is held open
+  // here by a deferred archive rather than reproduced by timing.
+  it("never lets the archived row flash back while its request is in flight", async () => {
+    let commitArchive!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      commitArchive = resolve;
+    });
+    const listing = (titles: { id: ThreadId; title: string }[]) => ({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: null,
+        },
+      ],
+      threads: titles.map((thread) => ({
+        id: thread.id,
+        projectId,
+        title: thread.title,
+        runState: null,
+        unread: false,
+      })),
+      diagnostics: [],
+    });
+    api.archiveThread.mockImplementation(async () => {
+      await inFlight;
+      // Only now does the server consider the thread archived, so only now
+      // does the listing stop carrying it.
+      api.getWorkspace.mockResolvedValue(listing([]));
+      return { archived: true as const };
+    });
+    renderSidebar();
+    await screen.findByRole("link", { name: "Disposable thread" });
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Disposable thread" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(api.archiveThread).toHaveBeenCalledTimes(1);
+    });
+    // Mid-flight: the undo window has closed and its toast is gone, the
+    // request has not come back, and the listing in the cache still lists the
+    // thread. This is the frame the reader saw the row reappear in.
+    expect(
+      screen.queryByRole("button", {
+        name: 'Undo archiving "Disposable thread"',
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Disposable thread" }),
+    ).not.toBeInTheDocument();
+
+    commitArchive();
+    // The invalidated listing has landed and no longer carries the thread, so
+    // nothing is hiding the row any more -- and it must still be gone.
+    await waitFor(() => {
+      expect(api.getWorkspace.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(
+      screen.queryByRole("link", { name: "Disposable thread" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// The reported glitch, second half. Archiving the focused pane's thread
+// navigates to `/projects/:id/new`, and that path used to be served by a
+// DIFFERENT route component from `/projects/:id/threads/:threadId`. React
+// reconciles by element type, so the crossing was an unmount and a mount of
+// the entire workspace rather than an update -- which reset every piece of
+// pane-local state, ThreadPane's latched "this thread was once listed" among
+// them, and made the pane render a thread it had already correctly marked
+// Archived as live again until its refetched snapshot 404'd.
+describe("workspace surface identity across the /new boundary", () => {
+  const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
+  const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
+
+  it("updates the surface in place instead of remounting it", async () => {
+    api.getWorkspace.mockResolvedValue({
+      projects: [
+        {
+          id: projectId,
+          displayName: "Example project",
+          displayPath: "/example",
+          available: true,
+          sidebarExpanded: true,
+          unreadCount: 0,
+          lastOpenedThreadId: threadId,
+        },
+      ],
+      threads: [
+        {
+          id: threadId,
+          projectId,
+          title: "Example thread",
+          runState: null,
+          unread: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    api.getSnapshot.mockResolvedValue({
+      version: 1,
+      project: {
+        id: projectId,
+        displayName: "Example project",
+        displayPath: "/example",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        available: true,
+        gitAvailable: true,
+        sidebarExpanded: true,
+        unreadCount: 0,
+        lastOpenedThreadId: threadId,
+      },
+      thread: {
+        id: threadId,
+        projectId,
+        title: "Example thread",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:00:00.000Z",
+        runState: null,
+        unread: false,
+        runtimeAvailable: true,
+        workspace: { mode: "shared", branchName: null, available: true },
+      },
+      transcript: [],
+      currentRun: null,
+      lastRun: null,
+      epoch: "40000000-0000-4000-8000-000000000001",
+      highWaterSequence: 0,
+      capabilities: { prompt: true, steer: true, stop: true },
+      diagnostics: [],
+    } satisfies ThreadSnapshot);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[`/projects/${projectId}/threads/${threadId}`]}
+        >
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("link", { name: "Example thread" });
+    const surface = container.querySelector(".tiling-surface");
+    expect(surface).not.toBeNull();
+
+    // The sidebar's own route into `/new`, which is the same crossing the
+    // archive makes.
+    fireEvent.click(
+      screen.getByRole("button", { name: "New thread in Example project" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "New thread in Example project" }),
+      ).toBeInTheDocument();
+    });
+    // The SAME element, not merely another one matching the selector: a
+    // remount would have replaced it, taking every pane's state with it.
+    expect(container.querySelector(".tiling-surface")).toBe(surface);
   });
 });
 
