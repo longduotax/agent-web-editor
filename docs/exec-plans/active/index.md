@@ -51,8 +51,8 @@ superseded, or abandoned.
   with approvals disabled and confined to their execution root by default. Both
   approvals are in place; implementation starts at Task 1 and the plan becomes
   Active with the first production edit.
-- [Codex tool-call replay](2026-08-23-codex-tool-call-replay.md) — Draft plan
-  version 1 with technical approval pending, governed by the Draft
+- [Codex tool-call replay](2026-08-23-codex-tool-call-replay.md) — Ready plan
+  version 1, technical approval granted 2026-08-23, governed by the Approved
   [Agent backends](../../product-specs/agent-backends.md) specification
   version 2. A reopened Codex chat currently replays messages but not the shell
   commands and file changes it showed live, because the app-server serves only

@@ -1,10 +1,10 @@
 # Codex tool-call replay
 
-**Status:** Draft
+**Status:** Ready
 
 **Plan version:** 1
 
-**Technical approval:** Pending for plan version 1
+**Technical approval:** Approved for plan version 1 on 2026-08-23 by the user (longduotax), together with Agent backends specification version 2, in the same message that approved the four drafting choices recorded in the decision log
 
 **Subsystem:** Codex transcript reconstruction — a bounded reverse reader over Codex's own session files, its parse boundary, and snapshot composition inside `packages/codex-adapter`
 
@@ -26,11 +26,12 @@
 
 Product behavior change: **Yes.** The governing proposal is
 [Agent backends](../../product-specs/agent-backends.md) specification
-version **2**, currently **Draft** with product approval pending. This plan
-version 1 is Draft with technical approval pending. Both gates in the
-[agent implementation workflow](../../development/agent-implementation-workflow.md)
-must be satisfied — the specification version and this plan version, named
-explicitly — before any production edit.
+version **2**, **Approved** on 2026-08-23. This plan version 1 received
+technical approval from the same user message on the same date, satisfying both
+gates in the
+[agent implementation workflow](../../development/agent-implementation-workflow.md).
+Implementation may begin at Task 1; this plan moves to Active when the first
+production edit lands.
 
 Version 1 of the specification is approved, implemented, and unpromoted; this
 plan does not touch it. Preserved invariants:
@@ -461,7 +462,9 @@ verification.
 
 ## Progress
 
-Not started. Both approvals pending.
+- 2026-08-23: Product specification version 2 and this plan version 1 approved
+  together by the user (longduotax). Implementation not yet started; the plan
+  becomes Active with the first production edit.
 
 ## Discoveries and blockers
 
@@ -523,6 +526,11 @@ No blockers.
   the empirical target form. An unfinished command in a settled turn replays as
   `failed`, and replay ships enabled by default. Recorded before either approval,
   so the versions put forward for approval are the revised ones.
+
+- 2026-08-23: The user approved Agent backends specification version 2 and this
+  plan version 1 in one message. The approved text is the revised text — the four
+  drafting choices above were folded in before the approval was stamped, so no
+  post-approval change is outstanding. Status moves Draft → Ready.
 
 ## Final outcomes
 

@@ -4,11 +4,11 @@
 
 **Proposed version:** 2
 
-**Proposal status:** Draft
+**Proposal status:** Approved
 
 **Implementation status:** In progress
 
-**Product approval:** Pending for specification version 2. Version 1 was approved on 2026-08-22 by the user (longduotax), after resolving both open product questions in conversation: the default backend gains a Settings control (AGB-02) and an unusable backend is shown disabled with a reason (AGB-03). That approval covered plan version 1 and is unaffected by this proposal.
+**Product approval:** Approved for specification version 2 on 2026-08-23 by the user (longduotax), together with the Codex tool-call replay plan version 1, after resolving four drafting choices in conversation: replay is complete for the history a chat displays and read on demand rather than depth-limited (AGB-11); live and reopened transcripts render a shell command identically; an unfinished command replays as failed; and replay ships enabled. Version 1 was approved on 2026-08-22 by the same user, after resolving both open product questions then: the default backend gains a Settings control (AGB-02) and an unusable backend is shown disabled with a reason (AGB-03). That approval covered plan version 1 of the Codex agent runtime and is unaffected by this proposal.
 
 **Subsystem:** Agent execution — which coding agent runs a chat, how that choice
 is made and shown, and how a chat behaves when its agent is unavailable
@@ -283,6 +283,8 @@ and are folded into the requirements above:
   stated at the point of choice (AGB-03), rather than hidden.
 
 ## Proposed revision v2
+
+Approved on 2026-08-23; implementation has not started.
 
 Version 1 is approved and implemented, and remains the baseline: every
 requirement above is unchanged. This revision is a bounded addition of three

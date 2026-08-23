@@ -13,7 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Agent backends](agent-backends.md)                               | None            | 2                | Draft    | In progress    | [Codex tool-call replay](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)               |
+| [Agent backends](agent-backends.md)                               | None            | 2                | Approved | In progress    | [Codex tool-call replay](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)               |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -69,7 +69,7 @@ default for new chats, and shows the backend wherever a chat appears. Existing
 chats are Pi and are unchanged. Codex chats run with interactive approvals
 disabled and, by default, confined to their execution root with no network — a
 deliberately stricter boundary than Pi's, stated rather than hidden. Version 2
-is a Draft proposal layered on it, with product approval pending: a reopened
+is an Approved proposal layered on it, approved 2026-08-23: a reopened
 Codex chat replays the shell commands and file changes it showed live — all of
 them, for whatever history the chat displays, read on demand rather than
 re-read whole — and degrades to today's message-only history rather than
