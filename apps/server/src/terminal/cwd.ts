@@ -62,6 +62,19 @@ const nodeSystem: CwdProbeSystem = {
   },
 };
 
+/**
+ * Whether this platform can observe a running shell's directory at all.
+ *
+ * Read before a poll is scheduled rather than after it answers: a timer that
+ * exists only to learn `null` once a second is exactly the ongoing work
+ * WSP-09 forbids an unobservable terminal.
+ */
+export function cwdProbeSupported(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "linux" || platform === "darwin";
+}
+
 /** Bytes from the operating system, decoded only if they really are UTF-8. */
 function decodePath(bytes: Buffer): string | null {
   try {

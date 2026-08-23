@@ -20,9 +20,14 @@ import {
   RunIdSchema,
   StartThreadRequestSchema,
   SteerRequestSchema,
+  TERMINAL_MAX_PER_SCOPE,
   TerminalClientFrameSchema,
+  TerminalServerFrameSchema,
+  TerminalsResponseSchema,
   ThreadIdSchema,
   UpdateProjectRequestSchema,
+  type TerminalErrorCode,
+  type TerminalServerFrame,
 } from "@pi-web/contracts";
 import { PiAgentRuntime } from "@pi-web/pi-adapter";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
@@ -43,7 +48,11 @@ import { WorkspaceService } from "./domain/workspace.js";
 import { previewProjectFile, listProjectFiles } from "./inspector/files.js";
 import { getGitDiff, getGitStatus } from "./inspector/git.js";
 import { LiveBroker } from "./live/broker.js";
-import { ProjectTerminalManager, type PtyFactory } from "./terminal/manager.js";
+import {
+  ProjectTerminalManager,
+  TerminalRejection,
+  type PtyFactory,
+} from "./terminal/manager.js";
 
 const projectParamsSchema = z.object({ projectId: ProjectIdSchema });
 const threadParamsSchema = z.object({
@@ -290,6 +299,34 @@ function socketText(raw: RawData): string {
   if (Buffer.isBuffer(raw)) return raw.toString("utf8");
   if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
   return Buffer.from(raw).toString("utf8");
+}
+
+/**
+ * What the browser is told about a terminal command that was refused.
+ *
+ * The message is the server's own prose in every case: nothing from the
+ * error, which could carry a path or a command line. What the code adds is
+ * WHICH refusal it was, for the three the tab has to render differently.
+ */
+function terminalRefusal(error: unknown): TerminalServerFrame {
+  if (!(error instanceof TerminalRejection))
+    return TerminalServerFrameSchema.parse({
+      version: 1,
+      type: "error",
+      message: "Terminal command was rejected.",
+    });
+  const messages: Record<TerminalErrorCode, string> = {
+    terminal_limit_reached: `Up to ${String(TERMINAL_MAX_PER_SCOPE)} terminals can run in one worktree. Close one to open another.`,
+    terminal_gone: "That terminal is no longer running.",
+    terminal_cwd_invalid:
+      "That directory is not available in this worktree, so no terminal was started there.",
+  };
+  return TerminalServerFrameSchema.parse({
+    version: 1,
+    type: "error",
+    message: messages[error.code],
+    code: error.code,
+  });
 }
 
 function requireSocketPolicy(
@@ -605,6 +642,24 @@ export async function buildServer(
     socket.on("close", () => unsubscribe?.());
   });
 
+  // WSP-07: a reloaded browser reclaims its own shells by identity rather
+  // than orphaning them, which it can only do if it can ask what is live.
+  // The answer is scoped to the requesting thread's execution scope, and it
+  // is a read, so it needs only the exact Host every other read needs.
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/terminals",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const context = await workspace.threadExecutionContext(
+        params.projectId,
+        params.threadId,
+      );
+      return TerminalsResponseSchema.parse({
+        terminals: terminals.list(context.projectId, context.scopeId),
+      });
+    },
+  );
+
   server.get("/api/terminal", { websocket: true }, (socket, request) => {
     try {
       requireSocketPolicy(request, server.workspaceContext);
@@ -626,18 +681,23 @@ export async function buildServer(
           );
           const root = context.executionRoot;
           const scopeId = context.scopeId;
-          if (frame.type === "attach") {
+          if (frame.type === "attach" || frame.type === "create") {
             detach?.();
-            detach = await terminals.attach(
-              frame.projectId,
-              root,
-              {
+            detach = await terminals.attach({
+              projectId: frame.projectId,
+              scopeId,
+              executionRoot: root,
+              attachment: {
                 send: (message) => {
                   socket.send(JSON.stringify(message));
                 },
               },
-              scopeId,
-            );
+              // `create` never names a terminal, and `attach` names one only
+              // when it is reclaiming that exact shell (WSP-07).
+              terminalId:
+                frame.type === "attach" ? frame.terminalId : undefined,
+              cwd: frame.cwd,
+            });
           } else if (frame.type === "input")
             terminals.input(
               frame.projectId,
@@ -654,16 +714,19 @@ export async function buildServer(
               scopeId,
             );
           else if (frame.type === "restart")
-            await terminals.restart(frame.projectId, frame.terminalId, scopeId);
+            await terminals.restart(
+              frame.projectId,
+              frame.terminalId,
+              scopeId,
+              frame.cwd,
+            );
           else terminals.terminate(frame.projectId, frame.terminalId, scopeId);
-        } catch {
-          socket.send(
-            JSON.stringify({
-              version: 1,
-              type: "error",
-              message: "Terminal command was rejected.",
-            }),
-          );
+        } catch (error) {
+          // A typed rejection reaches the tab as its own state — the cap
+          // message, the restart action, the refused directory — rather than
+          // as one string it would have to match on prose (D-2). Everything
+          // else stays the single opaque refusal it has always been.
+          socket.send(JSON.stringify(terminalRefusal(error)));
         }
       })();
     });
