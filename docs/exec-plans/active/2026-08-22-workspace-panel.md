@@ -873,6 +873,22 @@ values, sticky header counts, and truncation; axe in both themes. Then the
 staged and an unstaged change, collapse and re-expand hunks, switch to another
 tab and back, and read the accessibility tree of the hunk disclosures.
 
+**Added by that pass, on 2026-08-23** (K1 to K5; the measurements and the two
+regressions the fixes themselves produced are in Discoveries from the
+milestone-6 hands-on UI pass): the two gutters and the `+`/`-` prefix become a
+pinned first column, so a horizontal scroll cannot leave the add/remove
+distinction to the colour wash alone (K1, a WSP-06 violation); the Changes
+tab's `.change-kind` chips take the diff's own measured pairs and join the
+contrast test, whose colour reader learns `color-mix()`, Chrome's
+`color(srgb …)` serialisation, and how to refuse a colour it cannot measure
+(K2); the disclosure's twisty, tally, section heading, bounded-view notices and
+name separator become unselectable so a cross-hunk copy is patch text (K3); the
+hunk toggle gains a visually hidden separator between its header and its tally
+(K4); and both the Diff tab and the File tab's source view gain a **soft-wrap
+toggle**, persisted per tab like the markdown `view` toggle, which takes the
+panel record from version 3 to **version 4** with a `wrap: false` default (K5,
+a scope addition recorded in specification version 3 — see the decision log).
+
 ### Milestone 7 — Many terminals per scope, cwd probe, terminal tab
 
 **Rekey the manager.** `ProjectTerminalManager.owners` becomes
@@ -1489,9 +1505,19 @@ the entire cost of the no-parallel-run decision and is why it was acceptable.
       parser having superseded both. Two gaps in the Changes half were
       closed while verifying it: a kind letter that gave `C` to both
       "copied" and "conflicted", and a status list with no render budget.
-      **Its standing hands-on UI pass is still owed** — it has not been
-      driven in a real browser by a person, and every milestone from 3
-      onwards has had one find something the automated suite could not.
+      **Its standing hands-on UI pass is done**, on 2026-08-23, and found
+      five more things the automated suite could not: a horizontally
+      scrolled diff carrying the add/remove distinction in colour alone
+      (K1, a WSP-06 violation), change-kind chips below the AA bar in both
+      themes with a colour reader that could not see them (K2), a
+      cross-hunk selection copying the disclosure's chrome so the patch
+      would not apply (K3), a hunk toggle whose name ran its header into
+      its tally (K4), and a soft-wrap toggle for the diff and the source
+      view (K5, a scope addition folded into specification version 3).
+      All five are shipped, with the three shapes the pass could not
+      reach — the character bound, a real merge's `@@@` diff, and a status
+      list past the render budget — covered by tests rather than left
+      unproven. See Discoveries from the milestone-6 hands-on UI pass.
 - [ ] Milestone 7 — multi-terminal server, cwd probe, terminal tab
 - [ ] Milestone 8 — tab bodies positioned in one never-detached layer, scroll
       workaround retired
@@ -2659,9 +2685,164 @@ next milestone can walk into.
   `rgb()`. The chips predate this milestone and are unchanged by it, but
   they are the one remaining place in the panel where a colour that carries
   meaning is not measured. Either the test learns `color-mix`, or the chips
-  become resolved tokens like the diff's.
+  become resolved tokens like the diff's. **Closed by K2 below**, by doing
+  both: every chip was below the AA bar in light and two were in dark, and
+  the reader had a second trap in it that a colour change alone would not
+  have closed.
+
+## Discoveries from the milestone-6 hands-on UI pass
+
+The standing hands-on pass of milestone 6, on 2026-08-23, drove the Diff tab
+in a real browser against real `git diff` bytes and reported five items:
+four defects (K1 to K4) and one scope addition (K5). All five are done. What
+follows is what each one cost to find or to fix, and what the next reader
+should not have to rediscover.
+
+- **K1 — a sideways scroll left the add/remove distinction in colour alone.**
+  WSP-06 says it never is, and this was the normal reading path rather than
+  a corner: at `PANEL_MIN_WIDTH` on a real Python diff, `.diff-body`'s
+  scrollWidth/clientWidth was 757/259 — 498px of range — with the `+` at
+  x=50, so any `scrollLeft` past ~58px hid the prefix and both gutters for
+  the remaining 88% of the range. What was left is a wash measuring 1.04:1
+  (light) and 1.06:1 (dark) between add and delete, 1.04–1.13:1 against the
+  plain surface. Fixed by pinning the two gutters and the prefix as a
+  `position: sticky` first column. The prefix needed a box of its own to be
+  pinned and stays a REAL text node in it, because a prefix is patch content
+  a copy must carry — the exact opposite of the numbers beside it.
+- **`position: sticky` does not apply to a `::before` whose `content`
+  resolves to the empty string** (K1, measured in Chromium). The box is
+  still laid out and still takes its declared width — the parent's
+  `getBoundingClientRect` proves it — but it does not stick, and the
+  scrolled code is painted over its column. Every CHANGED line has one empty
+  gutter, an added line no old number and a deleted line no new one, so the
+  cells that silently failed were exactly the ones the fix exists for. With
+  `content: "9" attr(data-old)` it pinned; the shipped answer is a trailing
+  zero-width space, which costs no width, is generated content and so cannot
+  be copied, and makes the box non-empty for every line. The end-to-end
+  probe reads gutters through `elementFromPoint` rather than through a
+  computed rule, which is the only reason this was seen at all.
+- **`.diff-lines`'s own padding never applied** (found while doing K1).
+  `.markdown pre, .activity pre, .diff-view pre, .file-preview pre` sets
+  `padding: 0.8rem`, which beats a bare `.diff-lines` on specificity however
+  far down the file it sits, so the `padding: 0.3rem 0.7rem` written for the
+  diff's lines had been inert since it was written. It mattered once the
+  column was pinned: a padding on the `pre` scrolls away with the content,
+  so the column jumped 12.8px left the moment the body moved. The rows are
+  full-bleed now and the inset lives inside the pinned cell.
+- **K2 — every change-kind chip failed AA in light, and two in dark**, at the
+  10.24px/400 they actually paint: `?` 2.76:1, `D`/`U` 3.44:1, `M`/`R`/`C`
+  3.51:1 light; `D`/`U` 3.79:1 dark. They now take the diff's own measured
+  pairs (5.01–5.90:1 light, 5.51–6.84:1 dark), so a modified file's chip and
+  the diff it opens are one palette and there is one set of numbers to keep
+  honest. Mitigation worth keeping in view so nobody over-corrects: the
+  letter is `aria-hidden` and every row names its kind as a word, so nothing
+  was lost to assistive technology.
+- **Chrome serialises a `color-mix()` result as `color(srgb 0.836863
+0.887059 0.984314)`, not as `rgb()`** (K2, and the trap the reviewer hit
+  first time round). A colour reader that knows hex and `rgb()` and then
+  falls back to something plausible reports the contrast of a colour that is
+  not on screen: four of the six failing chips read as passes that way.
+  `styles.test.ts` now carries out an `in srgb` mix itself, reads the
+  `color(srgb …)` form, and — the part that matters most — **throws** on a
+  colour it cannot measure instead of guessing one. The chips' contrast case
+  was written against the old values first and reported exactly the six
+  numbers above.
+- **K3 — a selection spanning two hunks copied the disclosure's chrome**: the
+  twisty, the `+15 -0` tally, and across a section boundary the bare word
+  `Unstaged`. Inside one hunk the copy was already exactly right. The `@@`
+  header stays selectable because `git apply` needs it; everything the panel
+  draws around it does not. Bounded-view notices went the same way, one item
+  beyond the report, on the same reasoning: a notice is the panel explaining
+  itself, and it sits between two hunks where a drag will cross it.
+- **K4's fix re-created K3, and only the end-to-end selection case saw it.**
+  The visually hidden `", "` that separates the hunk header from its tally
+  is text added for the accessible-name computation, and it landed in a
+  cross-hunk copy as a bare `,` line the day it was added. Every unit and
+  component case stayed green. The rule to carry forward: **text added for a
+  name computation is not text a copy should carry**, so `.sr-only` inside
+  copyable content needs `user-select: none` from the start.
+- **The two name computations disagree about the separator's whitespace, and
+  both are right** (K4). jsdom's trims each node and yields `@@ … @@,+1 -1`;
+  Chrome puts a space either side of the out-of-flow `.sr-only` box and
+  yields `@@ … @@ , +1 -1`. The assertions are tolerant of the spacing and
+  strict about what it separates, exactly as the Changes tab's kind-word
+  case already was.
+- **K5 — soft wrap, and how a continuation row is told from a new line.** The
+  wrong answer is available and cheap: make each line a block, and a wrapped
+  row becomes indistinguishable from a new one. The shipped mechanism is
+  that the line's TEXT moves into a box bounded to the width the pinned
+  column leaves it, so it wraps inside itself and every continuation row
+  begins at the code column; the line's real newline character still ends
+  the logical line, so the gutter numbers it once however many rows it
+  takes, and the copied text is unchanged. `overflow-wrap: anywhere`,
+  because a minified line has nothing to break at and "wrapped" has to mean
+  no horizontal scrolling for that line too.
+- **A Range answers per visual row; an `inline-block` does not** (K5). The
+  wrapped text lives in an `inline-block`, which has exactly one border box
+  however many rows its content takes, so `element.getClientRects()` reports
+  1 and proves nothing. `range.selectNodeContents(text).getClientRects()`
+  reports one rectangle per line box — and can report more than one per row,
+  so they are grouped by rounded `y` and the leftmost of each row is taken.
+- **A third action button clipped the File tab's header path** (K5, caught by
+  the full end-to-end run). At 400px the header still fitted on one line and
+  squeezed the path to 118px of the 136px the file name needs. The path's
+  `flex-basis` decides when that header WRAPS, not how much it finally gets
+  — `flex-grow: 1` gives it the remainder either way — and 6rem was under a
+  file name's own width. It is 12rem now, so the actions take a line of
+  their own before the name is cut.
+- **Two reported items were refuted rather than fixed.** A scroll offset
+  measured as 180 → 0 across a move between groups is an artefact of an
+  occluded window: `PanelBodies` records offsets from a capture-phase
+  `scroll` listener, and a backgrounded tab delivers no scroll events at
+  all, so nothing was ever recorded. Dispatching a synthetic `scroll` before
+  the move made the offset survive intact. And the accessibility-tree dump
+  reporting hunk toggles as unnamed buttons is the fourth occurrence of that
+  tool blanking a name-from-content role; the computed names were correct.
+- **Three shapes the pass could not reach are now covered by tests**, because
+  each had only ever been proved by a fixture this project wrote for itself:
+  a diff bounded by the 256 KiB CHARACTER bound rather than the line bound,
+  with the wording the reader sees; a genuine `@@@` combined diff, built
+  from a real merge conflict in `git.test.ts` and carried into the parser's
+  and the tab's fixtures as the exact bytes Git wrote; and a status list of
+  250 real untracked files past the 200-row budget. The bulk files are named
+  to sort after every other fixture and are removed by the test that makes
+  them: Git's status order is path order, and a bulk directory sorting first
+  would push the fixtures the other tests open out of the painted 200.
 
 ## Decision and revision log
+
+- 2026-08-23: **Soft wrap is a toggle, off by default, rather than the way a
+  long line is always shown** (K5). Both readings are legitimate: a diff of
+  a data file is easier to follow unwrapped, column alignment is worth
+  keeping for a reader who wants it, and wrapping is what the reader asks
+  for when the panel is too narrow for the line in front of them. Off by
+  default because scrolling is what both tabs did before the toggle existed,
+  and a reader who has not asked for a different view should not be given
+  one by an upgrade. Rejected: wrapping whenever the line exceeds the box,
+  which would make the geometry of a diff depend on the panel's width and
+  change under a drag.
+
+- 2026-08-23: **Soft wrap is recorded in specification version 3 rather than
+  in a version 4** (K5). Version 3 is Draft with product approval pending on
+  the user, it is unapproved, it came from the same source — the standing
+  hands-on passes of 2026-08-23 — and line numbers and wrapping are the same
+  kind of affordance: what a read-only view owes a reader who wants to stay
+  in it rather than go back to their editor or their terminal. Opening a
+  fourth version would put two unapproved revisions in front of the user for
+  one question. The scope statement now says the soft-wrap paragraph also
+  governs WSP-06's diff — the only reach outside WSP-05 — and acceptance
+  criterion 19 is added. Approval stays pending on the user, who has not
+  been asked about either half; the coordinator approved the scope addition.
+
+- 2026-08-23: **The change-kind chips take the diff's palette rather than a
+  palette of their own** (K2). They needed resolved tokens either way, and
+  inventing six new ones would have meant a second contrast matrix to keep
+  honest, tuned by eye, against the same surfaces. The diff's pairs are
+  already chosen against the wash they are painted on and already measured,
+  and reusing them says something true: a modified file's chip and the diff
+  it opens are one thing. Rejected: darkening the existing `color-mix()`
+  percentages, which would have left the colours unmeasurable by the
+  stylesheet's own test — the reason they went unmeasured for a milestone.
 
 - 2026-08-23: **A hunk is identified by its own changed lines, not by its
   position or its header.** The collapse a user sets has to survive a
