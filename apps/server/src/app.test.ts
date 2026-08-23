@@ -1257,9 +1257,10 @@ async function availablePort(): Promise<number> {
 
 /** A ws frame, whatever transport shape it arrived in, as text. */
 function frameText(raw: RawData): string {
-  return Array.isArray(raw)
-    ? Buffer.concat(raw).toString("utf8")
-    : Buffer.from(raw).toString("utf8");
+  if (typeof raw === "string") return raw;
+  if (Buffer.isBuffer(raw)) return raw.toString("utf8");
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
+  return Buffer.from(raw).toString("utf8");
 }
 
 /** One terminal socket, with the frames it has received so far. */

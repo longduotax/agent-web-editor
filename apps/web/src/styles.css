@@ -2761,6 +2761,21 @@ a:focus-visible {
   flex: 1;
   color: var(--muted);
 }
+/* Where the terminal is (WSP-07). Monospace because it is a path, and
+   bounded because the toolbar's controls must stay reachable: a deep
+   directory ellipsises instead of pushing Restart off the end. */
+.terminal-toolbar .terminal-cwd {
+  flex: 2;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The one word that stops a start directory reading as a live one. */
+.terminal-toolbar .terminal-cwd-note {
+  font-family: inherit;
+  font-style: italic;
+}
 /* A refused command or an unreadable frame: said here, where it can be
    cleared, rather than written into the scrollback where it cannot (F1). */
 .terminal-toolbar .terminal-notice {

@@ -52,13 +52,64 @@ function observeThemeChanges(onChange: () => void): () => void {
   };
 }
 
+/**
+ * What the toolbar calls a directory. `""` is the execution root, which is a
+ * real place and needs a name a reader recognises rather than a blank.
+ */
+function directoryLabel(cwd: string): string {
+  return cwd === "" ? "workspace root" : cwd;
+}
+
+/**
+ * A request for a new shell, starting where the tab was left.
+ *
+ * The execution root is spelled by OMITTING `cwd`: the contract's
+ * relative-path schema rejects the empty string, which is how it refuses the
+ * traversal spellings that start with an empty segment.
+ */
+function createFrame(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  cwd: string,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    type: "create",
+    projectId,
+    threadId,
+    ...(cwd === "" ? {} : { cwd }),
+  };
+}
+
 export function TerminalView({
   projectId,
   threadId,
   visible = true,
+  terminalId: recordedTerminalId = null,
+  cwd: recordedCwd = "",
+  onTerminalId,
+  onCwd,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
+  /**
+   * The terminal this view last had, if the tab recorded one. With it, the
+   * view re-attaches to that still-running process and receives its replay;
+   * without it, the view creates a shell (WSP-07). Read once, when the
+   * socket opens: after that the server's `ready` frames are the authority
+   * on which terminal this is, and re-reading the prop would fight them.
+   */
+  terminalId?: TerminalId | null;
+  /**
+   * The directory the tab recorded, workspace-relative and `""` for the
+   * execution root. It is where a created or restarted shell starts, and
+   * what the toolbar shows until the server observes something better.
+   */
+  cwd?: string;
+  /** Report the terminal this view is attached to; `null` once it is gone. */
+  onTerminalId?: (terminalId: TerminalId | null) => void;
+  /** Report the directory to record. Only ever an observed one. */
+  onCwd?: (cwd: string) => void;
   /**
    * Whether this terminal is on screen. WSP-09: a terminal that is not
    * visible "keeps its process and buffers output but performs no rendering
@@ -96,6 +147,40 @@ export function TerminalView({
    * clears itself on the next frame that proves the connection works.
    */
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * The directory this view will start a shell in, and show while none is
+   * observed. Seeded from the tab's record and then kept by the frames: the
+   * server's observations replace it, and a refusal clears it so the next
+   * start goes to the execution root rather than to a directory that is not
+   * there.
+   */
+  const [startDirectory, setStartDirectory] = useState(recordedCwd);
+  /**
+   * What the server observes the shell's directory to be, or `null` where it
+   * cannot be observed. Kept apart from `startDirectory` because WSP-07
+   * forbids showing one as the other.
+   */
+  const [liveDirectory, setLiveDirectory] = useState<string | null>(null);
+
+  // Read by the socket effect, which must not re-run when they change: the
+  // effect owns the process, and a new socket per prop change would kill the
+  // user's shell (WSP-09). The directory is mirrored here for the same
+  // reason — a `create` sent from a click has to know the current one.
+  const directory = useRef(recordedCwd);
+  const report = useRef({ onTerminalId, onCwd });
+  const initialTerminalId = useRef(recordedTerminalId);
+
+  const rememberDirectory = (next: string) => {
+    directory.current = next;
+    setStartDirectory(next);
+  };
+
+  // Declared before the socket effect so it has run by the time any frame
+  // can arrive, and separate from it so a changed callback never rebuilds
+  // the socket.
+  useEffect(() => {
+    report.current = { onTerminalId, onCwd };
+  });
 
   useEffect(() => {
     const element = container.current;
@@ -118,8 +203,23 @@ export function TerminalView({
     terminalId.current = null;
     setAttached(false);
     ws.addEventListener("open", () => {
+      // Re-attach to the recorded terminal, or create one. An `attach`
+      // naming a terminal claims that exact shell and replays it; there is
+      // no directory to send with it, because a running shell already has
+      // one (WSP-07).
+      const claimed = initialTerminalId.current;
       ws.send(
-        JSON.stringify({ version: 1, type: "attach", projectId, threadId }),
+        JSON.stringify(
+          claimed === null
+            ? createFrame(projectId, threadId, directory.current)
+            : {
+                version: 1,
+                type: "attach",
+                projectId,
+                threadId,
+                terminalId: claimed,
+              },
+        ),
       );
     });
     ws.addEventListener("message", (event) => {
@@ -151,15 +251,30 @@ export function TerminalView({
           terminal.clear();
         setAttached(true);
         setStatus("Terminal running");
+        // Recorded by the tab, so a reload can claim this same shell back
+        // rather than orphaning it (WSP-07). A restart arrives here too,
+        // which is how the tab adopts the replacement's id.
+        report.current.onTerminalId?.(parsed.data.terminalId);
       } else if (parsed.data.type === "output")
         terminal.write(parsed.data.data);
-      else if (parsed.data.type === "exit") {
+      else if (parsed.data.type === "cwd") {
+        setLiveDirectory(parsed.data.cwd);
+        // Only an OBSERVED directory is recorded. A `null` means the
+        // platform could not answer, and overwriting the tab's record with
+        // it would lose the one thing it still knows.
+        if (parsed.data.cwd !== null) {
+          rememberDirectory(parsed.data.cwd);
+          report.current.onCwd?.(parsed.data.cwd);
+        }
+      } else if (parsed.data.type === "exit") {
         terminalId.current = null;
         setAttached(false);
+        setLiveDirectory(null);
         terminal.writeln(
           `\r\n[process exited ${String(parsed.data.exitCode)}]`,
         );
         setStatus("Terminal exited");
+        report.current.onTerminalId?.(null);
       } else if (parsed.data.type === "reset") {
         terminal.clear();
         setStatus(parsed.data.reason);
@@ -168,6 +283,29 @@ export function TerminalView({
         // error is not program output, and in the scrollback it is
         // indistinguishable from one and outlives the problem (F1).
         setNotice(parsed.data.message);
+        // Three refusals are states rather than notices, because each
+        // changes what the tab should do next (D-2). Everything else stays
+        // a transient message beside a shell that is still running.
+        if (parsed.data.code === "terminal_gone") {
+          // The recorded id names nothing: drop it, so the restart action
+          // creates a shell instead of claiming the dead one again.
+          initialTerminalId.current = null;
+          terminalId.current = null;
+          setAttached(false);
+          setLiveDirectory(null);
+          setStatus("Terminal is gone");
+          report.current.onTerminalId?.(null);
+        } else if (parsed.data.code === "terminal_limit_reached") {
+          setAttached(false);
+          setStatus("No terminal is running");
+        } else if (parsed.data.code === "terminal_cwd_invalid") {
+          // A recorded directory that is no longer there must not wedge the
+          // tab: forgetting it is what makes the next start succeed.
+          rememberDirectory("");
+          report.current.onCwd?.("");
+          setAttached(false);
+          setStatus("No terminal is running");
+        }
       }
     });
     ws.addEventListener("close", () => {
@@ -240,10 +378,13 @@ export function TerminalView({
     if (visible) refit.current();
   }, [visible]);
 
-  const attach = () => {
+  // The explicit restart action WSP-07 requires of a tab whose process is
+  // gone: a NEW shell, in the directory this tab recorded, rather than
+  // another claim on the one that is not there.
+  const startTerminal = () => {
     if (socket.current?.readyState === WebSocket.OPEN)
       socket.current.send(
-        JSON.stringify({ version: 1, type: "attach", projectId, threadId }),
+        JSON.stringify(createFrame(projectId, threadId, directory.current)),
       );
   };
 
@@ -260,19 +401,38 @@ export function TerminalView({
           projectId,
           threadId,
           terminalId: currentTerminalId,
+          // A restart disposes this process and creates another, which has
+          // no directory of its own to inherit — so the tab supplies the one
+          // it recorded (WSP-07). `terminate` ignores it.
+          ...(type === "restart" && directory.current !== ""
+            ? { cwd: directory.current }
+            : {}),
         }),
       );
   };
+  const shownDirectory = liveDirectory ?? startDirectory;
   return (
     <div className="terminal-panel">
       <div className="terminal-toolbar">
         <span>{status}</span>
+        {/* WSP-07: the tab shows the directory it is in. Where the platform
+            cannot observe one, it shows the directory the shell was STARTED
+            in and says so, rather than presenting the one as the other. */}
+        <span className="terminal-cwd" title={directoryLabel(shownDirectory)}>
+          <span className="sr-only">
+            {liveDirectory === null ? "Started in: " : "Working directory: "}
+          </span>
+          {directoryLabel(shownDirectory)}
+          {liveDirectory === null && (
+            <span className="terminal-cwd-note"> (start directory)</span>
+          )}
+        </span>
         {notice !== null && (
           <span className="terminal-notice" aria-live="polite">
             {notice}
           </span>
         )}
-        {!attached && <button onClick={attach}>Start terminal</button>}
+        {!attached && <button onClick={startTerminal}>Start terminal</button>}
         <button
           onClick={() => {
             send("restart");

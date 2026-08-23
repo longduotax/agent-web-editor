@@ -155,7 +155,12 @@ describe("readPanelState", () => {
     expect(JSON.parse(raw)).toMatchObject({ version: PANEL_STATE_VERSION });
   });
 
-  it("brings a terminal tab back detached from its old process", () => {
+  // WSP-07: a reload re-attaches the tab to its still-running process rather
+  // than orphaning it or starting a second shell, so the id and the
+  // directory both have to come back. The id is a claim the server checks —
+  // a terminal that is genuinely gone answers `terminal_gone` and the tab
+  // renders its restart action — but a malformed one is not a claim at all.
+  it("brings a terminal tab back with the process and the directory it recorded", () => {
     stubStorage();
     const make = ids();
     let state = createEmptyPanel(make);
@@ -164,21 +169,60 @@ describe("readPanelState", () => {
       {
         type: "terminal",
         context: null,
-        cwd: "/repo/apps",
+        cwd: "apps/web",
         terminalId: TERMINAL,
       },
       make,
     );
     writePanelState(state);
 
-    const restored = readPanelState(ids());
-
-    const tab = onlyTab(restored);
+    const tab = onlyTab(readPanelState(ids()));
     if (tab.type !== "terminal") throw new Error("expected a terminal tab");
-    // The process is the server's, not the record's: a restored tab must
-    // re-attach or restart rather than claim a process it does not have.
-    expect(tab.terminalId).toBeNull();
-    expect(tab.cwd).toBe("/repo/apps");
+    expect(tab.terminalId).toBe(TERMINAL);
+    expect(tab.cwd).toBe("apps/web");
+  });
+
+  // Both fields become a request: the id names a terminal to re-attach to,
+  // and the directory becomes a spawn path the server resolves. The record
+  // is an arbitrary string under a key any script on the origin can write,
+  // so each is held to the shape its own contract requires and dropped
+  // rather than sent.
+  it("drops a terminal id and a directory the contracts would refuse", () => {
+    const make = ids();
+    let state = createEmptyPanel(make);
+    state = openTab(
+      state,
+      { type: "terminal", context: null, cwd: "", terminalId: null },
+      make,
+    );
+    const [tabId] = Object.keys(state.tabs);
+    if (tabId === undefined) throw new Error("no tab was opened");
+    for (const [cwd, terminalId, expectedCwd] of [
+      ["/repo/apps", TERMINAL, ""],
+      ["../escape", TERMINAL, ""],
+      ["apps/web", "not-a-uuid", "apps/web"],
+      ["apps/web", "", "apps/web"],
+    ] as const) {
+      stubStorage({
+        [PANEL_STORAGE_KEY]: JSON.stringify({
+          version: PANEL_STATE_VERSION,
+          ...state,
+          tabs: {
+            [tabId]: {
+              id: tabId,
+              type: "terminal",
+              context: null,
+              cwd,
+              terminalId,
+            },
+          },
+        }),
+      });
+      const tab = onlyTab(readPanelState(ids()));
+      if (tab.type !== "terminal") throw new Error("expected a terminal tab");
+      expect(tab.cwd).toBe(expectedCwd);
+      expect(tab.terminalId).toBe(terminalId === TERMINAL ? TERMINAL : null);
+    }
   });
 
   // WSP-08 accepts `http` and `https` addresses and nothing else, and the

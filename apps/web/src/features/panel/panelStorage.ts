@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ProjectIdSchema,
   RelativePathSchema,
+  TerminalIdSchema,
   ThreadIdSchema,
 } from "@pi-web/contracts";
 
@@ -245,10 +246,15 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
   return parsed;
 }
 
-// A terminal tab always comes back detached. The process belongs to the
-// server, not to this record: after a reload the tab re-attaches to a
-// still-running process or reports it gone with a restart action (WSP-07),
-// and a stale id would have it claim a process it does not have.
+// A terminal tab comes back naming the process it was attached to and the
+// directory it was in (WSP-07): that is what lets a reload re-attach to a
+// still-running shell, with replay, instead of orphaning it or starting a
+// second one. Neither field is trusted — the id is a claim the server checks
+// against what it actually owns, and answers `terminal_gone` for anything
+// else, and the directory becomes a spawn path that the server resolves and
+// contains. What this does is refuse to send either one in a shape its own
+// contract would reject, because both come from a key any script on the
+// origin can write.
 //
 // A browser tab comes back with only the addresses WSP-08 allows. A rejected
 // one is cleared from the tab rather than carried in state for the component
@@ -257,7 +263,16 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
 // press later, so it is filtered too — which is what makes `historyIndex`
 // meaningful again.
 function restoreTab(tab: PersistedTab): PanelTab {
-  if (tab.type === "terminal") return { ...tab, terminalId: null };
+  if (tab.type === "terminal") {
+    const terminalId = TerminalIdSchema.safeParse(tab.terminalId);
+    return {
+      ...tab,
+      // "" is the execution root, which is where a terminal starts when it
+      // has nowhere else recorded.
+      cwd: RelativePathSchema.safeParse(tab.cwd).success ? tab.cwd : "",
+      terminalId: terminalId.success ? terminalId.data : null,
+    };
+  }
   if (tab.type === "browser") {
     const history = tab.history.filter(isEmbeddableAddress);
     return {
