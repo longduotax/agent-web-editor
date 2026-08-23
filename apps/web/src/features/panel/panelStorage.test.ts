@@ -126,6 +126,7 @@ describe("readPanelState", () => {
         },
         path: "apps/web/src/App.tsx",
         view: "source",
+        wrap: false,
       },
       make,
     );
@@ -154,7 +155,12 @@ describe("readPanelState", () => {
     expect(JSON.parse(raw)).toMatchObject({ version: PANEL_STATE_VERSION });
   });
 
-  it("brings a terminal tab back detached from its old process", () => {
+  // WSP-07: a reload re-attaches the tab to its still-running process rather
+  // than orphaning it or starting a second shell, so the id and the
+  // directory both have to come back. The id is a claim the server checks —
+  // a terminal that is genuinely gone answers `terminal_gone` and the tab
+  // renders its restart action — but a malformed one is not a claim at all.
+  it("brings a terminal tab back with the process and the directory it recorded", () => {
     stubStorage();
     const make = ids();
     let state = createEmptyPanel(make);
@@ -163,21 +169,60 @@ describe("readPanelState", () => {
       {
         type: "terminal",
         context: null,
-        cwd: "/repo/apps",
+        cwd: "apps/web",
         terminalId: TERMINAL,
       },
       make,
     );
     writePanelState(state);
 
-    const restored = readPanelState(ids());
-
-    const tab = onlyTab(restored);
+    const tab = onlyTab(readPanelState(ids()));
     if (tab.type !== "terminal") throw new Error("expected a terminal tab");
-    // The process is the server's, not the record's: a restored tab must
-    // re-attach or restart rather than claim a process it does not have.
-    expect(tab.terminalId).toBeNull();
-    expect(tab.cwd).toBe("/repo/apps");
+    expect(tab.terminalId).toBe(TERMINAL);
+    expect(tab.cwd).toBe("apps/web");
+  });
+
+  // Both fields become a request: the id names a terminal to re-attach to,
+  // and the directory becomes a spawn path the server resolves. The record
+  // is an arbitrary string under a key any script on the origin can write,
+  // so each is held to the shape its own contract requires and dropped
+  // rather than sent.
+  it("drops a terminal id and a directory the contracts would refuse", () => {
+    const make = ids();
+    let state = createEmptyPanel(make);
+    state = openTab(
+      state,
+      { type: "terminal", context: null, cwd: "", terminalId: null },
+      make,
+    );
+    const [tabId] = Object.keys(state.tabs);
+    if (tabId === undefined) throw new Error("no tab was opened");
+    for (const [cwd, terminalId, expectedCwd] of [
+      ["/repo/apps", TERMINAL, ""],
+      ["../escape", TERMINAL, ""],
+      ["apps/web", "not-a-uuid", "apps/web"],
+      ["apps/web", "", "apps/web"],
+    ] as const) {
+      stubStorage({
+        [PANEL_STORAGE_KEY]: JSON.stringify({
+          version: PANEL_STATE_VERSION,
+          ...state,
+          tabs: {
+            [tabId]: {
+              id: tabId,
+              type: "terminal",
+              context: null,
+              cwd,
+              terminalId,
+            },
+          },
+        }),
+      });
+      const tab = onlyTab(readPanelState(ids()));
+      if (tab.type !== "terminal") throw new Error("expected a terminal tab");
+      expect(tab.cwd).toBe(expectedCwd);
+      expect(tab.terminalId).toBe(terminalId === TERMINAL ? TERMINAL : null);
+    }
   });
 
   // WSP-08 accepts `http` and `https` addresses and nothing else, and the
@@ -274,7 +319,7 @@ describe("readPanelState", () => {
     // is refused: a record that also fails six other fields would pass this
     // test with the version check deleted.
     const { removed } = stubStorage({
-      [PANEL_STORAGE_KEY]: storedPanel({ version: 4 }),
+      [PANEL_STORAGE_KEY]: storedPanel({ version: 5 }),
     });
     expectDefaultPanel(readPanelState(ids()));
     expect(removed).toContain(PANEL_STORAGE_KEY);
@@ -514,6 +559,7 @@ describe("readPanelState", () => {
             context: STORED_CONTEXT,
             path: "a.ts",
             view: "preview",
+            wrap: false,
           },
           t2: {
             id: "t2",
@@ -521,6 +567,7 @@ describe("readPanelState", () => {
             context: STORED_CONTEXT,
             path: "a.ts",
             view: "source",
+            wrap: false,
           },
         },
       },
@@ -601,14 +648,14 @@ describe("migration from a version 2 record", () => {
     expect(state.open).toBe(true);
   });
 
-  it("stamps the next write with version 3", () => {
+  it("stamps the next write with the current version", () => {
     const { store } = stubStorage({ [PANEL_STORAGE_KEY]: storedV2() });
 
     writePanelState(readPanelState(ids()));
 
     const written: unknown = JSON.parse(store.get(PANEL_STORAGE_KEY) ?? "");
     expect(written).toMatchObject({ version: PANEL_STATE_VERSION });
-    expect(PANEL_STATE_VERSION).toBe(3);
+    expect(PANEL_STATE_VERSION).toBe(4);
   });
 
   it("round-trips an expansion set and the ignored opt-in", () => {
@@ -672,6 +719,83 @@ describe("migration from a version 2 record", () => {
     const tab = onlyTab(readPanelState(ids()));
     if (tab.type !== "files") throw new Error("expected a files tab");
     expect(tab.expanded).toEqual(["src"]);
+  });
+});
+
+// Version 4 added the soft-wrap toggle to the `file` and `diff` tabs (WSP-05
+// as revised by specification version 3, K5). A version 3 record is a panel
+// the user arranged, so it is migrated by being parsed.
+describe("migration from a version 3 record", () => {
+  function storedV3(): string {
+    return JSON.stringify({
+      version: 3,
+      root: { type: "group", id: "g1" },
+      groups: { g1: { id: "g1", tabIds: ["t1", "t2"], activeTabId: "t1" } },
+      tabs: {
+        t1: {
+          id: "t1",
+          type: "file",
+          context: STORED_CONTEXT,
+          path: "src/main.ts",
+          view: "source",
+        },
+        t2: {
+          id: "t2",
+          type: "diff",
+          context: STORED_CONTEXT,
+          path: "src/main.ts",
+          collapsedHunks: ["unstaged:abc:0"],
+        },
+      },
+      focusedGroupId: "g1",
+      width: 520,
+      open: true,
+    });
+  }
+
+  it("restores a File and a Diff tab written before the toggle existed", () => {
+    stubStorage({ [PANEL_STORAGE_KEY]: storedV3() });
+
+    const state = readPanelState(ids());
+
+    expect(panelStateProblems(state)).toEqual([]);
+    const tabs = Object.values(state.tabs);
+    const file = tabs.find((tab) => tab.type === "file");
+    const diff = tabs.find((tab) => tab.type === "diff");
+    if (file?.type !== "file" || diff?.type !== "diff")
+      throw new Error("expected a file tab and a diff tab");
+    // Scrolling is what both tabs did before there was a toggle, so a record
+    // written then comes back scrolling rather than silently changing shape
+    // under a reader who never asked for wrapping.
+    expect(file.wrap).toBe(false);
+    expect(diff.wrap).toBe(false);
+    // And everything the version 3 record did say is carried, so a migration
+    // that quietly reset would fail here rather than pass.
+    expect(file.view).toBe("source");
+    expect(diff.collapsedHunks).toEqual(["unstaged:abc:0"]);
+    expect(state.width).toBe(520);
+  });
+
+  it("round-trips the toggle once it has been set", () => {
+    stubStorage();
+    const make = ids();
+    let state = createEmptyPanel(make);
+    state = openTab(
+      state,
+      {
+        type: "diff",
+        context: STORED_CONTEXT,
+        path: "src/main.ts",
+        collapsedHunks: [],
+        wrap: true,
+      },
+      make,
+    );
+    writePanelState(state);
+
+    const restored = onlyTab(readPanelState(ids()));
+    if (restored.type !== "diff") throw new Error("expected a diff tab");
+    expect(restored.wrap).toBe(true);
   });
 });
 

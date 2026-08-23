@@ -11,6 +11,28 @@
   --text: #1d1d1f;
   --text-2: #3a3a3e;
   --muted: #8a8a8f;
+  /* Quiet text that is BODY COPY rather than chrome, and therefore has to
+     clear WCAG AA against the surface it sits on (J3). `--muted` is 3.44:1
+     on this page's white, which is fine for a label beside something else
+     and not fine for the words of a sentence: one real README renders 23
+     inert links inside running prose, and the panel's own notices are the
+     sentences it uses to tell the truth about a bounded view. 5.96:1 here,
+     6.15:1 in dark; `styles.test.ts` keeps it honest. */
+  --muted-body: #63636a;
+  --file-gutter-colour: #66666c;
+  /* The diff's own palette (WSP-06). Deliberately NOT aliases of `--green`
+     and `--red`: those are chosen against the page's white, and the diff
+     paints its text on a tinted wash of its own, which is the surface the
+     contrast has to clear. Every pair below is computed in
+     `styles.test.ts` — each foreground against its own background, and the
+     gutter colour against all three washes plus the plain code surface. */
+  --diff-add-fg: #186a35; /* 5.81:1 on its own background */
+  --diff-add-bg: #e2f4e7;
+  --diff-delete-fg: #a8271c; /* 5.90:1 */
+  --diff-delete-bg: #fbe6e4;
+  --diff-hunk-fg: #1a5fd0; /* 5.01:1 */
+  --diff-hunk-bg: #e6eefc;
+  --diff-gutter-colour: #66666c; /* 4.76:1 at worst, on the delete wash */
   --faint: #b3b3b8;
   --green: #2f9e44;
   --red: #d1453b;
@@ -62,6 +84,45 @@
   --term-cursor: var(--accent);
 }
 
+/* Syntax highlighting for the File tab (WSP-05: "derived from the active
+   theme's tokens"). The highlighter's theme names these variables instead of
+   carrying colours of its own, so a highlighted file re-maps on a theme
+   switch with no re-highlight, no listener, and no reload — the same
+   mechanism the terminal's tokens above rely on.
+
+   **They are their own colours rather than aliases of the status palette,
+   and that is the fix for J2.** Most of them used to be aliases —
+   `--code-string: var(--green)`, `--code-number: var(--amber)` — and those
+   status hues are chosen against the page's white, not against the
+   preview's `--hover` panel. Measured on that panel, six of nine light
+   tokens were below the 4.5:1 AA bar and the two carrying the most text
+   were the worst: in one real file, of 735 coloured spans, 178 were strings
+   and 202 comments, both at 3.13:1. The majority of coloured text in the
+   light theme was the failing part, which is why it read as washed out
+   rather than as structure.
+
+   The light values below are the same hues, darkened until each clears
+   4.5:1 on `--hover` with margin, and kept apart from each other so the
+   palette still says something: red, amber, green, teal, blue, purple, and
+   one grey — comments and punctuation share it, as they always have, and a
+   comment is told from an operator by being italic rather than by a tint
+   too small to see. The dark values are unchanged — every one of them already
+   passed — and are written as literals for the same reason the light ones
+   are. `apps/web/src/styles.test.ts` computes all of it. */
+:root {
+  --code-plain: #3a3a3e; /* 10.30:1 */
+  --code-comment: #63636a; /* 5.42:1, italic in the theme */
+  --code-punctuation: #63636a; /* 5.42:1 */
+  --code-string: #187038; /* 5.60:1 */
+  --code-number: #8a5510; /* 5.64:1 */
+  --code-constant: #b32d22; /* 5.76:1 */
+  --code-function: #1a5fd0; /* 5.32:1 */
+  --code-tag: #b32d22; /* 5.76:1 */
+  --code-attribute: #8a5510; /* 5.64:1 */
+  --code-keyword: #8a2fb0; /* 6.13:1 */
+  --code-type: #0b6a77; /* 5.72:1 */
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -76,6 +137,15 @@
     --text: #ececee;
     --text-2: #c3c5cb;
     --muted: #8b8d95;
+    --muted-body: #9a9ca4;
+    --file-gutter-colour: #8b8d95;
+    --diff-add-fg: #5cc97c; /* 6.84:1 on its own background */
+    --diff-add-bg: #16301f;
+    --diff-delete-fg: #ef7a72; /* 5.51:1 */
+    --diff-delete-bg: #3a1f20;
+    --diff-hunk-fg: #7cabff; /* 6.25:1 */
+    --diff-hunk-bg: #1b2a44;
+    --diff-gutter-colour: #9ea0a8; /* 5.45:1 at worst, on the add wash */
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
@@ -96,6 +166,17 @@
        reads as the panel sitting above — the same direction of separation,
        carried by the opposite colour. */
     --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+    --code-plain: #c3c5cb; /* 9.32:1 */
+    --code-comment: #8b8d95; /* 4.86:1 */
+    --code-punctuation: #8b8d95; /* 4.86:1 */
+    --code-string: #4ec06f; /* 6.97:1 */
+    --code-number: #d6a53a; /* 7.13:1 */
+    --code-constant: #e0645c; /* 4.71:1 */
+    --code-function: #6aa0ff; /* 6.20:1 */
+    --code-tag: #e0645c; /* 4.71:1 */
+    --code-attribute: #d6a53a; /* 7.13:1 */
+    --code-keyword: #cba6f7; /* 7.92:1 */
+    --code-type: #4dc3d4; /* 7.72:1 */
   }
 }
 :root[data-theme="dark"] {
@@ -111,6 +192,15 @@
   --text: #ececee;
   --text-2: #c3c5cb;
   --muted: #8b8d95;
+  --muted-body: #9a9ca4;
+  --file-gutter-colour: #8b8d95;
+  --diff-add-fg: #5cc97c; /* 6.84:1 on its own background */
+  --diff-add-bg: #16301f;
+  --diff-delete-fg: #ef7a72; /* 5.51:1 */
+  --diff-delete-bg: #3a1f20;
+  --diff-hunk-fg: #7cabff; /* 6.25:1 */
+  --diff-hunk-bg: #1b2a44;
+  --diff-gutter-colour: #9ea0a8; /* 5.45:1 at worst, on the add wash */
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
@@ -126,6 +216,17 @@
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+  --code-plain: #c3c5cb; /* 9.32:1 */
+  --code-comment: #8b8d95; /* 4.86:1 */
+  --code-punctuation: #8b8d95; /* 4.86:1 */
+  --code-string: #4ec06f; /* 6.97:1 */
+  --code-number: #d6a53a; /* 7.13:1 */
+  --code-constant: #e0645c; /* 4.71:1 */
+  --code-function: #6aa0ff; /* 6.20:1 */
+  --code-tag: #e0645c; /* 4.71:1 */
+  --code-attribute: #d6a53a; /* 7.13:1 */
+  --code-keyword: #cba6f7; /* 7.92:1 */
+  --code-type: #4dc3d4; /* 7.72:1 */
 }
 body {
   min-width: 320px;
@@ -1485,9 +1586,16 @@ a:focus-visible {
   /* A floor, so the close affordance's hit area (below) can never reach the
      middle of a tab. A one-character file name would otherwise make a 36px
      tab whose centre is inside its own close control, and clicking a tab to
-     switch to it would close it instead. 3.5rem leaves ~3px of clearance at
-     the narrowest tab the strip can produce. */
-  min-width: 3.5rem;
+     switch to it would close it instead.
+
+     It was 3.5rem, claiming "~3px of clearance at the narrowest tab the
+     strip can produce". The arithmetic was wrong — the hit area reaches
+     26.6px in from the right edge, so a 56px tab clears its own centre by
+     1.4px — and the error was invisible until a terminal tab began titling
+     itself from the directory it is in (WSP-07): clicking the middle of a
+     tab named `src` closed it (M1). 5rem clears by 13px, and the e2e case
+     now MEASURES the clearance rather than trusting this comment. */
+  min-width: 5rem;
   /* Never shrinks: the strip scrolls instead. */
   flex: 0 0 auto;
   /* A touch that pans horizontally scrolls the strip — the only way a touch
@@ -1537,6 +1645,14 @@ a:focus-visible {
    instead (D3). */
 .panel-tab-close {
   position: relative;
+  /* Pinned to the tab's right edge rather than left wherever the title
+     happens to end (M1). The tab is a flex row with a `min-width`, so a
+     short title used to leave the spare width as empty space on the RIGHT
+     and park the close glyph — hit area and all — across the tab's own
+     middle: clicking the middle of a tab named `src` closed it. Everything
+     that reasoned about "how far in from the right edge the hit area
+     reaches" was reasoning about a glyph that was not at the right edge. */
+  margin-left: auto;
   flex: none;
   color: var(--muted);
   visibility: hidden;
@@ -1550,10 +1666,12 @@ a:focus-visible {
    pseudo-element rather than padding, so the glyph keeps its size, the tab
    keeps its height. It reaches exactly as far right as the tab's own
    padding and no further, because a close control overhanging the next tab
-   would close the wrong one, and the tab has a `min-width` so it can never
-   reach a tab's middle either. Measured after: 25 x 30. It inherits
-   `visibility` and `pointer-events` from the span, so an inactive tab's
-   right edge is still not a hidden close button (D3). */
+   would close the wrong one. It inherits `visibility` and `pointer-events`
+   from the span, so an inactive tab's right edge is still not a hidden close
+   button (D3). The tab's `min-width` above is what keeps it out of a tab's
+   MIDDLE — a bound that was one pixel of arithmetic away from false until
+   M1, and that the e2e case now measures rather than assumes. Measured
+   after: 25 x 30. */
 .panel-tab-close::after {
   position: absolute;
   inset: -0.45rem -0.55rem;
@@ -1759,7 +1877,7 @@ a:focus-visible {
   margin: 0;
   padding: 0.35rem 0.6rem;
   border-top: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--muted-body);
   background: var(--surface-2);
   font-size: 0.72rem;
   pointer-events: none;
@@ -1965,6 +2083,25 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.7rem;
 }
+/* The Files tab is a column, like the file preview and the diff (F2): only
+   the listing grows, so the listing is the one box that scrolls and its
+   scrollbars are at the edges of the panel rather than at the bottom of a
+   list far below the visible area. */
+.files-tab {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.files-tab > * {
+  flex: none;
+}
+.files-tab > .file-tree,
+.files-tab > .file-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
 .file-search {
   margin: 0.6rem;
   width: calc(100% - 1.2rem);
@@ -2010,7 +2147,19 @@ a:focus-visible {
 .file-tree {
   padding: 0.35rem;
 }
+/* A row is as wide as its own content and never narrower than the tree, so
+   a deep name is painted in full and reached by scrolling sideways, while a
+   shallow row's hover and focus still span the whole width (H3).
+
+   The alternative was to cap or compress the indent past some depth. That
+   was rejected: the indent is the only thing on screen that says how deep a
+   row is, and flattening it exactly where the tree is deepest trades one
+   unreadable thing for another. A smaller unit only moves the width at which
+   the same failure happens. Scrolling keeps both the depth and the name,
+   which is what the editor this tab is modelled on does. */
 .file-tree-row {
+  width: max-content;
+  min-width: 100%;
   border-radius: 0.3rem;
   color: var(--text-2);
   font-size: 0.76rem;
@@ -2042,10 +2191,17 @@ a:focus-visible {
   background: var(--surface-3);
   border-radius: 0.3rem;
 }
-/* Not a row the user chooses: a loading, empty, capped, or failed listing. */
+/* Not a row the user chooses: a loading, empty, capped, or failed listing.
+   It is a sentence rather than a path, so it wraps inside the tree instead
+   of making the whole tree scroll sideways to be read. */
 .file-tree-state {
+  width: auto;
   color: var(--muted);
   cursor: default;
+}
+.file-tree-state .file-tree-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .file-ignored {
   display: flex;
@@ -2064,6 +2220,22 @@ a:focus-visible {
   padding: 0;
   font-size: 0.72rem;
 }
+/* The change-kind chip (WSP-06, K2).
+   It carries the kind as a LETTER so the kind is not in the colour alone —
+   and a letter nobody can read carries it no better than the colour does.
+   These were the status palette mixed 20% into the card, which put every
+   chip below the WCAG AA bar in the light theme and two of them in dark:
+   `?` 2.76:1, `D`/`U` 3.44:1, `M`/`R`/`C` 3.51:1 light; `D`/`U` 3.79:1
+   dark. The letter is `aria-hidden` and each row also carries its kind as a
+   word, so nothing was lost to a screen reader — this is legibility for
+   sighted readers.
+   They now take the DIFF's own pairs, which are chosen against the wash
+   they are painted on and measured in `styles.test.ts`: 5.01–5.90:1 light
+   and 5.51–6.84:1 dark. A modified file's chip and the diff it opens are
+   one palette, and there is one set of numbers to keep honest rather than
+   two. Resolved tokens rather than `color-mix()` for the same reason the
+   diff's are: a mixed colour is one the stylesheet's own test could not
+   read, which is how these went unmeasured through a whole milestone. */
 .change-kind {
   display: inline-grid;
   width: 1.15rem;
@@ -2071,19 +2243,19 @@ a:focus-visible {
   flex: none;
   place-items: center;
   border-radius: 0.2rem;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 20%, var(--card));
+  color: var(--diff-hunk-fg);
+  background: var(--diff-hunk-bg);
   font-size: 0.64rem;
 }
 .change-kind.deleted,
 .change-kind.conflicted {
-  color: var(--fail);
-  background: color-mix(in srgb, var(--fail) 20%, var(--card));
+  color: var(--diff-delete-fg);
+  background: var(--diff-delete-bg);
 }
 .change-kind.added,
 .change-kind.untracked {
-  color: var(--done);
-  background: color-mix(in srgb, var(--done) 20%, var(--card));
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
 }
 /* F2. The scrolling box has to END on screen.
    Both bodies used to be ordinary flow content inside the tab body's own
@@ -2108,44 +2280,272 @@ a:focus-visible {
 .file-preview > * {
   flex: none;
 }
+/* Whichever of the two the tab is showing, it is the ONE thing that grows
+   and the one thing that scrolls, bounded to the tab's own height. That is
+   what keeps a long line's scrollbar on screen instead of a thousand pixels
+   below it (F2), and it is also the element `PanelBodies` records the offset
+   of, so a switch or a drag comes back to the same place (G1). */
 .file-preview > pre,
+.file-preview > .file-markdown,
 .diff-view > .diff-body {
   min-height: 0;
   flex: 1;
   overflow: auto;
 }
-/* The diff's sections scroll together, in one box, so the two panes of a
-   staged/unstaged diff cannot slide out of alignment with each other. */
-.diff-body > pre {
+.file-preview > .file-markdown {
+  padding: 0.9rem;
+  font-size: 0.86rem;
+}
+/* Every `pre` in the diff scrolls with the one box around it, so the staged
+   and unstaged panes cannot slide out of alignment with each other and the
+   horizontal scrollbar stays where a pointer can find it (F2). */
+.diff-body pre {
   width: max-content;
   min-width: 100%;
   overflow: visible;
 }
-/* Diff colouring from the shared theme tokens, so it resolves correctly in
-   light and dark. The `+`/`-` prefixes stay in the text: colour is never the
-   only carrier of the distinction. */
-.diff-text {
-  padding-inline: 0;
+/* Soft wrap (K5, WSP-05 version 3). Width is the main thing that would send
+   a reader back to `git diff`: at the panel's 400px default a diff line
+   shows roughly 40 characters once the pinned column has taken its own, and
+   about 25 at the 280px floor, where a terminal at 120 columns needs no
+   scrolling at all. K1 made scrolled reading correct; this makes it
+   unnecessary.
+   Wrapped, the `pre` stops being max-content — otherwise it would size to
+   the longest unwrapped line and the wrapping would buy nothing — and the
+   text is bounded to the width left over beside the pinned column. */
+.diff-body pre.wrap {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
 }
-.diff-line {
-  display: block;
-  padding-inline: 0.8rem;
+/* One labelled half of the diff (WSP-06), and the hunks under it. */
+.diff-view h4 {
+  margin: 0.7rem 0.7rem 0.4rem;
+}
+.diff-section {
+  padding-bottom: 0.5rem;
+}
+/* A rename, a new or deleted file, a mode change: Git's own lines, kept as
+   Git wrote them rather than translated into a claim about them. */
+.diff-notes {
+  margin: 0 0.7rem 0.5rem;
+  padding-left: 1.1rem;
+  color: var(--muted-body);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+.diff-hunk-heading {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+/* The hunk's own disclosure. A real button, because it is one: it carries
+   `aria-expanded`, takes the keyboard, and names itself from the header text
+   it displays. */
+.diff-hunk-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--diff-hunk-bg);
+  color: var(--diff-hunk-fg);
+  font:
+    0.72rem/1.7 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-align: left;
+  cursor: pointer;
+}
+/* K3. The disclosure's own drawing, and the section heading, are NOT patch
+   content: a selection dragged across two hunks used to copy the twisty, a
+   `+15 -0` tally and the bare word `Unstaged` into the middle of the diff,
+   and a patch with those lines in it does not apply. The `@@` header beside
+   them stays selectable, because `git apply` needs it. Bounded-view notices
+   go the same way for the same reason — they are the panel explaining
+   itself, not lines Git wrote. So does K4's `.sr-only` separator, which is
+   the same defect a second time: text added for the name computation is not
+   text a copy should carry, and it landed in a cross-hunk copy as a bare
+   `,` line the moment it was added. */
+.diff-hunk-mark,
+.diff-hunk-tally,
+.diff-hunk-toggle .sr-only,
+.diff-section h4,
+.diff-section > .panel-state {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.diff-hunk-mark {
+  flex: none;
+}
+.diff-hunk-header {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-hunk-tally {
+  flex: none;
+}
+/* The lines themselves.
+   `.diff-raw` keeps its horizontal padding; `.diff-lines` spends its own on
+   the first pinned cell instead, because a padding on the `pre` scrolls away
+   with the content and would leave the pinned column jumping left by that
+   padding the moment the body was scrolled — measured at 12.8px, and
+   perfectly visible. The rows are therefore full-bleed and the inset lives
+   inside the old-side gutter, which is pinned and therefore does not move.
+
+   Both selectors name `.diff-view` because `.markdown pre, .activity pre,
+   .diff-view pre, .file-preview pre` above sets `padding: 0.8rem`, and a
+   lone `.diff-lines` loses to it on specificity however far down the file it
+   sits. The 0.3rem/0.7rem written here before K1 never applied at all. */
+.diff-view .diff-raw {
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 0;
+}
+.diff-view .diff-lines {
+  padding: 0.3rem 0;
+  border: 0;
+  border-radius: 0;
+  /* The pinned column, cell by cell (K1). Named here rather than repeated,
+     because each cell's `left` is the sum of the widths before it and the
+     wrapped-text rule below needs the total. Every one of them is derived
+     from `--diff-gutter`, which `DiffTab` sets from the largest number the
+     diff actually paints. */
+  --diff-old-cell: calc(var(--diff-gutter, 4ch) + 1ch + 0.7rem);
+  --diff-new-cell: calc(var(--diff-gutter, 4ch) + 1ch);
+  --diff-prefix-cell: 1.5ch;
+  --diff-column: calc(
+    var(--diff-old-cell) + var(--diff-new-cell) + var(--diff-prefix-cell)
+  );
+}
+/* Diff colouring, from tokens with measured contrast rather than from the
+   status palette: those hues are chosen against the page's white, not
+   against the code surface, which is how six of nine syntax tokens came to
+   fail AA (J2). `styles.test.ts` computes every pair below. The `+`/`-`
+   prefix characters stay in the text either way: colour is never the only
+   carrier of the distinction (WSP-06). */
+.diff-lines .diff-line {
+  /* What the pinned cells paint themselves with. A custom property because
+     it has to reach a `::before` two elements down, which `background:
+     inherit` cannot do; it is redeclared by each kind below. */
+  --diff-line-bg: var(--hover);
 }
 .diff-add {
-  color: var(--green);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
+  --diff-line-bg: var(--diff-add-bg);
 }
-.diff-remove {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+.diff-delete {
+  color: var(--diff-delete-fg);
+  background: var(--diff-delete-bg);
+  --diff-line-bg: var(--diff-delete-bg);
 }
-.diff-hunk {
-  color: var(--accent);
-  font-weight: 600;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.diff-note {
+  color: var(--muted-body);
 }
-.diff-meta {
-  color: var(--muted);
+/* The two number gutters (WSP-06), by the mechanism the File tab's single
+   one uses (J11): generated content drawn from an attribute, which a
+   selection cannot reach and `textContent` does not contain, so copying a
+   diff yields the diff and not a column of numbers. Two gutters need two
+   pseudo-elements, so the old side is drawn on the line and the new side on
+   the element wrapping its text. The width comes from the largest number
+   actually painted, which `DiffTab` sets as an inline custom property.
+
+   K1: all three of them are PINNED. WSP-06 says the add/remove distinction
+   is never carried by colour alone, and these were ordinary in-flow content,
+   so a horizontal scroll carried them off the left edge and left only the
+   wash — which measures 1.04:1 between add and delete in light and 1.06:1 in
+   dark, i.e. nothing. Measured at the 280px floor on a real Python diff, the
+   body had 498px of scroll range and the `+` sat at x=50: 12% of the range
+   hid the whole distinction for the other 88%. `position: sticky` inside
+   `.diff-body` keeps them on screen at any offset, and each carries the
+   line's own background so the scrolled code passes UNDER them rather than
+   through them. */
+.diff-lines .diff-line::before {
+  content: attr(data-old) "\200b";
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-old-cell);
+  padding: 0 1ch 0 0.7rem;
+  background: var(--diff-line-bg);
+  color: var(--diff-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.diff-lines .diff-line-body::before {
+  content: attr(data-new) "\200b";
+  position: sticky;
+  left: var(--diff-old-cell);
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-new-cell);
+  padding-right: 1ch;
+  background: var(--diff-line-bg);
+  color: var(--diff-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The `+`, `-`, space or `\` the line begins with — patch content, so it is
+   a real character in a box and NOT generated content: a copy has to carry
+   it, and the numbers beside it must never be carried. `inline-block` for
+   the width, which is what makes the column line up when a prefix is a
+   space. */
+.diff-lines .diff-line-prefix {
+  position: sticky;
+  left: calc(var(--diff-old-cell) + var(--diff-new-cell));
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-prefix-cell);
+  padding-right: 0.5ch;
+  background: var(--diff-line-bg);
+}
+/* A wrapped line's continuation rows (K5).
+   The code becomes an inline-block as wide as what is left beside the
+   pinned column, so it wraps INSIDE that box and every continuation row
+   begins under the code rather than at the panel's left edge. That is the
+   indent; the rule down its left edge is the marker, and between them a
+   continuation is never mistakable for a new line — a continuation row has
+   an empty gutter and starts to the right of the rule, a new line has its
+   numbers and its prefix and starts to the left of it. The line's own
+   newline character still ends the outer line, so the gutter numbers the
+   LOGICAL line once however many rows it takes.
+   `anywhere` because a minified line has no spaces to break at, and
+   "wrapped" has to mean no horizontal scrolling for that line too. */
+.diff-lines.wrap .diff-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--diff-column));
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+/* The header's counts (WSP-06). Words rather than glyphs, so the sentence a
+   screen reader hears is the sentence on screen. */
+.diff-counts {
+  display: flex;
+  gap: 0.5rem;
+  flex: none;
+}
+.diff-count-add {
+  color: var(--diff-add-fg);
+}
+.diff-count-delete {
+  color: var(--diff-delete-fg);
 }
 .diff-view > header,
 .file-preview > header {
@@ -2159,25 +2559,196 @@ a:focus-visible {
   background: var(--surface-2);
   font-size: 0.75rem;
 }
-.file-preview > header span {
-  flex: 1;
+/* The header is allowed to become two or three short rows rather than one
+   tall one. At the panel's 280px floor its three action buttons are wider
+   than the header itself, so something has to give; wrapping gives, and
+   every control stays visible and inside the tab body's own width. */
+.diff-view > header,
+.file-preview > header {
+  flex-wrap: wrap;
+}
+/* The path (J1).
+   `text-overflow: ellipsis` was here without `white-space: nowrap`, which
+   makes it inert: the computed white-space stayed `normal`, the span wrapped
+   instead of ellipsising, and at 280px it rendered one character per line in
+   a 10px column while the header grew to 107px. The flex basis is small
+   enough that the path shares a line with the buttons at ordinary widths and
+   claims a line of its own when it cannot. */
+.diff-view > header .file-path,
+.file-preview > header .file-path {
+  display: flex;
+  min-width: 0;
+  /* The basis decides when the header WRAPS, not how much the path finally
+     gets — `flex-grow: 1` gives it everything left over either way. It was
+     6rem, which is under a file name's own width, so a third action button
+     (K5's wrap toggle) fitted beside the path at 400px and squeezed the name
+     to 118px of the 136px it needs. 12rem is past any name this header is
+     asked to keep whole, so the actions take a line of their own before the
+     name is clipped. */
+  flex: 1 1 12rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Which end of the path survives. The directories carry a shrink factor
+   large enough that they absorb effectively all of the squeeze, so
+   `docs/product-specs/workspace-panel.md` becomes `…/workspace-panel.md`
+   rather than `docs/product-spec…` — the tail is the half that names the
+   file. */
+.diff-view > header .file-path-dir,
+.file-preview > header .file-path-dir {
+  min-width: 0;
+  flex: 0 999 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.file-preview button {
+.diff-view > header .file-path-name,
+.file-preview > header .file-path-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The actions travel together: they wrap as a block below the path rather
+   than one button at a time around it. */
+.file-preview > header .file-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+/* The actions travel together in the diff's header too. */
+.diff-view > header .diff-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+/* The header's own controls only. A previewed document's in-repository links
+   are buttons too, and they are prose, not chrome. */
+.diff-view > header button,
+.file-preview > header button {
+  flex: none;
   border: 1px solid var(--border);
   border-radius: 0.25rem;
   background: var(--surface-3);
+  white-space: nowrap;
 }
-.diff-view h4 {
-  margin: 0.7rem;
+/* A link inside a previewed markdown file (WSP-05). Four kinds, and they
+   are told apart on purpose: one opens another File tab, one moves inside
+   the document being displayed, one leaves for a real browser tab and says
+   so, and one goes nowhere and is not offered as a link at all. */
+.file-markdown :is(.md-file-link, .md-fragment-link, .md-external-link) {
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
+.file-markdown .md-external-mark {
+  margin-left: 0.15em;
+  font-size: 0.85em;
+}
+.file-markdown .md-inert-link {
+  color: var(--muted-body);
+  text-decoration: underline dotted;
+}
+.file-markdown .md-image-missing {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.3rem;
+  color: var(--muted-body);
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+/* The file's own text and the diff's, which fill the tab. A fenced code
+   block INSIDE a previewed markdown file is not this — it is a box in a
+   document — so this names the direct child rather than every `pre`. */
 .diff-view pre,
-.file-preview pre {
+.file-preview > pre {
   margin: 0;
   border: 0;
   border-radius: 0;
   white-space: pre;
+}
+/* Highlighted tokens carry only a colour and a weight; the monospace metrics
+   are the `pre`'s, so a coloured token can never sit differently from the
+   plain text beside it. */
+.file-preview > pre .file-token {
+  font: inherit;
+}
+/* Soft wrap in the source view (K5, WSP-05 version 3), by the same
+   mechanism as the diff's. The `pre` wraps, and the line's text is bounded
+   to what is left beside the gutter so its continuation rows begin under the
+   code and not under the number. The gutter therefore numbers the LOGICAL
+   line once, however many visual rows it takes, and the rule down the code's
+   left edge is what tells a continuation row from a new line. */
+.file-preview > pre.wrap {
+  white-space: pre-wrap;
+}
+.file-preview > pre.wrap .file-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--file-gutter, 4ch) - 2ch);
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+/* A view control that is on or off, rather than one that does something.
+   The state is on `aria-pressed`; this is the same state drawn for the eye,
+   and the border is a second carrier so it is not the fill alone. */
+.diff-view > header button[aria-pressed="true"],
+.file-preview > header button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--active);
+}
+/* The line-number gutter (J11, WSP-05 version 3).
+   Generated content, and that is the whole mechanism: a selection cannot
+   reach `::before`, and `textContent` does not contain it, so the numbers
+   cannot be copied out with the code. A number rendered as a text node
+   would be. The width comes from the line count, which `FileTab` sets as an
+   inline custom property, so a twelve-line file does not pay four
+   characters of indent.
+   Inline-block rather than a column of its own: the lines are inline
+   elements carrying real newline characters, and a parallel gutter column
+   would have to re-derive their heights to stay aligned. */
+.file-preview > pre .file-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: var(--file-gutter, 4ch);
+  margin-right: 1.5ch;
+  color: var(--file-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* A read that produced no file: an explicit, labelled state with a way out
+   (WSP-10), rather than the raw refusal the boundary answered with. */
+.panel-refusal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.panel-refusal p {
+  margin: 0;
+}
+.panel-refusal button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-2);
+  background: var(--surface-3);
+  font-size: 0.75rem;
 }
 /* The terminal is a fixed-size viewport that scrolls its own buffer, so it
    must never grow the box it is given (D13). xterm keeps a stale, oversized
@@ -2206,6 +2777,21 @@ a:focus-visible {
 .terminal-toolbar span {
   flex: 1;
   color: var(--muted);
+}
+/* Where the terminal is (WSP-07). Monospace because it is a path, and
+   bounded because the toolbar's controls must stay reachable: a deep
+   directory ellipsises instead of pushing Restart off the end. */
+.terminal-toolbar .terminal-cwd {
+  flex: 2;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The one word that stops a start directory reading as a live one. */
+.terminal-toolbar .terminal-cwd-note {
+  font-family: inherit;
+  font-style: italic;
 }
 /* A refused command or an unreadable frame: said here, where it can be
    cleared, rather than written into the scrollback where it cannot (F1). */
@@ -2261,7 +2847,7 @@ a:focus-visible {
 .panel-state {
   margin: 0;
   padding: 0.7rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .empty,
@@ -2270,7 +2856,7 @@ a:focus-visible {
   padding: 0.7rem;
   border: 1px dashed var(--border);
   border-radius: 0.4rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .error-notice {

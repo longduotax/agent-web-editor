@@ -251,7 +251,7 @@ function TabBody({
     case "terminal":
       return <TerminalTab tab={tab} visible={visible} actions={actions} />;
     case "browser":
-      // WSP-08 arrives in milestone 7. Nothing can create one of these yet,
+      // WSP-08 arrives in milestone 9. Nothing can create one of these yet,
       // and a persisted record carrying one is not silently blank.
       return (
         <div className="empty">

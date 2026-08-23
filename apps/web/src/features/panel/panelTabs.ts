@@ -49,6 +49,12 @@ export type PanelTab =
       context: TabContext | null;
       path: string;
       view: "preview" | "source";
+      // Whether the source view wraps a long line instead of scrolling it
+      // (WSP-05 as revised by specification version 3). On the tab, beside
+      // `view`, and for the same reasons: it is the reader's choice about
+      // this file, and WSP-04 requires it to survive a switch, a reload and
+      // a drag between groups.
+      wrap: boolean;
     }
   | {
       id: TabId;
@@ -56,6 +62,8 @@ export type PanelTab =
       context: TabContext | null;
       path: string;
       collapsedHunks: string[];
+      /** As the File tab's, for the diff's own lines (WSP-06, WSP-05 v3). */
+      wrap: boolean;
     }
   | {
       id: TabId;
@@ -107,6 +115,83 @@ export function tabTitle(tab: NewPanelTab): string {
     case "browser":
       return browserTitle(tab.url);
   }
+}
+
+/**
+ * The whole of what a tab addresses: its tooltip, and what tells two tabs
+ * apart when their titles do not (J6).
+ *
+ * `docs/README.md` and `frontend/node_modules/flatted/README.md` both title
+ * as `README.md`, both computed the accessible name "README.md", the tab
+ * carried no `title` at all, and both close controls read "Close README.md".
+ * Browsing a repository produces that collision constantly — `README.md`,
+ * `index.ts`, `package.json` — and the file-tree row that opened the tab
+ * carries the full path on its own tooltip while the tab it opened did not.
+ */
+export function tabTooltip(tab: PanelTab): string {
+  switch (tab.type) {
+    case "file":
+    case "diff":
+      return tab.path;
+    case "terminal":
+      return tab.cwd;
+    case "browser":
+      return tab.url.trim() === "" ? tabTitle(tab) : tab.url;
+    case "changes":
+    case "files":
+      return tabTitle(tab);
+  }
+}
+
+/**
+ * What each tab is CALLED in the strip, once its neighbours are taken into
+ * account.
+ *
+ * A title is the basename until two open tabs share one while addressing
+ * different things; then each of them grows a parent directory, and another,
+ * until it is unique — the conventional editor answer, and the shortest
+ * label that is still unambiguous.
+ *
+ * Two tabs addressing the SAME thing are deliberately left alone. That is a
+ * file open against two worktrees, which WSP-02 tells apart with the
+ * worktree chip; prefixing both with an identical directory would add noise
+ * and disambiguate nothing.
+ */
+export function tabTitles(tabs: readonly PanelTab[]): Record<TabId, string> {
+  const sharing = new Map<string, PanelTab[]>();
+  for (const tab of tabs) {
+    const title = tabTitle(tab);
+    const group = sharing.get(title);
+    if (group === undefined) sharing.set(title, [tab]);
+    else group.push(tab);
+  }
+  const titles: Record<TabId, string> = {};
+  for (const [title, group] of sharing) {
+    const distinct = new Set(group.map((tab) => tabTooltip(tab)));
+    for (const tab of group)
+      titles[tab.id] = distinct.size <= 1 ? title : distinguish(tab, group);
+  }
+  return titles;
+}
+
+/** The shortest tail of this tab's target that no sibling's tail matches. */
+function distinguish(tab: PanelTab, group: readonly PanelTab[]): string {
+  const own = segmentsOf(tabTooltip(tab));
+  const others = group
+    .filter(
+      (other) => other.id !== tab.id && tabTooltip(other) !== tabTooltip(tab),
+    )
+    .map((other) => segmentsOf(tabTooltip(other)));
+  for (let take = 2; take <= own.length; take += 1) {
+    const label = own.slice(-take).join("/");
+    if (others.every((other) => other.slice(-take).join("/") !== label))
+      return label;
+  }
+  return own.join("/");
+}
+
+function segmentsOf(path: string): string[] {
+  return path.split("/").filter((segment) => segment.length > 0);
 }
 
 function browserTitle(url: string): string {

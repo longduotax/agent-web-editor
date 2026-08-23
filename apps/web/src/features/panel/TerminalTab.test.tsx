@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TerminalIdSchema } from "@pi-web/contracts";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 // The terminal itself is covered by TerminalView.test.tsx; this file is
@@ -77,6 +78,12 @@ class MockWebSocket extends EventTarget {
   public send(data: string): void {
     this.sent.push(data);
   }
+  /** The socket becoming usable: what the view waits for before it asks. */
+  public open(): void {
+    act(() => {
+      this.dispatchEvent(new Event("open"));
+    });
+  }
   /** What the server would push down the wire. */
   public deliver(frame: unknown): void {
     act(() => {
@@ -87,7 +94,9 @@ class MockWebSocket extends EventTarget {
   }
 }
 
-const terminalId = "30000000-0000-4000-8000-000000000001";
+const terminalId = TerminalIdSchema.parse(
+  "30000000-0000-4000-8000-000000000001",
+);
 
 function ready(socket: MockWebSocket): void {
   socket.deliver({ version: 1, type: "ready", projectId, terminalId });
@@ -226,7 +235,8 @@ describe("TerminalTab", () => {
     expect(screen.getByText("Terminal exited")).toBeInTheDocument();
     const restart = screen.getByRole("button", { name: "Start terminal" });
     await user.click(restart);
-    expect(sentTypes(socket)).toContain("attach");
+    // A new shell, not another claim on the one that has gone (WSP-07).
+    expect(sentTypes(socket)).toContain("create");
   });
 
   // D4. `visible` used to be accepted and silently dropped. A hidden
@@ -263,6 +273,61 @@ describe("TerminalTab", () => {
     expect(sentTypes(socket).filter((type) => type === "resize")).toHaveLength(
       2,
     );
+  });
+
+  // WSP-04 and WSP-07: the tab's durable state is which shell it is attached
+  // to and where that shell is. Both are recorded through `updateTab`, which
+  // is what puts them in the panel record before the next reload.
+  it("records the terminal it attached to and the directory it is in", () => {
+    stubEnvironment();
+    const actions = actionsSpy();
+    render(<TerminalTab tab={tab} visible actions={actions} />);
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    if (socket === undefined) return;
+
+    ready(socket);
+    expect(actions.updateTab).toHaveBeenCalledWith("t", { terminalId });
+
+    socket.deliver({
+      version: 1,
+      type: "cwd",
+      projectId,
+      terminalId,
+      cwd: "apps/web",
+    });
+    expect(actions.updateTab).toHaveBeenCalledWith("t", { cwd: "apps/web" });
+  });
+
+  // The reload path: a tab that recorded a terminal claims that one back,
+  // with its scrollback, rather than starting a second shell (WSP-07).
+  it("claims the recorded terminal on mount, and creates one otherwise", () => {
+    stubEnvironment();
+    render(
+      <TerminalTab
+        tab={{ ...tab, terminalId, cwd: "apps/web" }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    if (socket === undefined) return;
+    socket.open();
+    expect(JSON.parse(socket.sent[0] ?? "{}")).toMatchObject({
+      type: "attach",
+      terminalId,
+    });
+
+    cleanup();
+    render(<TerminalTab tab={tab} visible actions={actionsSpy()} />);
+    const second = sockets[1];
+    expect(second).toBeDefined();
+    if (second === undefined) return;
+    second.open();
+    expect(JSON.parse(second.sent[0] ?? "{}")).toMatchObject({
+      type: "create",
+    });
   });
 
   it("says so, and starts no shell, when it has no worktree to run in", () => {

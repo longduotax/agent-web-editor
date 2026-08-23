@@ -55,7 +55,13 @@ function changesTab(overrides: Partial<TabContext> = {}): NewPanelTab {
 }
 
 function fileTab(path: string): NewPanelTab {
-  return { type: "file", context: context(), path, view: "preview" };
+  return {
+    type: "file",
+    context: context(),
+    path,
+    view: "preview",
+    wrap: false,
+  };
 }
 
 function terminalTab(cwd = "/repo"): NewPanelTab {
@@ -673,6 +679,54 @@ describe("updateTab", () => {
     if (tab?.type !== "file") throw new Error("expected a file tab");
     expect(tab.view).toBe("source");
     expect(tab.path).toBe("a.md");
+  });
+
+  it("turns a file tab's soft wrap on and off (K5)", () => {
+    const make = ids();
+    let state = openTab(createEmptyPanel(make), fileTab("a.md"), make);
+    const tabId = tabIdsOf(state, onlyGroupId(state))[0];
+    if (tabId === undefined) throw new Error("expected a tab");
+
+    state = updateTab(state, tabId, { wrap: true });
+    let tab = state.tabs[tabId];
+    if (tab?.type !== "file") throw new Error("expected a file tab");
+    expect(tab.wrap).toBe(true);
+    // Turning it back OFF has to reach the tab, which is why the patch is
+    // read with `??` and not with a truthiness test: `false` is a value the
+    // user chose, not an absent one.
+    state = updateTab(state, tabId, { wrap: false });
+    tab = state.tabs[tabId];
+    if (tab?.type !== "file") throw new Error("expected a file tab");
+    expect(tab.wrap).toBe(false);
+    // ...and the view mode beside it is untouched by either.
+    expect(tab.view).toBe("preview");
+  });
+
+  it("turns a diff tab's soft wrap on without disturbing its collapses (K5)", () => {
+    const make = ids();
+    let state = openTab(
+      createEmptyPanel(make),
+      {
+        type: "diff",
+        context: context(),
+        path: "a.ts",
+        collapsedHunks: ["unstaged:abc:0"],
+        wrap: false,
+      },
+      make,
+    );
+    const tabId = tabIdsOf(state, onlyGroupId(state))[0];
+    if (tabId === undefined) throw new Error("expected a tab");
+
+    state = updateTab(state, tabId, { wrap: true });
+
+    const tab = state.tabs[tabId];
+    if (tab?.type !== "diff") throw new Error("expected a diff tab");
+    expect(tab.wrap).toBe(true);
+    expect(tab.collapsedHunks).toEqual(["unstaged:abc:0"]);
+    // And the no-op stays a no-op, so a re-render of one tab body cannot
+    // invalidate the record every other body is memoised against (WSP-09).
+    expect(updateTab(state, tabId, { wrap: true })).toBe(state);
   });
 
   it("updates a terminal's cwd and attaches a live process", () => {

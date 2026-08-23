@@ -174,6 +174,11 @@ export function useTabDrag(
   actions: PanelActions,
 ): TabDragController {
   const [drag, setDrag] = useState<TabDragState | null>(null);
+  // The same value as `drag`, readable synchronously. The handlers below run
+  // between renders and have to answer "is a drag on screen right now?"
+  // without waiting for one (H7).
+  const dragRef = useRef<TabDragState | null>(null);
+  dragRef.current = drag;
   const tracking = useRef<Tracking | null>(null);
   const ghostRef = useRef<HTMLDivElement | null>(null);
   const point = useRef<DragPoint>({ x: 0, y: 0 });
@@ -301,20 +306,37 @@ export function useTabDrag(
       element.releasePointerCapture(pointerId);
   };
 
-  const finish = (current: Tracking, announcement: string | null) => {
-    releaseCapture(current);
-    tracking.current = null;
+  /** Everything a drag put on screen, taken back off it. */
+  const clearDrag = () => {
     zones.current = [];
     target.current = null;
     listElements.current.clear();
-    swallowClickFor.current = current.tabId;
+    dragRef.current = null;
     setDrag(null);
+  };
+
+  const finish = (current: Tracking, announcement: string | null) => {
+    releaseCapture(current);
+    tracking.current = null;
+    swallowClickFor.current = current.tabId;
+    clearDrag();
     if (announcement !== null) actions.announce(announcement);
   };
 
   const cancel = () => {
     const current = tracking.current;
-    if (current === null) return;
+    if (current === null) {
+      // A drag whose gesture is gone. This used to return here and leave the
+      // ghost, both groups' drop zones, and the dimmed tab on screen with
+      // nothing behind them — and, because Escape cancels through this
+      // function, it left them there permanently (H7). The state is cleared
+      // on its own terms instead: there is no capture to release and no
+      // click to swallow, because the gesture that owned them has ended.
+      if (dragRef.current === null) return;
+      clearDrag();
+      actions.announce(DRAG_CANCELLED_MESSAGE);
+      return;
+    }
     // Nothing is dispatched, so the state object the panel is rendering is
     // the one it was rendering before the drag — WSP-03's "leaves the layout
     // exactly as it was", by reference rather than by rebuilding an equal
@@ -380,13 +402,15 @@ export function useTabDrag(
     const next = resolveDropTarget(point.current, zones.current);
     target.current = next;
     const plan = planFor(next);
-    setDrag({
+    const state: TabDragState = {
       tabId: current.tabId,
       title: current.title,
       target: next,
       refused: plan.kind === "none",
       zones: zones.current,
-    });
+    };
+    dragRef.current = state;
+    setDrag(state);
     // The pick-up and the target it is already over, in ONE message: two
     // would overwrite each other in the live region, which is why the first
     // target after a pick-up was never heard (G5).
@@ -433,6 +457,11 @@ export function useTabDrag(
       // Secondary buttons open menus; a non-primary pointer is a second
       // finger, which must not start a second drag.
       if (event.button !== 0 || !event.isPrimary) return;
+      // A press begins a gesture, so whatever the previous one left behind
+      // ends here. Without this a second `pointerdown` mid-drag replaced the
+      // tracking record with a non-dragging one, and the drag on screen
+      // belonged to nothing (H7).
+      if (tracking.current !== null || dragRef.current !== null) cancel();
       swallowClickFor.current = null;
       // Captured HERE, on the press, rather than once the threshold is
       // crossed (G3). `onTabPointerMove` is bound to the tab, so before this
@@ -488,6 +517,12 @@ export function useTabDrag(
         // press is given back.
         releaseCapture(current);
         tracking.current = null;
+        // And a drag left over from an earlier gesture does not survive this
+        // release either, whichever way it came to be there (H7).
+        if (dragRef.current !== null) {
+          clearDrag();
+          actions.announce(DRAG_CANCELLED_MESSAGE);
+        }
         return;
       }
       // A release resolves its OWN coordinates when they differ from the
@@ -506,7 +541,12 @@ export function useTabDrag(
       commit(current);
     },
     onTabPointerCancel: (event) => {
-      if (tracking.current?.pointerId !== event.pointerId) return;
+      if (tracking.current === null) {
+        // Nothing is being tracked, but something may still be on screen.
+        if (dragRef.current !== null) cancel();
+        return;
+      }
+      if (tracking.current.pointerId !== event.pointerId) return;
       cancel();
     },
     consumeClick: (tabId) => {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ProjectIdSchema,
   RelativePathSchema,
+  TerminalIdSchema,
   ThreadIdSchema,
 } from "@pi-web/contracts";
 
@@ -26,19 +27,20 @@ import type { NewPanelTab, PanelTab } from "./panelTabs.js";
 // than an exception: a browser with storage disabled must still work.
 
 export const PANEL_STORAGE_KEY = "pi-workspace:panel";
-export const PANEL_STATE_VERSION = 3;
+export const PANEL_STATE_VERSION = 4;
 
 // Record versions this reader still accepts, and migrates on read.
 //
 // Version 3 added `expanded` and `showIgnored` to the `files` tab for the
-// file tree (WSP-05 as revised by specification version 2). That is the whole
-// of the difference, and both fields carry a default below, so a version 2
-// record migrates by being parsed: the next write stamps it 3. The chain from
-// the v1 inspector preference is unbroken — a device that has not opened the
-// panel since the inspector shipped still migrates v1 -> v3 in one read,
-// because the v1 migration builds tabs through the model rather than through
-// this schema.
-const MIGRATABLE_PANEL_VERSIONS = [2] as const;
+// file tree (WSP-05 as revised by specification version 2). Version 4 added
+// `wrap` to the `file` and `diff` tabs for the soft-wrap toggle (WSP-05 as
+// revised by version 3, K5). That is the whole of each difference, and every
+// one of those fields carries a default below, so an older record migrates by
+// being parsed: the next write stamps it 4. The chain from the v1 inspector
+// preference is unbroken — a device that has not opened the panel since the
+// inspector shipped still migrates v1 -> v4 in one read, because the v1
+// migration builds tabs through the model rather than through this schema.
+const MIGRATABLE_PANEL_VERSIONS = [2, 3] as const;
 
 // The shipped inspector's own key. Held here rather than imported, because
 // this migration has to outlive the module that wrote it: that module is
@@ -92,6 +94,9 @@ const PanelTabSchema = z.discriminatedUnion("type", [
     context: TabContextSchema.nullable(),
     path: z.string(),
     view: z.enum(["preview", "source"]),
+    // The version 3 -> 4 migration: scrolling is what the tab did before the
+    // toggle existed, so a record written without one comes back scrolling.
+    wrap: z.boolean().default(false),
   }),
   z.object({
     id: z.string(),
@@ -99,6 +104,7 @@ const PanelTabSchema = z.discriminatedUnion("type", [
     context: TabContextSchema.nullable(),
     path: z.string(),
     collapsedHunks: z.array(z.string()),
+    wrap: z.boolean().default(false),
   }),
   z.object({
     id: z.string(),
@@ -240,10 +246,15 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
   return parsed;
 }
 
-// A terminal tab always comes back detached. The process belongs to the
-// server, not to this record: after a reload the tab re-attaches to a
-// still-running process or reports it gone with a restart action (WSP-07),
-// and a stale id would have it claim a process it does not have.
+// A terminal tab comes back naming the process it was attached to and the
+// directory it was in (WSP-07): that is what lets a reload re-attach to a
+// still-running shell, with replay, instead of orphaning it or starting a
+// second one. Neither field is trusted — the id is a claim the server checks
+// against what it actually owns, and answers `terminal_gone` for anything
+// else, and the directory becomes a spawn path that the server resolves and
+// contains. What this does is refuse to send either one in a shape its own
+// contract would reject, because both come from a key any script on the
+// origin can write.
 //
 // A browser tab comes back with only the addresses WSP-08 allows. A rejected
 // one is cleared from the tab rather than carried in state for the component
@@ -252,7 +263,16 @@ function readJson(storage: PreferenceStorage | null, key: string): unknown {
 // press later, so it is filtered too — which is what makes `historyIndex`
 // meaningful again.
 function restoreTab(tab: PersistedTab): PanelTab {
-  if (tab.type === "terminal") return { ...tab, terminalId: null };
+  if (tab.type === "terminal") {
+    const terminalId = TerminalIdSchema.safeParse(tab.terminalId);
+    return {
+      ...tab,
+      // "" is the execution root, which is where a terminal starts when it
+      // has nowhere else recorded.
+      cwd: RelativePathSchema.safeParse(tab.cwd).success ? tab.cwd : "",
+      terminalId: terminalId.success ? terminalId.data : null,
+    };
+  }
   if (tab.type === "browser") {
     const history = tab.history.filter(isEmbeddableAddress);
     return {

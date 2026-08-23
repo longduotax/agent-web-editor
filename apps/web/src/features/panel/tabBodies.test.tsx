@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import type { GitFileStatus, ProjectId, ThreadId } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
   getDiff: vi.fn(),
@@ -26,7 +26,10 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
+import { ApiClientError } from "../../api/client.js";
 import { ChangesTab } from "./ChangesTab.js";
+import { CHANGES_RENDER_LIMIT } from "./ChangesTab.js";
+import { DIFF_CHARACTER_LIMIT, DIFF_LINE_LIMIT } from "./parseUnifiedDiff.js";
 import { DiffTab } from "./DiffTab.js";
 import { FilesTab } from "./FilesTab.js";
 import { FileTab } from "./FileTab.js";
@@ -47,6 +50,17 @@ const context: TabContext = {
   scopeKey: projectId,
   label: "Example project",
 };
+
+/** One `GitFileStatus`, with the fields this suite does not care about. */
+function statusOf(path: string, kind: GitFileStatus["kind"]): GitFileStatus {
+  return {
+    path,
+    originalPath: null,
+    indexStatus: " ",
+    worktreeStatus: "M",
+    kind,
+  };
+}
 
 function actionsSpy(): PanelActions {
   return {
@@ -175,7 +189,77 @@ describe("ChangesTab", () => {
       context,
       path: "src/main.ts",
       collapsedHunks: [],
+      wrap: false,
     });
+  });
+
+  it("carries the change kind in a letter and a word, not in a colour", async () => {
+    // WSP-06. The letters are Git's own: taking the first letter of the
+    // kind's name gave "C" to both "copied" and "conflicted", which is a
+    // distinction carried by colour alone in everything but name. The word
+    // is what a screen reader reads, because "M" is a letter and not a
+    // sentence.
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: [
+        statusOf("src/copied.ts", "copied"),
+        statusOf("src/conflicted.ts", "conflicted"),
+        statusOf("src/new.ts", "untracked"),
+      ],
+    });
+    const { container } = renderBody(
+      <ChangesTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByRole("button", { name: /copied\.ts/ });
+
+    expect(
+      [...container.querySelectorAll(".change-kind")].map(
+        (mark) => mark.textContent,
+      ),
+    ).toEqual(["C", "U", "?"]);
+    // Tolerant of the separator, not of the words: whether the name
+    // computation keeps the space between two inline spans is the accessible
+    // name implementation's business, and what matters here is that the kind
+    // is IN the name at all.
+    expect(
+      screen.getByRole("button", {
+        name: /^Conflicted:\s*src\/conflicted\.ts$/,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /^Untracked:\s*src\/new\.ts$/ }),
+    ).toBeVisible();
+  });
+
+  it("paints a bounded portion of a very long list and says what it left out", async () => {
+    // WSP-09 names status lists alongside file listings and diffs.
+    api.getStatus.mockResolvedValue({
+      available: true,
+      message: null,
+      files: Array.from({ length: CHANGES_RENDER_LIMIT + 3 }, (_, index) =>
+        statusOf(`src/file-${String(index)}.ts`, "modified"),
+      ),
+    });
+    const { container } = renderBody(
+      <ChangesTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByRole("button", { name: /file-0\.ts/ });
+
+    expect(container.querySelectorAll(".file-list li")).toHaveLength(
+      CHANGES_RENDER_LIMIT,
+    );
+    expect(
+      screen.getByText(
+        `Showing the first ${String(CHANGES_RENDER_LIMIT)} of ${String(CHANGES_RENDER_LIMIT + 3)} changed files.`,
+      ),
+    ).toBeVisible();
+    // The summary still counts every change, not the painted portion.
+    expect(
+      screen.getByText(
+        new RegExp(`${String(CHANGES_RENDER_LIMIT + 3)} modified`),
+      ),
+    ).toBeVisible();
   });
 
   it("issues no request while it is hidden", () => {
@@ -351,6 +435,7 @@ describe("FilesTab", () => {
       context,
       path: "src/main.ts",
       view: "preview",
+      wrap: false,
     });
     expect(screen.getByRole("button", { name: /src$/ })).toBeDisabled();
   });
@@ -379,91 +464,6 @@ describe("FilesTab", () => {
   });
 });
 
-describe("FileTab", () => {
-  const tab = {
-    id: "t",
-    type: "file",
-    context,
-    path: "src/main.ts",
-    view: "preview",
-  } as const;
-
-  it("renders the file's text with copy actions", async () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
-      content: "const answer = 42;",
-      binary: false,
-      truncated: false,
-    });
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByText("const answer = 42;")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Copy path" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Copy contents" })).toBeVisible();
-  });
-
-  it("labels a binary file instead of painting bytes", async () => {
-    api.getFile.mockResolvedValue({
-      path: "logo.png",
-      language: null,
-      content: "",
-      binary: true,
-      truncated: false,
-    });
-    renderBody(
-      <FileTab
-        tab={{ ...tab, path: "logo.png" }}
-        visible
-        actions={actionsSpy()}
-      />,
-    );
-
-    expect(
-      await screen.findByText("Binary file preview is unavailable."),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Copy contents" }),
-    ).toBeDisabled();
-  });
-
-  it("says when the server truncated the file", async () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
-      content: "const answer = 42;",
-      binary: false,
-      truncated: true,
-    });
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByText(/truncated/)).toBeVisible();
-  });
-
-  it("offers a retry when the read fails", async () => {
-    api.getFile.mockRejectedValue(new Error("file was not found"));
-    renderBody(<FileTab tab={tab} visible actions={actionsSpy()} />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "file was not found",
-    );
-    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
-  });
-
-  it("issues no request while it is hidden", () => {
-    api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: null,
-      content: "",
-      binary: false,
-      truncated: false,
-    });
-    renderBody(<FileTab tab={tab} visible={false} actions={actionsSpy()} />);
-
-    expect(api.getFile).not.toHaveBeenCalled();
-  });
-});
-
 describe("DiffTab", () => {
   const tab = {
     id: "t",
@@ -471,15 +471,45 @@ describe("DiffTab", () => {
     context,
     path: "src/main.ts",
     collapsedHunks: [] as string[],
+    wrap: false,
   };
 
-  it("labels the staged and unstaged sections separately and keeps the +/- prefixes", async () => {
-    api.getDiff.mockResolvedValue({
+  /** The shape of everything below: two hunks, both sides numbered. */
+  const UNSTAGED = [
+    "diff --git a/src/main.ts b/src/main.ts",
+    "index c9e9e05..061a3ba 100644",
+    "--- a/src/main.ts",
+    "+++ b/src/main.ts",
+    "@@ -1,3 +1,3 @@",
+    " one",
+    "-two",
+    "+TWO",
+    "@@ -20,2 +20,3 @@ function main() {",
+    " twenty",
+    "+twenty and a half",
+    "",
+  ].join("\n");
+
+  function diffOf(
+    overrides: Partial<{
+      staged: string;
+      unstaged: string;
+      truncated: boolean;
+    }> = {},
+  ) {
+    return {
       path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n-old\n+new\n",
-      unstaged: "@@ -2 +2 @@\n-two\n+three\n",
+      staged: "",
+      unstaged: UNSTAGED,
       truncated: false,
-    });
+      ...overrides,
+    };
+  }
+
+  it("labels the staged and unstaged sections separately and keeps the +/- prefixes", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
     const { container } = renderBody(
       <DiffTab tab={tab} visible actions={actionsSpy()} />,
     );
@@ -487,22 +517,252 @@ describe("DiffTab", () => {
     expect(await screen.findByText("Staged")).toBeVisible();
     expect(screen.getByText("Unstaged")).toBeVisible();
     // The prefix character stays in the text, so the distinction is never
-    // carried by colour alone.
+    // carried by colour alone (WSP-06).
     expect(container.querySelector(".diff-add")).toHaveTextContent("+new");
-    expect(container.querySelector(".diff-remove")).toHaveTextContent("-old");
+    expect(container.querySelector(".diff-delete")).toHaveTextContent("-old");
+  });
+
+  it("names the worktree it reads and the file's own add and delete counts", async () => {
+    api.getDiff.mockResolvedValue(diffOf());
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(await screen.findByText("2 added")).toBeVisible();
+    expect(screen.getByText("1 deleted")).toBeVisible();
+    // Current working-tree state of a named worktree, never the thread's
+    // output (WSP-06).
+    expect(screen.getByText("Working tree: Example project")).toBeVisible();
+    expect(screen.getByTitle("src/main.ts")).toBeVisible();
+  });
+
+  it("draws both line numbers as attributes rather than as text", async () => {
+    // The mechanism, not the appearance: a number in an attribute is drawn by
+    // `content: attr(…)` on a `::before`, which a selection cannot reach and
+    // `textContent` does not contain, so a copied diff is the diff (J11). A
+    // number rendered as a text node would be copied with it. The end-to-end
+    // suite measures the selection itself, which jsdom cannot.
+    api.getDiff.mockResolvedValue(diffOf());
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    const lines = [...container.querySelectorAll(".diff-line")].map((line) => [
+      line.getAttribute("data-old"),
+      line.querySelector(".diff-line-body")?.getAttribute("data-new"),
+      line.textContent,
+    ]);
+    expect(lines).toEqual([
+      ["1", "1", " one\n"],
+      ["2", "", "-two\n"],
+      ["", "2", "+TWO"],
+      ["20", "20", " twenty\n"],
+      ["", "21", "+twenty and a half"],
+    ]);
+    // And nothing a copy would pick up carries a gutter number.
+    expect(container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
+  });
+
+  it("gives the +/- prefix an element of its own so it can be pinned (K1)", async () => {
+    // WSP-06 says the add/remove distinction is never carried by colour
+    // alone, and a sideways scroll used to do exactly that: the prefix and
+    // both gutters scrolled out of view and left only a wash whose add/
+    // delete pair measures 1.04:1 in light and 1.06:1 in dark. Pinning them
+    // needs the prefix to be a box, and it has to be a REAL text node rather
+    // than generated content, because the prefix is patch content a copy has
+    // to carry (unlike the numbers, which it must not).
+    api.getDiff.mockResolvedValue(diffOf());
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    const split = [...container.querySelectorAll(".diff-line")].map((line) => [
+      line.querySelector(".diff-line-prefix")?.textContent,
+      line.querySelector(".diff-line-text")?.textContent,
+    ]);
+    expect(split).toEqual([
+      [" ", "one"],
+      ["-", "two"],
+      ["+", "TWO"],
+      [" ", "twenty"],
+      ["+", "twenty and a half"],
+    ]);
+    // The split is presentational only: the text a selection sees is the
+    // patch line, character for character, prefix included.
+    expect(container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
+  });
+
+  it("separates the hunk header from its tally in the accessible name (K4)", async () => {
+    // Measured: `"@@ -43,6 +43,8 @@ Ground truth is never a field on
+    // `Subject`/`Trajectory`/`Valuation`.+2 -0"`, which a screen reader
+    // reads as "…period plus two minus zero" — the header's own trailing
+    // text runs straight into the tally with nothing between them. A
+    // visually hidden `", "` makes it a sentence with a pause in it, and
+    // changes nothing on screen.
+    api.getDiff.mockResolvedValue(diffOf());
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    // Tolerant of the separator's own spacing and not of what it separates,
+    // exactly as the Changes tab's kind-word case above is. The two
+    // implementations disagree about the whitespace and both are fine:
+    // jsdom trims each node and yields `@@ … @@,+1 -1`, Chrome puts a space
+    // either side of the out-of-flow `.sr-only` box and yields
+    // `@@ … @@ , +1 -1`. What matters is that the header no longer runs
+    // straight into the tally, which is what made it read as "period plus
+    // two minus zero".
+    expect(
+      await screen.findByRole("button", {
+        name: /^@@ -1,3 \+1,3 @@\s*,\s*\+1 -1$/,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: /^@@ -20,2 \+20,3 @@ function main\(\) \{\s*,\s*\+1 -0$/,
+      }),
+    ).toBeVisible();
+  });
+
+  it("wraps its lines on the tab's own record, not on component state (K5)", async () => {
+    // K5, a scope addition rather than a defect. Width is the main thing
+    // that would send a reader back to `git diff`: about 40 characters of
+    // code at the 400px default and 25 at the 280px floor, against a
+    // terminal at 120 columns. The toggle is on the tab beside the
+    // collapse, so WSP-04 carries it through a switch, a reload and a drag.
+    const user = userEvent.setup();
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actions} />,
+    );
+    const toggle = await screen.findByRole("button", { name: "Wrap lines" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(container.querySelector(".diff-lines.wrap")).toBeNull();
+
+    await user.click(toggle);
+
+    expect(actions.updateTab).toHaveBeenCalledWith(tab.id, { wrap: true });
+
+    cleanup();
+    const wrapped = renderBody(
+      <DiffTab tab={{ ...tab, wrap: true }} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+    expect(screen.getByRole("button", { name: "Wrap lines" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // Every hunk's body wraps, not only the first: the toggle is the tab's,
+    // not one disclosure's.
+    const bodies = [...wrapped.container.querySelectorAll(".diff-lines")];
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every((body) => body.classList.contains("wrap"))).toBe(true);
+    // Wrapping is a layout decision and nothing else: the numbers are still
+    // attributes and the text is still the patch, character for character.
+    expect(wrapped.container.querySelector(".diff-lines")?.textContent).toBe(
+      " one\n-two\n+TWO",
+    );
+  });
+
+  it("collapses a hunk into the tab's own record, and reopens it from there", async () => {
+    const user = userEvent.setup();
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    renderBody(<DiffTab tab={tab} visible actions={actions} />);
+    const toggle = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(toggle);
+
+    // The collapse is persisted state on the tab (WSP-04), not component
+    // state, which is what carries it through a tab switch, a reload and a
+    // drag between groups.
+    expect(actions.updateTab).toHaveBeenCalledTimes(1);
+    const patch = vi.mocked(actions.updateTab).mock.calls[0]?.[1];
+    const collapsedHunks = patch?.collapsedHunks ?? [];
+    expect(collapsedHunks).toHaveLength(1);
+
+    cleanup();
+    const reopened = renderBody(
+      <DiffTab
+        tab={{ ...tab, collapsedHunks }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+    const restored = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    expect(restored).toHaveAttribute("aria-expanded", "false");
+    // Hidden rather than unmounted: collapsing costs no layout and expanding
+    // re-does no work (WSP-09).
+    const bodies = reopened.container.querySelectorAll(".diff-lines");
+    expect(bodies[0]).not.toBeVisible();
+    expect(bodies[1]).toBeVisible();
+  });
+
+  it("keeps a collapsed hunk collapsed when the same diff is fetched again", async () => {
+    // The identity a collapse is remembered by has to survive a refetch of
+    // the same content, and survive a hunk being added above it. Both are
+    // asserted over the parser in `parseUnifiedDiff.test.ts`; this is the
+    // claim that the tab uses that identity and not the hunk's position.
+    api.getDiff.mockResolvedValue(diffOf());
+    const actions = actionsSpy();
+    const first = renderBody(<DiffTab tab={tab} visible actions={actions} />);
+    const toggle = await screen.findByRole("button", {
+      name: /@@ -1,3 \+1,3 @@/,
+    });
+    await userEvent.setup().click(toggle);
+    const collapsedHunks =
+      vi.mocked(actions.updateTab).mock.calls[0]?.[1].collapsedHunks ?? [];
+    first.unmount();
+    cleanup();
+
+    // The same file with a new hunk inserted ABOVE the collapsed one, which
+    // renumbers every header below it.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "@@ -1,1 +1,2 @@",
+          " zero",
+          "+inserted",
+          "@@ -2,3 +3,3 @@",
+          " one",
+          "-two",
+          "+TWO",
+          "",
+        ].join("\n"),
+      }),
+    );
+    renderBody(
+      <DiffTab
+        tab={{ ...tab, collapsedHunks }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /@@ -2,3 \+3,3 @@/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.getByRole("button", { name: /@@ -1,1 \+1,2 @@/ }),
+    ).toHaveAttribute("aria-expanded", "true");
   });
 
   // F2, the Diff tab's half. A `pre` that scrolls on its own puts its
   // horizontal scrollbar wherever that section happens to end, which for
-  // anything but a tiny diff is below the fold. Both sections live in ONE
+  // anything but a tiny diff is below the fold. Every `pre` lives in ONE
   // box, which the stylesheet bounds to the tab's height.
-  it("scrolls both sections in one box the stylesheet can bound", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n-old\n+new\n",
-      unstaged: "@@ -2 +2 @@\n-two\n+three\n",
-      truncated: false,
-    });
+  it("scrolls every section and every hunk in one box the stylesheet can bound", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
     const { container } = renderBody(
       <DiffTab tab={tab} visible actions={actionsSpy()} />,
     );
@@ -510,19 +770,83 @@ describe("DiffTab", () => {
 
     const body = container.querySelector(".diff-view > .diff-body");
     expect(body).not.toBeNull();
-    // Every `pre` in the view is inside it, and none of them is a scroll
-    // container of its own.
-    expect(container.querySelectorAll(".diff-view pre")).toHaveLength(2);
-    expect(body?.querySelectorAll("pre")).toHaveLength(2);
+    expect(container.querySelectorAll(".diff-view pre")).toHaveLength(3);
+    expect(body?.querySelectorAll("pre")).toHaveLength(3);
+  });
+
+  it("shows an untracked file's preview as additions with no old side", async () => {
+    // What the read boundary produces for a file Git does not track: a
+    // `/dev/null` old side, so every line is an addition and the old gutter
+    // is empty for all of them.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --git a/src/main.ts b/src/main.ts",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/src/main.ts",
+          "@@ -0,0 +1,2 @@",
+          "+first",
+          "+second",
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(screen.getByText("new file mode 100644")).toBeVisible();
+    expect(
+      [...container.querySelectorAll(".diff-line")].map((line) =>
+        line.getAttribute("data-old"),
+      ),
+    ).toEqual(["", ""]);
+    expect(screen.getByText("2 added")).toBeVisible();
+    expect(screen.getByText("0 deleted")).toBeVisible();
+  });
+
+  it("says a binary file has nothing to compare instead of showing nothing", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --git a/src/main.ts b/src/main.ts",
+          "index 0000000..0f49c4a 100644",
+          "Binary files a/src/main.ts and b/src/main.ts differ",
+          "",
+        ].join("\n"),
+      }),
+    );
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByText(
+        "Git reports this file as binary, so there are no lines to compare.",
+      ),
+    ).toBeVisible();
+    // No counts either: there are no lines to have counted.
+    expect(screen.queryByText("0 added")).toBeNull();
+  });
+
+  it("shows a diff it cannot read exactly as Git wrote it", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ unstaged: "fatal: something went wrong\n" }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+
+    expect(
+      await screen.findByText(/could not read this as a unified diff/),
+    ).toBeVisible();
+    expect(container.querySelector(".diff-raw")).toHaveTextContent(
+      "fatal: something went wrong",
+    );
   });
 
   it("says when a diff is empty rather than showing an empty box", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "",
-      unstaged: "",
-      truncated: false,
-    });
+    api.getDiff.mockResolvedValue(diffOf({ unstaged: "" }));
     renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
 
     expect(
@@ -530,16 +854,146 @@ describe("DiffTab", () => {
     ).toBeVisible();
   });
 
-  it("says when the diff was truncated", async () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "@@ -1 +1 @@\n+new\n",
-      unstaged: "",
-      truncated: true,
-    });
+  it("says when the server stopped reading the diff short", async () => {
+    api.getDiff.mockResolvedValue(diffOf({ truncated: true }));
     renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
 
-    expect(await screen.findByText(/truncated/)).toBeVisible();
+    expect(
+      await screen.findByText(
+        "The workspace stopped reading this diff at its own output limit, so everything below is the beginning of the change and not all of it.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("paints a bounded portion of a huge diff and says so, of what", async () => {
+    const body = Array.from(
+      { length: DIFF_LINE_LIMIT + 40 },
+      (_, index) => `+line ${String(index)}`,
+    );
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          `@@ -0,0 +1,${String(DIFF_LINE_LIMIT + 40)} @@`,
+          ...body,
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(container.querySelectorAll(".diff-line")).toHaveLength(
+      DIFF_LINE_LIMIT,
+    );
+    expect(
+      screen.getByText(
+        `Showing the first ${String(DIFF_LINE_LIMIT)} of the ${String(DIFF_LINE_LIMIT + 40)} lines of the unstaged diff. The counts above are of the whole change.`,
+      ),
+    ).toBeVisible();
+    // The counts stay the file's own, not the painted portion's (J7).
+    expect(
+      screen.getByText(`${String(DIFF_LINE_LIMIT + 40)} added`),
+    ).toBeVisible();
+  });
+
+  it("names the CHARACTER bound when that is the one that bit", async () => {
+    // The shape the line bound cannot catch, and the reason there are two:
+    // a minified bundle's diff is a handful of enormous lines, so 1,000
+    // lines never engages and 256 KiB does. Quoting a line count for it
+    // would say nothing about the file — "the first 1,000 of 4 lines" — and
+    // that is exactly the untruth J7 fixed on the File tab. Proven here
+    // rather than only in the parser's own unit case, because the sentence
+    // the reader sees is this component's.
+    const line = "x".repeat(DIFF_CHARACTER_LIMIT / 2);
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "@@ -0,0 +1,4 @@",
+          `+${line}`,
+          `+${line}`,
+          `+${line}`,
+          `+${line}`,
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(
+      screen.getByText(
+        `Showing the first ${String(DIFF_CHARACTER_LIMIT / 1024)} KiB of the unstaged diff. The rest of it is not painted.`,
+      ),
+    ).toBeVisible();
+    // The bound really bit on characters: fewer lines are painted than the
+    // four the diff has, and far fewer than the 1,000-line budget allows.
+    const painted = container.querySelectorAll(".diff-line");
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.length).toBeLessThan(4);
+    // And the header still counts the whole change, not the painted part.
+    expect(screen.getByText("4 added")).toBeVisible();
+  });
+
+  it("renders a real merge's combined diff as Git wrote it, and says why", async () => {
+    // The bytes `git diff` actually writes for an unmerged path, captured
+    // from the real-merge case in `apps/server/src/inspector/git.test.ts`.
+    // Two prefix columns, in which "the old side" is not one file — so a
+    // two-gutter rendering would be a confident lie, and the tab does not
+    // attempt one.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --cc tracked.txt",
+          "index daf31e1,594dc4f..0000000",
+          "--- a/tracked.txt",
+          "+++ b/tracked.txt",
+          "@@@ -1,3 -1,3 +1,7 @@@",
+          "  one",
+          "++<<<<<<< HEAD",
+          " +OURS",
+          "++=======",
+          "+ THEIRS",
+          "++>>>>>>> theirs",
+          "  three",
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+
+    expect(await screen.findByText(/part way through a merge/)).toBeVisible();
+    const raw = container.querySelector(".diff-raw");
+    expect(raw).toHaveTextContent("++<<<<<<< HEAD");
+    expect(raw).toHaveTextContent("++>>>>>>> theirs");
+    // No hunks, no gutters, and no counts: nothing here was read as a side.
+    expect(container.querySelectorAll(".diff-line")).toHaveLength(0);
+    expect(screen.queryByText("0 added")).toBeNull();
+  });
+
+  it("says plainly when the file has stopped being one that changed", async () => {
+    // The working tree is not stable between the status call that listed the
+    // path and the diff call that asks for it — the design boundary says so —
+    // so this is an ordinary event on this tab and not an error to apologise
+    // for.
+    api.getDiff.mockRejectedValue(
+      new ApiClientError(
+        404,
+        "git_path_not_changed",
+        "The file is not in the current change set.",
+      ),
+    );
+    renderBody(<DiffTab tab={tab} visible actions={actionsSpy()} />);
+
+    expect(
+      await screen.findByText(/no changes in this worktree any more/),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 
   it("offers a retry when the read fails", async () => {
@@ -553,15 +1007,36 @@ describe("DiffTab", () => {
   });
 
   it("issues no request while it is hidden", () => {
-    api.getDiff.mockResolvedValue({
-      path: "src/main.ts",
-      staged: "",
-      unstaged: "",
-      truncated: false,
-    });
+    api.getDiff.mockResolvedValue(diffOf({ unstaged: "" }));
     renderBody(<DiffTab tab={tab} visible={false} actions={actionsSpy()} />);
 
     expect(api.getDiff).not.toHaveBeenCalled();
+  });
+
+  it("says so, instead of querying, when it has no worktree to read", () => {
+    renderBody(
+      <DiffTab
+        tab={{ ...tab, context: null }}
+        visible
+        actions={actionsSpy()}
+      />,
+    );
+
+    expect(api.getDiff).not.toHaveBeenCalled();
+    expect(screen.getByText(/not bound to a worktree yet/)).toBeVisible();
+  });
+
+  it("has no axe violations with both sections and a collapsed hunk", async () => {
+    api.getDiff.mockResolvedValue(
+      diffOf({ staged: "@@ -1 +1 @@\n-old\n+new\n" }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Staged");
+
+    const results = await axe.run(container);
+    expect(results.violations).toEqual([]);
   });
 });
 
@@ -586,9 +1061,12 @@ describe("tab bodies are accessible", () => {
       ],
       truncated: false,
     });
+    // `notes.txt` rather than a source file: this case is about the ported
+    // bodies together, and a file with no grammar reaches none of the File
+    // tab's lazy highlighting. `FileTab.test.tsx` covers that on its own.
     api.getFile.mockResolvedValue({
-      path: "src/main.ts",
-      language: "typescript",
+      path: "notes.txt",
+      language: null,
       content: "const answer = 42;",
       binary: false,
       truncated: false,
@@ -617,8 +1095,9 @@ describe("tab bodies are accessible", () => {
             id: "c",
             type: "file",
             context,
-            path: "src/main.ts",
+            path: "notes.txt",
             view: "preview",
+            wrap: false,
           }}
           visible
           actions={actionsSpy()}

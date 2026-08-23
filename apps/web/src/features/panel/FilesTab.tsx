@@ -4,7 +4,11 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { getFiles } from "../../api/client.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { useDebouncedValue } from "../../components/useDebouncedValue.js";
-import { FILE_LIST_RENDER_LIMIT, FileTree } from "./FileTree.js";
+import {
+  boundedListingNotice,
+  FILE_LIST_RENDER_LIMIT,
+  FileTree,
+} from "./FileTree.js";
 import { PANEL_QUERY_STALE_TIME, UnboundNotice } from "./tabBody.js";
 import type { TabBodyProps } from "./tabBody.js";
 
@@ -92,7 +96,13 @@ export const FilesTab = memo(function FilesTab({
       if (context === null) return;
       // A tab of its own (WSP-05), so a document the user is reading
       // survives further browsing.
-      actions.openTab({ type: "file", context, path, view: "preview" });
+      actions.openTab({
+        type: "file",
+        context,
+        path,
+        view: "preview",
+        wrap: false,
+      });
     },
     [actions, context],
   );
@@ -112,7 +122,12 @@ export const FilesTab = memo(function FilesTab({
     : ignoredIn.length > 0;
 
   return (
-    <>
+    // A column: the search, the ignore notice, and the no-selection line each
+    // keep their own height, and the tree or the match list is the one part
+    // that grows and scrolls — the arrangement the file preview already uses
+    // (F2), and what puts the tree's own horizontal scrollbar on screen
+    // instead of at the bottom of a list a thousand pixels tall (H3).
+    <div className="files-tab">
       <input
         className="file-search"
         aria-label="Search project files"
@@ -184,9 +199,14 @@ export const FilesTab = memo(function FilesTab({
               </li>
             ))}
           </ul>
-          {entries.length > FILE_LIST_RENDER_LIMIT && (
+          {(entries.length > FILE_LIST_RENDER_LIMIT ||
+            matches.data?.truncated === true) && (
             <p className="panel-state" aria-live="polite">
-              {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(entries.length)} files. Search to narrow the list.`}
+              {boundedListingNotice(
+                entries.length,
+                matches.data?.truncated === true,
+                "files",
+              )}
             </p>
           )}
           {matches.error !== null && (
@@ -217,6 +237,6 @@ export const FilesTab = memo(function FilesTab({
       {(searching ? entries.length > 0 : rootEntries > 0) && (
         <p className="panel-state">Select a file to open it in its own tab.</p>
       )}
-    </>
+    </div>
   );
 });

@@ -7,7 +7,7 @@ import {
 import { NewTabMenu } from "./NewTabMenu.js";
 import { PanelRightIcon } from "./PanelRightIcon.js";
 import type { TabGroup } from "./panelModel.js";
-import { tabTitle } from "./panelTabs.js";
+import { tabTitle, tabTitles, tabTooltip } from "./panelTabs.js";
 import type { PanelTab, TabContext, TabId } from "./panelTabs.js";
 import { stripCaretOffset } from "./tabDrag.js";
 import { showsWorktreeChip } from "./tabContext.js";
@@ -66,6 +66,10 @@ export function TabStrip(props: TabStripProps): JSX.Element {
   } = props;
   const activeTabId = group.activeTabId;
   const activeTab = activeTabId === null ? undefined : tabs[activeTabId];
+  // Over EVERY tab in the panel, not just this strip's: two tabs on two
+  // files called `README.md` are ambiguous whether or not a split happens to
+  // separate them, and both strips must call them the same thing (J6).
+  const titles = tabTitles(Object.values(tabs));
   // Where a release right now would insert the dragged tab in THIS strip.
   const dropIndex =
     drag.drag?.target?.kind === "strip" && drag.drag.target.groupId === group.id
@@ -160,7 +164,8 @@ export function TabStrip(props: TabStripProps): JSX.Element {
         {group.tabIds.map((tabId) => {
           const tab = tabs[tabId];
           if (tab === undefined) return null;
-          const title = tabTitle(tab);
+          const title = titles[tabId] ?? tabTitle(tab);
+          const target = tabTooltip(tab);
           const active = tabId === activeTabId;
           const dragged = drag.drag?.tabId === tabId;
           return (
@@ -170,6 +175,11 @@ export function TabStrip(props: TabStripProps): JSX.Element {
               key={tabId}
               id={tabElementId(tabId)}
               data-panel-tab={tabId}
+              // The full path, as the file-tree row that opened this tab
+              // already carries (J6). It does not touch the accessible
+              // name: `tab` takes its name from its content, and `title` is
+              // only consulted when there is none.
+              title={target === title ? undefined : target}
               // Only the active tab names a panel: a tab that has never been
               // activated has no body mounted (WSP-09 mounts on first use),
               // so pointing at one would be a dangling reference.
@@ -227,8 +237,8 @@ export function TabStrip(props: TabStripProps): JSX.Element {
         <button
           type="button"
           className="panel-close-tab"
-          aria-label={`Close ${tabTitle(activeTab)} tab`}
-          title={`Close ${tabTitle(activeTab)}`}
+          aria-label={`Close ${titles[activeTab.id] ?? tabTitle(activeTab)} tab`}
+          title={`Close ${titles[activeTab.id] ?? tabTitle(activeTab)}`}
           onClick={() => {
             actions.closeTab(activeTab.id);
           }}

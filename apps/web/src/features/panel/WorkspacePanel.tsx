@@ -117,6 +117,25 @@ export function WorkspacePanel({
   const closePanel = () => {
     actions.setOpen(false);
   };
+
+  // The same hazard one level up from a hidden tab body: the control that
+  // closes the panel is inside the panel, and a closed panel is inert, so
+  // the browser drops focus to `<body>` (WSP-10, H4). The rail's reopen
+  // button is where the panel now is, and it is only taken when focus was
+  // actually lost — a close from elsewhere on the page keeps its own focus.
+  const reopenRef = useRef<HTMLButtonElement | null>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    if (open) return;
+    const active = document.activeElement;
+    const lost =
+      active === null ||
+      active === document.body ||
+      document.querySelector(".panel")?.contains(active) === true;
+    if (lost) reopenRef.current?.focus();
+  });
   const groupOrder = leafIds(state.root);
   // One close control for the whole panel, on the first group in reading
   // order — where the shipped one was, and where it still is whenever
@@ -237,6 +256,7 @@ export function WorkspacePanel({
             <button
               type="button"
               className="panel-reopen"
+              ref={reopenRef}
               aria-label="Open workspace panel"
               title="Open panel"
               onClick={() => {
