@@ -316,24 +316,26 @@ would be a worse outcome than the gap this requirement closes.
 No new surface, panel, or control is introduced. The replayed entries are the
 ordinary tool entries the workspace already renders.
 
-### AGB-11 — Replay is bounded, and says where its bound falls
+### AGB-11 — Replay covers the history the chat shows, and is read on demand
 
-Reopening a Codex chat is not slower because the chat is long. Tool history is
-restored for the most recent part of the conversation under a fixed budget,
-working backwards from the latest activity, so the cost of opening a chat does
-not track its total size.
+A reopened Codex chat replays tool calls for **all** of the history it displays,
+not a recent slice of it. A chat's older commands are as durable as its older
+messages, and a user who scrolls back to last week's work sees what the agent
+actually did there.
 
-When that budget stops the replay before the start of the history on display,
-the transcript **states so once, at the point where replay stops**, rather than
-presenting a partial history as if it were complete. A user who sees messages
-without their commands must be able to tell whether nothing happened or whether
-the workspace stopped looking.
+The workspace reads only as much of the stored history as the displayed
+conversation needs, working backwards from the latest activity. Today a chat
+opens with its whole conversation, so its whole stored tool history is read once
+on open. As [Scalable conversation history](scalable-conversation-history.md)
+introduces bounded pages, replay follows it: a page of conversation carries the
+tool calls belonging to that page, and paging further back reads further back.
+Reopening a chat never reads history the chat is not showing.
 
-The bound applies to this capability alone. It does not change which messages a
-chat displays, and it composes with
-[Scalable conversation history](scalable-conversation-history.md): where that
-capability pages through history, a page of conversation carries the tool calls
-belonging to that page.
+One ceiling remains, and it is a safety limit rather than a product one: a
+stored history far larger than any this workspace has seen, or a single stored
+entry too large to hold, stops the read. When that happens the transcript
+**says so once, at the point where replay stops**, rather than presenting a
+partial history as if it were complete.
 
 ### AGB-12 — Unreadable tool history degrades to messages, never to failure
 
@@ -369,14 +371,19 @@ Version 1's criteria 1–14 stand unchanged. This revision adds:
 18. A reopened Codex transcript contains no entry that no human wrote and no
     agent produced. Specifically, injected instruction and catalogue material
     that Codex stores under a user role does not appear. (AGB-10)
-19. Opening a Codex chat with thousands of turns is not materially slower than
-    opening a short one, and its transcript states once where tool replay stops.
-    (AGB-11)
-20. With the stored history absent, truncated, or in a format this workspace
+19. A Codex chat whose history holds hundreds of tool calls across many turns
+    replays **every** one of them on reopen, including the oldest, for as long as
+    the transcript displays the messages they belong to. (AGB-11)
+20. A chat is never made to read stored history it is not displaying: once
+    conversation history is paged, opening a chat reads the stored region behind
+    the displayed page and no more. (AGB-11)
+21. A stored history beyond the safety ceiling still opens, and its transcript
+    states once, at that point, where replay stopped. (AGB-11)
+22. With the stored history absent, truncated, or in a format this workspace
     does not recognise, the chat still opens with its messages, still prompts and
     streams, and shows exactly one line saying earlier tool activity could not be
     restored. (AGB-12)
-21. A Pi chat's reopened transcript is byte-for-byte unchanged by this revision.
+23. A Pi chat's reopened transcript is byte-for-byte unchanged by this revision.
     (AGB-05)
 
 ### Non-goals

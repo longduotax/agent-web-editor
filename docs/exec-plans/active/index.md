@@ -56,9 +56,10 @@ superseded, or abandoned.
   [Agent backends](../../product-specs/agent-backends.md) specification
   version 2. A reopened Codex chat currently replays messages but not the shell
   commands and file changes it showed live, because the app-server serves only
-  message items for a past turn. This plan adds a bounded reverse reader over
-  the session file the app-server itself names, covering both stored dialects,
-  splicing tool entries back into their turns, and degrading to today's
-  message-only history whenever the private format cannot be read. It reverses
+  message items for a past turn. This plan adds a reverse reader over the session
+  file the app-server itself names, covering both stored dialects, splicing tool
+  entries back into their turns, reading only as far back as the displayed
+  history needs so it composes with paged conversation history, and degrading to
+  today's message-only history whenever the private format cannot be read. It reverses
   version 1's app-server-only posture deliberately and states the exit criterion
   for doing so. No contract, schema, route, or browser change.

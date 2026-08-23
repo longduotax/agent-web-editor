@@ -70,10 +70,10 @@ chats are Pi and are unchanged. Codex chats run with interactive approvals
 disabled and, by default, confined to their execution root with no network — a
 deliberately stricter boundary than Pi's, stated rather than hidden. Version 2
 is a Draft proposal layered on it, with product approval pending: a reopened
-Codex chat replays the shell commands and file changes it showed live, bounded
-so that opening a chat does not cost more as the chat grows, and degrading to
-today's message-only history rather than failing when Codex's private storage
-format cannot be read. Neither version becomes Current until its behavior is
+Codex chat replays the shell commands and file changes it showed live — all of
+them, for whatever history the chat displays, read on demand rather than
+re-read whole — and degrades to today's message-only history rather than
+failing when Codex's private storage format cannot be read. Neither version becomes Current until its behavior is
 implemented and verified.
 
 When durable behavior changes, prefer a bounded proposed revision in the
