@@ -108,6 +108,66 @@ describe("the Git diff boundary", () => {
     );
   });
 
+  it("emits a combined `@@@` diff for a path in a real merge conflict", async () => {
+    // The one shape the Diff tab refuses to render as hunks, and until now
+    // the only one it had never seen from Git itself: every `@@@` case was
+    // hand-shaped input to the parser. `git diff` on an unmerged path writes
+    // one column per parent, in which "the old side" is not one file, so a
+    // two-gutter rendering of it would be a confident lie — the tab shows it
+    // as Git wrote it and says why.
+    const root = await repository();
+    const commit = async (message: string) => {
+      await git(root, ["add", "-A"]);
+      await git(root, [
+        "-c",
+        "user.name=Inspector test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "--no-verify",
+        "-m",
+        message,
+      ]);
+    };
+    await git(root, ["checkout", "-q", "-b", "theirs"]);
+    await writeFile(join(root, "tracked.txt"), "one\nTHEIRS\nthree\n");
+    await commit("theirs");
+    await git(root, ["checkout", "-q", "main"]);
+    await writeFile(join(root, "tracked.txt"), "one\nOURS\nthree\n");
+    await commit("ours");
+    // A merge that cannot be resolved automatically leaves the path
+    // unmerged, which is the state that produces the combined diff. It
+    // exits non-zero by design, so the failure is the expected outcome.
+    await expect(
+      git(root, [
+        "-c",
+        "user.name=Inspector test",
+        "-c",
+        "user.email=test@example.invalid",
+        "merge",
+        "--no-ff",
+        "theirs",
+      ]),
+    ).rejects.toThrow();
+
+    const status = await getGitStatus(root);
+    expect(status.files.find((file) => file.path === "tracked.txt")?.kind).toBe(
+      "conflicted",
+    );
+
+    const diff = await getGitDiff(root, "tracked.txt");
+
+    // Git's own combined format: three `@` either side, and two prefix
+    // columns rather than one.
+    expect(diff.unstaged).toMatch(/^@@@ .+ @@@$/m);
+    expect(diff.unstaged.split("\n")[0]).toBe("diff --cc tracked.txt");
+    expect(diff.unstaged).toContain("++<<<<<<< HEAD");
+    expect(diff.unstaged).toContain("++>>>>>>> theirs");
+  });
+
   it("represents a directory that is not a repository explicitly", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-git-plain-"));
     roots.push(root);

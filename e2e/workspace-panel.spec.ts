@@ -3315,6 +3315,42 @@ function notTheDiffsOwnEdge(name: string): boolean {
   return !name.includes("panel-resizer") && !/^diff-lines\b/.test(name);
 }
 
+test("panel changes: a status list past the render budget is bounded and says so", async ({
+  page,
+}) => {
+  // WSP-09 names status lists in the same breath as file listings and
+  // diffs. The bound has a component case; what it had never had is a real
+  // working tree with more changed paths than the budget, reaching the
+  // browser through the real status boundary. 250 untracked files, named so
+  // they sort AFTER every other fixture — the list is Git's own path order,
+  // and a bulk directory sorting first would push the fixtures this file's
+  // other tests open out of the painted 200.
+  const bulk = join(projectPath, "zz-bulk");
+  await mkdir(bulk, { recursive: true });
+  try {
+    for (let index = 0; index < 250; index += 1)
+      await writeFile(
+        join(bulk, `file-${String(index).padStart(3, "0")}.txt`),
+        "bulk\n",
+        "utf8",
+      );
+
+    await openProjectWithThread(page);
+    await expect(
+      page.getByText(/Showing the first 200 of 25\d changed files\./),
+    ).toBeVisible();
+
+    // Exactly the budget is painted, and the summary above it still counts
+    // every change — a bounded list that presented its own length as the
+    // total is the defect this wording exists to avoid.
+    const rows = page.locator('[role="tabpanel"]:not([hidden]) .file-list li');
+    await expect(rows).toHaveCount(200);
+    await expect(page.getByText(/Working tree: .*25\d added/)).toBeVisible();
+  } finally {
+    await rm(bulk, { recursive: true, force: true });
+  }
+});
+
 test("panel diff: the prefix and both gutters stay on screen at any scroll offset", async ({
   page,
 }) => {

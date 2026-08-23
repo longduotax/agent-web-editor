@@ -29,7 +29,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
 import { ApiClientError } from "../../api/client.js";
 import { ChangesTab } from "./ChangesTab.js";
 import { CHANGES_RENDER_LIMIT } from "./ChangesTab.js";
-import { DIFF_LINE_LIMIT } from "./parseUnifiedDiff.js";
+import { DIFF_CHARACTER_LIMIT, DIFF_LINE_LIMIT } from "./parseUnifiedDiff.js";
 import { DiffTab } from "./DiffTab.js";
 import { FilesTab } from "./FilesTab.js";
 import { FileTab } from "./FileTab.js";
@@ -896,6 +896,84 @@ describe("DiffTab", () => {
     expect(
       screen.getByText(`${String(DIFF_LINE_LIMIT + 40)} added`),
     ).toBeVisible();
+  });
+
+  it("names the CHARACTER bound when that is the one that bit", async () => {
+    // The shape the line bound cannot catch, and the reason there are two:
+    // a minified bundle's diff is a handful of enormous lines, so 1,000
+    // lines never engages and 256 KiB does. Quoting a line count for it
+    // would say nothing about the file — "the first 1,000 of 4 lines" — and
+    // that is exactly the untruth J7 fixed on the File tab. Proven here
+    // rather than only in the parser's own unit case, because the sentence
+    // the reader sees is this component's.
+    const line = "x".repeat(DIFF_CHARACTER_LIMIT / 2);
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "@@ -0,0 +1,4 @@",
+          `+${line}`,
+          `+${line}`,
+          `+${line}`,
+          `+${line}`,
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+    await screen.findByText("Unstaged");
+
+    expect(
+      screen.getByText(
+        `Showing the first ${String(DIFF_CHARACTER_LIMIT / 1024)} KiB of the unstaged diff. The rest of it is not painted.`,
+      ),
+    ).toBeVisible();
+    // The bound really bit on characters: fewer lines are painted than the
+    // four the diff has, and far fewer than the 1,000-line budget allows.
+    const painted = container.querySelectorAll(".diff-line");
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.length).toBeLessThan(4);
+    // And the header still counts the whole change, not the painted part.
+    expect(screen.getByText("4 added")).toBeVisible();
+  });
+
+  it("renders a real merge's combined diff as Git wrote it, and says why", async () => {
+    // The bytes `git diff` actually writes for an unmerged path, captured
+    // from the real-merge case in `apps/server/src/inspector/git.test.ts`.
+    // Two prefix columns, in which "the old side" is not one file — so a
+    // two-gutter rendering would be a confident lie, and the tab does not
+    // attempt one.
+    api.getDiff.mockResolvedValue(
+      diffOf({
+        unstaged: [
+          "diff --cc tracked.txt",
+          "index daf31e1,594dc4f..0000000",
+          "--- a/tracked.txt",
+          "+++ b/tracked.txt",
+          "@@@ -1,3 -1,3 +1,7 @@@",
+          "  one",
+          "++<<<<<<< HEAD",
+          " +OURS",
+          "++=======",
+          "+ THEIRS",
+          "++>>>>>>> theirs",
+          "  three",
+          "",
+        ].join("\n"),
+      }),
+    );
+    const { container } = renderBody(
+      <DiffTab tab={tab} visible actions={actionsSpy()} />,
+    );
+
+    expect(await screen.findByText(/part way through a merge/)).toBeVisible();
+    const raw = container.querySelector(".diff-raw");
+    expect(raw).toHaveTextContent("++<<<<<<< HEAD");
+    expect(raw).toHaveTextContent("++>>>>>>> theirs");
+    // No hunks, no gutters, and no counts: nothing here was read as a side.
+    expect(container.querySelectorAll(".diff-line")).toHaveLength(0);
+    expect(screen.queryByText("0 added")).toBeNull();
   });
 
   it("says plainly when the file has stopped being one that changed", async () => {

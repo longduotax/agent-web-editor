@@ -338,6 +338,45 @@ describe("parseUnifiedDiff", () => {
     expect(diff.hunks).toEqual([]);
   });
 
+  it("reads the exact bytes a real merge conflict produces", () => {
+    // The hand-shaped case above was the only `@@@` this parser had ever
+    // seen, which is a fixture testing itself. These are the bytes `git
+    // diff` actually wrote for an unmerged `tracked.txt`, captured by
+    // `apps/server/src/inspector/git.test.ts`'s real-merge case — conflict
+    // markers, the `+ `/` +` prefix pairs that make the two parent columns,
+    // and a `-1,3 -1,3 +1,7` header with three counts rather than two.
+    const diff = parseUnifiedDiff(
+      [
+        "diff --cc tracked.txt",
+        "index daf31e1,594dc4f..0000000",
+        "--- a/tracked.txt",
+        "+++ b/tracked.txt",
+        "@@@ -1,3 -1,3 +1,7 @@@",
+        "  one",
+        "++<<<<<<< HEAD",
+        " +OURS",
+        "++=======",
+        "+ THEIRS",
+        "++>>>>>>> theirs",
+        "  three",
+        "",
+      ].join("\n"),
+      "unstaged",
+    );
+
+    expect(diff.raw).toBe("combined");
+    expect(diff.hunks).toEqual([]);
+    // Nothing is counted, because nothing was read as a side: a `+ THEIRS`
+    // is an addition on one parent and a context line on the other, and
+    // calling it "1 added" would be picking one parent to be right.
+    expect(diff.added).toBe(0);
+    expect(diff.deleted).toBe(0);
+    // The whole section survives as text, so what is painted is what Git
+    // said — including the conflict markers, which are in the file.
+    expect(diff.text).toContain("++<<<<<<< HEAD");
+    expect(diff.text).toContain("++>>>>>>> theirs");
+  });
+
   it("ends a hunk at the next file's header instead of swallowing it", () => {
     const diff = parseUnifiedDiff(
       [
