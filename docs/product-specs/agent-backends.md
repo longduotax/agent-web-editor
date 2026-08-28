@@ -2,13 +2,13 @@
 
 **Current version:** None
 
-**Proposed version:** 2
+**Proposed version:** 3
 
 **Proposal status:** Approved
 
 **Implementation status:** In progress
 
-**Product approval:** Approved for specification version 2 on 2026-08-23 by the user (longduotax), together with the Codex tool-call replay plan version 1, after resolving four drafting choices in conversation: replay is complete for the history a chat displays and read on demand rather than depth-limited (AGB-11); live and reopened transcripts render a shell command identically; an unfinished command replays as failed; and replay ships enabled. Version 1 was approved on 2026-08-22 by the same user, after resolving both open product questions then: the default backend gains a Settings control (AGB-02) and an unusable backend is shown disabled with a reason (AGB-03). That approval covered plan version 1 of the Codex agent runtime and is unaffected by this proposal.
+**Product approval:** Approved for specification version 3 on 2026-08-23 by the user (longduotax), together with Codex tool-call replay plan version 2, by explicitly asking to implement the drafted bounded-history revision. Version 3 requires restored Codex history to ship on the shared bounded-history path, so opening a chat never transfers or mounts its complete retained transcript in the browser. Version 2 was approved on 2026-08-23 and version 1 on 2026-08-22 by the same user; version 1's implemented basic Pi/Codex backend behavior is unchanged.
 
 **Subsystem:** Agent execution — which coding agent runs a chat, how that choice
 is made and shown, and how a chat behaves when its agent is unavailable
@@ -18,7 +18,7 @@ is made and shown, and how a chat behaves when its agent is unavailable
 **Related ExecPlans:** [Codex agent runtime implementation plan](../exec-plans/active/2026-08-22-codex-agent-runtime.md)
 (version 1) and
 [Codex tool-call replay implementation plan](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)
-(version 2)
+(plan version 2, Draft)
 
 **Related documents:**
 [Multi-agent tiling workspace design](../design/multi-agent-tiling-workspace.md)
@@ -409,3 +409,76 @@ Version 1's non-goals stand. This revision adds:
 ### Open product questions
 
 None.
+
+## Proposed revision v3
+
+**Status:** Approved on 2026-08-23. Implementation and verification are in progress.
+
+Versions 1 and 2 remain the behavioral baseline. This revision changes how the
+version 2 replay is delivered: historical Codex tools must use the shared
+bounded conversation-history path rather than making today's complete snapshot
+larger. The governing loading and viewport behavior remains
+[Scalable conversation history](scalable-conversation-history.md); this section
+adds the Codex-specific guarantee.
+
+### AGB-13 — Restored Codex history is bounded and loaded progressively
+
+Opening or reloading a Codex chat returns a bounded latest page containing both
+its messages and the tool entries restored under AGB-10. It does **not**
+transfer, parse, cache, or mount the chat's complete retained transcript in the
+browser. Older messages and their tool entries are fetched together only when
+the user requests older history.
+
+The browser keeps a bounded contiguous window of pages and may evict distant
+pages; evicted history remains reachable by paging again. Page limits are owned
+by the server and bounded by both item count and serialized payload size. A
+single schema-bounded item may exceed the normal page payload target and is
+returned alone so paging cannot become stuck.
+
+Codex rollout-file work follows the same demand boundary. The adapter reads
+backward only far enough to restore tool entries for the page being returned,
+subject to AGB-11's safety ceiling. It does not scan the complete rollout merely
+because a chat was opened. Messages and tools for a page are composed on the
+server and cross the browser boundary once as one parsed page.
+
+This requirement is a shipping dependency, not a future optimization: Codex
+tool replay must not be enabled through the old complete-transcript snapshot.
+The implementation reuses the provider-neutral page contract and browser window
+owned by Scalable conversation history rather than introducing Codex-only
+routes, controls, caches, or pagination semantics.
+
+### Acceptance criteria
+
+Version 1 criteria 1–14 and version 2 criteria 15–23 stand unchanged. This
+revision adds:
+
+24. Opening a Codex chat with retained history returns only the bounded latest
+    page; the initial wire response, browser query state, and mounted transcript
+    rows stay within the shared page/window limits regardless of total chat
+    length. (AGB-13)
+25. Requesting an older Codex page returns that page's messages and restored
+    tools in chronological order without transferring newer or still-older
+    transcript pages again. (AGB-11, AGB-13)
+26. Repeated paging can reach every retained Codex message and restorable tool
+    entry, including pages evicted from the browser window. (AGB-10, AGB-13)
+27. A deterministic long Codex history proves that opening the chat does not
+    scan rollout bytes older than the latest requested page and that browser
+    transcript memory and mounted rows remain bounded. (AGB-11, AGB-13)
+28. Pi and Codex use the same page controls, limits, loading states, and stale
+    history recovery; there is no Codex-only history surface. (AGB-05, AGB-13)
+
+### Non-goals
+
+Version 1 and version 2 non-goals stand. This revision adds:
+
+- A second Codex-only pagination API or browser transcript store.
+- Loading history automatically just because the user scrolls near the top;
+  the shared explicit older-history control remains the simple first version.
+- Persisting reconstructed Codex tools in SQLite or browser storage.
+- Adding a virtual-list dependency before the bounded page window is measured
+  and shown insufficient.
+
+### Open product questions
+
+None. Fixed bounded pages, an explicit older-history action, and a bounded
+browser page window are inherited from Scalable conversation history.

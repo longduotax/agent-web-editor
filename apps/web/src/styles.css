@@ -1029,6 +1029,25 @@ a:focus-visible {
   min-width: 0;
   max-width: 100%;
 }
+.history-page-control {
+  display: block;
+  margin: 0 auto 1rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  cursor: pointer;
+}
+.history-page-control:hover,
+.history-page-control:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+.history-page-control:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
 .transcript-column :is(details, summary, pre, table) {
   min-width: 0;
 }

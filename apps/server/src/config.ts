@@ -49,6 +49,8 @@ export interface ServerConfig {
   /** File and network boundary every Codex chat runs under (AGB-06). */
   codexSandbox: CodexSandbox;
   codexCommand: string;
+  codexHome: string | undefined;
+  codexReplayTools: boolean;
   allowedHosts: ReadonlySet<string>;
   allowedOrigins: ReadonlySet<string>;
 }
@@ -152,6 +154,23 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     "codex",
     "PI_WEB_CODEX_BIN",
   );
+  const configuredCodexHome =
+    environment.PI_WEB_CODEX_HOME ?? environment.CODEX_HOME;
+  if (configuredCodexHome !== undefined && !isAbsolute(configuredCodexHome))
+    throw new Error(
+      `${environment.PI_WEB_CODEX_HOME === undefined ? "CODEX_HOME" : "PI_WEB_CODEX_HOME"} must be an absolute path`,
+    );
+  const codexHome =
+    configuredCodexHome === undefined
+      ? undefined
+      : resolve(configuredCodexHome);
+  const codexReplayTools =
+    parseEnum(
+      z.enum(["on", "off"]),
+      environment.PI_WEB_CODEX_REPLAY_TOOLS,
+      "on",
+      "PI_WEB_CODEX_REPLAY_TOOLS",
+    ) === "on";
   const configuredState = environment.PI_WEB_STATE_DIR;
   const stateDirectory =
     configuredState ?? join(homedir(), ".pi", "web-workspace");
@@ -181,6 +200,8 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
     defaultRuntime,
     codexSandbox,
     codexCommand,
+    codexHome,
+    codexReplayTools,
     allowedHosts: hosts,
     allowedOrigins: origins,
   };

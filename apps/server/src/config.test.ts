@@ -196,6 +196,8 @@ describe("agent backend configuration", () => {
     expect(config.defaultRuntime).toBe("codex");
     expect(config.codexSandbox).toBe("workspace-write");
     expect(config.codexCommand).toBe("codex");
+    expect(config.codexHome).toBeUndefined();
+    expect(config.codexReplayTools).toBe(true);
   });
 
   it("lets the machine default be set back to Pi", () => {
@@ -234,6 +236,32 @@ describe("agent backend configuration", () => {
         environment: { ...state, PI_WEB_CODEX_SANDBOX: "wide-open" },
       }),
     ).toThrow(/PI_WEB_CODEX_SANDBOX/);
+  });
+
+  it("parses the Codex history root and replay kill switch", () => {
+    const home = resolve("codex-home");
+    const config = parseConfig({
+      argv: [],
+      environment: {
+        ...state,
+        PI_WEB_CODEX_HOME: home,
+        PI_WEB_CODEX_REPLAY_TOOLS: "off",
+      },
+    });
+    expect(config.codexHome).toBe(home);
+    expect(config.codexReplayTools).toBe(false);
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_HOME: "relative" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_HOME/);
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_REPLAY_TOOLS: "maybe" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_REPLAY_TOOLS/);
   });
 
   it("allows the Codex executable to be relocated", () => {

@@ -18,6 +18,8 @@ import {
   ThreadSummarySchema,
   GitBranchSchema,
   TerminalClientFrameSchema,
+  TranscriptCursorSchema,
+  TranscriptPageSchema,
 } from "./index.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -202,6 +204,46 @@ describe("wire contracts", () => {
       { version: 1, type: "terminate", projectId: id, terminalId },
     ])
       expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
+  });
+});
+
+describe("bounded transcript pages", () => {
+  const message = (index: number) => ({
+    id: `message-${String(index)}`,
+    kind: "message" as const,
+    role: "assistant" as const,
+    text: `message ${String(index)}`,
+    timestamp: null,
+  });
+
+  it("accepts one strict bounded chronological page", () => {
+    const cursor = TranscriptCursorSchema.parse("abcdefghijklmnop");
+    expect(
+      TranscriptPageSchema.parse({
+        items: [message(1), message(2)],
+        olderCursor: cursor,
+        atLatest: true,
+      }).items,
+    ).toHaveLength(2);
+    expect(
+      TranscriptPageSchema.safeParse({
+        items: [],
+        olderCursor: null,
+        atLatest: true,
+        nativePath: "/private/history.jsonl",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects more than 100 wire items and malformed cursors", () => {
+    expect(
+      TranscriptPageSchema.safeParse({
+        items: Array.from({ length: 101 }, (_, index) => message(index)),
+        olderCursor: null,
+        atLatest: false,
+      }).success,
+    ).toBe(false);
+    expect(TranscriptCursorSchema.safeParse("../history").success).toBe(false);
   });
 });
 

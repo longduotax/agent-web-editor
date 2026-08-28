@@ -33,33 +33,26 @@ superseded, or abandoned.
   end-to-end Playwright coverage, and the tiling-spec supersession); kept Active
   pending merge.
 - [Scalable conversation history](2026-08-16-scalable-conversation-history.md) —
-  Draft plan version 3 has technical approval pending. Product specification v1
-  remains approved, but implementation is paused pending plan-v3 approval. The
-  plan adds bounded latest/history pages, an adapter-owned bounded streaming
-  projection, append-stable opaque cursors, a bounded browser page window,
-  polite live following, latest-edge entry, anchor-preserving older-history
-  navigation, and a restrained transcript scrollbar.
-- [Codex agent runtime](2026-08-22-codex-agent-runtime.md) — Ready plan version 1,
-  technical approval granted 2026-08-22, governed by the Approved
-  [Agent backends](../../product-specs/agent-backends.md) specification version 1.
-  Phase 2 of the multi-agent tiling workspace design: adds a `packages/codex-adapter`
-  implementation of `AgentRuntime` over the Codex app-server protocol, a durable
-  per-thread `runtime` discriminator in persistence and the transport contract
-  (existing chats backfilled to `pi`), a server-side runtime registry replacing the
-  single injected adapter, and a backend choice in the new-chat composer with Codex
-  as the default, layered over a device-local Settings preference. Codex chats run
-  with approvals disabled and confined to their execution root by default. Both
-  approvals are in place; implementation starts at Task 1 and the plan becomes
-  Active with the first production edit.
-- [Codex tool-call replay](2026-08-23-codex-tool-call-replay.md) — Ready plan
-  version 1, technical approval granted 2026-08-23, governed by the Approved
-  [Agent backends](../../product-specs/agent-backends.md) specification
-  version 2. A reopened Codex chat currently replays messages but not the shell
-  commands and file changes it showed live, because the app-server serves only
-  message items for a past turn. This plan adds a reverse reader over the session
-  file the app-server itself names, covering both stored dialects, splicing tool
-  entries back into their turns, reading only as far back as the displayed
-  history needs so it composes with paged conversation history, and degrading to
-  today's message-only history whenever the private format cannot be read. It reverses
-  version 1's app-server-only posture deliberately and states the exit criterion
-  for doing so. No contract, schema, route, or browser change.
+  Draft plan version 3 has technical approval pending. Its provider-neutral
+  fixed-limit latest/older page contract, explicit older control, stale reset,
+  and five-page browser window were implemented and verified as the shared
+  foundation approved in Agent backends v3 / Codex replay plan v2. Remaining
+  plan-v3 work — page-free away-from-latest refresh, its bounded streaming
+  projection, full bidirectional navigation/viewport behavior, and the
+  restrained scrollbar acceptance set — remains paused pending approval.
+- [Codex agent runtime](2026-08-22-codex-agent-runtime.md) — Active plan version 1,
+  technical approval granted 2026-08-22, governed by Agent backends specification
+  version 1. The Pi/Codex runtime discriminator, Codex adapter, runtime registry,
+  new-chat backend choice, Settings default, labels, tests, documentation, and
+  four manual checks are complete on the branch. The plan remains Active and the
+  implemented specification remains unpromoted pending final completion.
+- [Codex tool-call replay](2026-08-23-codex-tool-call-replay.md) — Active plan
+  version 2, technically approved 2026-08-23 and governed by Approved Agent
+  backends specification version 3. The implementation adds a confined,
+  resumable reverse reader over the session file Codex names, supports both
+  stored dialects, and degrades to message-only pages when private history
+  cannot be read. The shared bounded-history path now opens one fixed-limit
+  latest page, loads older messages and tools only on request, and retains one
+  five-page browser window instead of transferring the complete chat. Automated
+  unit and Playwright verification is complete; real-provider manual checks
+  remain before completion and promotion.

@@ -369,17 +369,28 @@ const threadSchema = z.object({
   turns: z.array(turnSchema).default([]),
 });
 
-/** Flattens a thread's turns into one ordered transcript. */
-export function transcriptFromThread(raw: unknown): TranscriptItem[] {
+export interface TranscriptTurn {
+  id: string;
+  status: string;
+  items: TranscriptItem[];
+}
+
+/** Parses Codex turns while retaining the turn boundary needed for paging. */
+export function transcriptTurnsFromThread(raw: unknown): TranscriptTurn[] {
   const thread = threadSchema.safeParse(raw);
   if (!thread.success) return [];
-  const transcript: TranscriptItem[] = [];
-  for (const turn of thread.data.turns)
-    for (const item of turn.items) {
-      const mapped = mapThreadItem(item, null);
-      if (mapped !== null) transcript.push(mapped);
-    }
-  return transcript;
+  return thread.data.turns.map((turn) => ({
+    id: turn.id,
+    status: turn.status,
+    items: turn.items
+      .map((item) => mapThreadItem(item, null))
+      .filter((item): item is TranscriptItem => item !== null),
+  }));
+}
+
+/** Flattens a thread's turns into one ordered transcript. */
+export function transcriptFromThread(raw: unknown): TranscriptItem[] {
+  return transcriptTurnsFromThread(raw).flatMap((turn) => turn.items);
 }
 
 /** Describes a thread for the session list, or null if it cannot be trusted. */

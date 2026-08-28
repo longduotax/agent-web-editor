@@ -62,7 +62,7 @@ const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 
 const snapshot: ThreadSnapshot = {
-  version: 1,
+  version: 2,
   project: {
     id: projectId,
     displayName: "Example project",
@@ -86,7 +86,7 @@ const snapshot: ThreadSnapshot = {
     runtime: "pi" as const,
     workspace: { mode: "shared", branchName: null, available: true },
   },
-  transcript: [],
+  transcriptPage: { items: [], olderCursor: null, atLatest: true },
   currentRun: null,
   lastRun: null,
   epoch: "40000000-0000-4000-8000-000000000001",

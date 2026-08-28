@@ -63,6 +63,14 @@ workspace has no surface for answering a permission prompt, so no run may wait
 on one. Anything Codex would have asked about either proceeds inside the
 boundary above or fails visibly.
 
+Conversation history opens as a bounded latest page and loads earlier pages only
+when requested, so long chats are not transferred or mounted in full in the
+browser. Codex restores historical shell and file activity from the confined
+session file named by app-server. `PI_WEB_CODEX_HOME` can select an absolute
+Codex state root; it otherwise follows `CODEX_HOME` and then `~/.codex`.
+`PI_WEB_CODEX_REPLAY_TOOLS=off` disables private-format replay without disabling
+messages, prompting, or live tools.
+
 See the [documentation front door](docs/README.md),
 [architecture overview](docs/architecture/overview.md), and
 [development workflows](docs/development/workflows.md).

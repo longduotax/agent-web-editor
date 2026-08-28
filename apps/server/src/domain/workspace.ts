@@ -8,6 +8,7 @@ import type {
   PromptAcceptance,
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
+import { TranscriptPager } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
   UnarchiveThreadResponseSchema,
@@ -19,6 +20,7 @@ import {
   StartThreadResponseSchema,
   ThreadIdSchema,
   ThreadSnapshotSchema,
+  TranscriptPageSchema,
   ThreadWorkspaceRequestSchema,
   ThreadSummarySchema,
   type Project,
@@ -30,7 +32,8 @@ import {
   type SessionDescriptor,
   type ThreadSnapshot,
   type ThreadSummary,
-  type TranscriptItem,
+  type TranscriptCursor,
+  type TranscriptPage,
   type WorktreeId,
 } from "@pi-web/contracts";
 import { z } from "zod";
@@ -129,6 +132,7 @@ export class WorkspaceService {
     ThreadId,
     { runtime: OpenRuntimeSession; unsubscribe: () => void }
   >();
+  private readonly fallbackPagers = new Map<ThreadId, TranscriptPager>();
   private readonly activeThreads = new Set<ThreadId>();
   private readonly preflightPrompts = new Map<ThreadId, PendingPreflight>();
   private readonly removingProjects = new Set<ProjectId>();
@@ -1128,13 +1132,22 @@ export class WorkspaceService {
     const thread = this.requireThread(projectId, threadId);
     const project = this.requireProject(projectId);
     this.store.setLastOpenedThread(projectId, threadId);
-    let transcript: TranscriptItem[] = [];
+    let transcriptPage: TranscriptPage = {
+      items: [],
+      olderCursor: null,
+      atLatest: true,
+    };
     const diagnostics: string[] = [];
     try {
       const runtime = await this.openRuntime(thread);
-      const native = await runtime.snapshot();
-      transcript = native.transcript;
-      diagnostics.push(...native.diagnostics);
+      if (runtime.latestTranscriptPage !== undefined)
+        transcriptPage = await runtime.latestTranscriptPage();
+      else {
+        const native = await runtime.snapshot();
+        const pager = this.fallbackPager(threadId);
+        transcriptPage = pager.latest(native.transcript);
+        diagnostics.push(...native.diagnostics);
+      }
     } catch {
       diagnostics.push("The native agent session is unavailable or malformed.");
     }
@@ -1142,10 +1155,10 @@ export class WorkspaceService {
     const current = latest?.state === "running" ? latest : null;
     const cursor = this.broker.cursor(threadId);
     return ThreadSnapshotSchema.parse({
-      version: 1,
+      version: 2,
       project: await this.projectDto(project),
       thread: this.threadDto(thread),
-      transcript,
+      transcriptPage,
       currentRun: current === null ? null : runDto(current),
       lastRun: latest === null ? null : runDto(latest),
       epoch: cursor.epoch,
@@ -1157,6 +1170,31 @@ export class WorkspaceService {
       },
       diagnostics,
     });
+  }
+
+  public async olderTranscriptPage(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    const thread = this.requireThread(projectId, threadId);
+    const runtime = await this.openRuntime(thread);
+    if (runtime.olderTranscriptPage !== undefined)
+      return TranscriptPageSchema.parse(
+        await runtime.olderTranscriptPage(cursor),
+      );
+    const native = await runtime.snapshot();
+    return TranscriptPageSchema.parse(
+      this.fallbackPager(threadId).older(native.transcript, cursor),
+    );
+  }
+
+  private fallbackPager(threadId: ThreadId): TranscriptPager {
+    const existing = this.fallbackPagers.get(threadId);
+    if (existing !== undefined) return existing;
+    const pager = new TranscriptPager();
+    this.fallbackPagers.set(threadId, pager);
+    return pager;
   }
 
   public async prompt(
@@ -1463,6 +1501,7 @@ export class WorkspaceService {
   }
 
   public async disposeThread(threadId: ThreadId): Promise<void> {
+    this.fallbackPagers.delete(threadId);
     const owner = this.runtimes.get(threadId);
     if (owner === undefined) return;
     this.runtimes.delete(threadId);
@@ -1473,6 +1512,7 @@ export class WorkspaceService {
   public async close(): Promise<void> {
     const owners = [...this.runtimes.values()];
     this.runtimes.clear();
+    this.fallbackPagers.clear();
     await Promise.allSettled(
       owners.map(async (owner) => {
         owner.unsubscribe();

@@ -21,6 +21,7 @@ import type {
 } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  getOlderTranscriptPage: vi.fn(),
   getSnapshot: vi.fn(),
   markViewed: vi.fn(),
   prompt: vi.fn(),
@@ -77,7 +78,7 @@ const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 
 const snapshot: ThreadSnapshot = {
-  version: 1,
+  version: 2,
   project: {
     id: projectId,
     displayName: "Example project",
@@ -101,7 +102,7 @@ const snapshot: ThreadSnapshot = {
     runtime: "pi" as const,
     workspace: { mode: "shared", branchName: null, available: true },
   },
-  transcript: [],
+  transcriptPage: { items: [], olderCursor: null, atLatest: true },
   currentRun: null,
   lastRun: null,
   epoch: "40000000-0000-4000-8000-000000000001",
@@ -185,22 +186,25 @@ describe("ThreadPane", () => {
   it("renders the user turn as a quiet pill and the assistant turn as flowing text without a card", async () => {
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [
-        {
-          id: "u1",
-          kind: "message",
-          role: "user",
-          text: "Ping",
-          timestamp: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "a1",
-          kind: "message",
-          role: "assistant",
-          text: "Pong",
-          timestamp: "2026-01-01T00:00:01.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...snapshot.transcriptPage,
+        items: [
+          {
+            id: "u1",
+            kind: "message",
+            role: "user",
+            text: "Ping",
+            timestamp: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "a1",
+            kind: "message",
+            role: "assistant",
+            text: "Pong",
+            timestamp: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      },
     });
     renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
@@ -212,6 +216,50 @@ describe("ThreadPane", () => {
     const assistantBlock = screen.getByText("Pong").closest(".a-block");
     expect(assistantBlock).not.toBeNull();
     expect(assistantBlock).not.toHaveClass("message");
+  });
+
+  it("loads earlier history explicitly without requesting the complete chat", async () => {
+    const latest = {
+      id: "latest-message",
+      kind: "message" as const,
+      role: "assistant" as const,
+      text: "Latest",
+      timestamp: null,
+    };
+    const older = {
+      id: "older-message",
+      kind: "message" as const,
+      role: "user" as const,
+      text: "Earlier",
+      timestamp: null,
+    };
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: {
+        items: [latest],
+        olderCursor: "abcdefghijklmnop",
+        atLatest: true,
+      },
+    });
+    api.getOlderTranscriptPage.mockResolvedValue({
+      items: [older],
+      olderCursor: null,
+      atLatest: false,
+    });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByText("Latest");
+    expect(screen.queryByText("Earlier")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Load earlier messages" }),
+    );
+    expect(await screen.findByText("Earlier")).toBeInTheDocument();
+    expect(api.getOlderTranscriptPage).toHaveBeenCalledWith(
+      projectId,
+      threadId,
+      "abcdefghijklmnop",
+    );
   });
 
   // Rewritten for UX-4: the pane no longer stacks a second `.thread-header`
@@ -266,7 +314,10 @@ describe("ThreadPane", () => {
       scrollHeight: 2000,
       clientHeight: 400,
     });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { items: [ping], olderCursor: null, atLatest: true },
+    });
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
@@ -278,7 +329,11 @@ describe("ThreadPane", () => {
     geometry.set({ scrollHeight: 3000, clientHeight: 400 });
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [ping, pong],
+      transcriptPage: {
+        items: [ping, pong],
+        olderCursor: null,
+        atLatest: true,
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -294,7 +349,10 @@ describe("ThreadPane", () => {
       scrollHeight: 2000,
       clientHeight: 400,
     });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { items: [ping], olderCursor: null, atLatest: true },
+    });
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
@@ -310,7 +368,11 @@ describe("ThreadPane", () => {
     geometry.set({ scrollHeight: 3000, clientHeight: 400 });
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [ping, pong],
+      transcriptPage: {
+        items: [ping, pong],
+        olderCursor: null,
+        atLatest: true,
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });

@@ -6,7 +6,7 @@
 
 **Proposal status:** Approved
 
-**Implementation status:** Not started
+**Implementation status:** In progress
 
 **Product approval:** Approved by the user on 2026-08-16 for specification version 1
 
@@ -33,12 +33,18 @@ store or alter native sessions.
 
 ## Current contract
 
-There is no Current contract for scalable history behavior. The implemented
-workspace requests one snapshot containing the complete translated active-branch
-transcript, validates the complete array in the browser, renders every visible
-message and activity row, and initially leaves a long transcript at its top.
-Snapshot invalidation can repeat that full work during live runs. The transcript
-uses the browser's default prominent scrollbar.
+There is no Current contract for the complete scalable-history capability. A
+bounded foundation is implemented under the approved Agent backends v3 / Codex
+replay plan v2: the initial snapshot carries at most 100 items with a 1 MiB
+target, explicit older requests return bounded pages, and the browser retains at
+most five contiguous pages before offering Jump to latest. Both Pi and Codex use
+that shared transport; Codex restores tools only for requested pages.
+
+The remaining proposal behavior is not yet complete: live refresh while reading
+old history still fetches a bounded latest snapshot rather than page-free
+metadata, newer traversal is represented by Jump to latest rather than a
+bidirectional page control, and the broader viewport/live-follow and scrollbar
+acceptance set remains governed by the Draft technical plan.
 
 ## Proposed revision v1
 

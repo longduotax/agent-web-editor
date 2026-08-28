@@ -7,9 +7,12 @@ import {
   type ThreadId,
   type ThreadSnapshot,
   type TranscriptItem,
+  type TranscriptPage,
 } from "@pi-web/contracts";
 
 import {
+  ApiClientError,
+  getOlderTranscriptPage,
   getSnapshot,
   markViewed,
   prompt,
@@ -138,15 +141,129 @@ function transcriptContentKey(
   );
 }
 
-function Transcript({ snapshot }: { snapshot: ThreadSnapshot }) {
-  const items = displayTranscript(snapshot.transcript);
+function pageKey(page: TranscriptPage): string {
+  return `${page.items[0]?.id ?? "empty"}:${page.items.at(-1)?.id ?? "empty"}:${String(page.items.length)}`;
+}
+
+function Transcript({
+  projectId,
+  threadId,
+  snapshot,
+}: {
+  projectId: ProjectId;
+  threadId: ThreadId;
+  snapshot: ThreadSnapshot;
+}) {
+  const [pages, setPages] = useState<TranscriptPage[]>([
+    snapshot.transcriptPage,
+  ]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const latestKey = pageKey(snapshot.transcriptPage);
+
+  useEffect(() => {
+    setPages([snapshot.transcriptPage]);
+    setHistoryError(null);
+  }, [snapshot.thread.id]);
+
+  useEffect(() => {
+    setPages((current) => {
+      const latestIndex = current.findIndex((page) => page.atLatest);
+      if (latestIndex < 0) return current;
+      const next = [...current];
+      next[latestIndex] = snapshot.transcriptPage;
+      return next;
+    });
+  }, [latestKey, snapshot.transcriptPage]);
+
+  const items = displayTranscript(
+    pages
+      .flatMap((page) => page.items)
+      .filter(
+        (item, index, all) =>
+          all.findIndex((candidate) => candidate.id === item.id) === index,
+      ),
+  );
   const scrollRef = useStickToBottom<HTMLDivElement>(
     snapshot.thread.id,
     transcriptContentKey(items, snapshot.diagnostics),
   );
+  const oldestCursor = pages[0]?.olderCursor ?? null;
+  const showingLatest = pages.some((page) => page.atLatest);
+
+  const loadEarlier = async () => {
+    if (oldestCursor === null || loadingOlder) return;
+    setLoadingOlder(true);
+    setHistoryError(null);
+    const element = scrollRef.current;
+    const previousHeight = element?.scrollHeight ?? 0;
+    const previousTop = element?.scrollTop ?? 0;
+    try {
+      const page = await getOlderTranscriptPage(
+        projectId,
+        threadId,
+        oldestCursor,
+      );
+      setPages((current) => [page, ...current].slice(0, 5));
+      requestAnimationFrame(() => {
+        if (element !== null)
+          element.scrollTop =
+            previousTop + element.scrollHeight - previousHeight;
+      });
+    } catch (error) {
+      if (
+        error instanceof ApiClientError &&
+        error.code === "stale_transcript"
+      ) {
+        setPages([snapshot.transcriptPage]);
+        setHistoryError(
+          "Conversation history changed, so the view returned to the latest messages.",
+        );
+      } else
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Earlier messages could not be loaded.",
+        );
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
   return (
     <div className="transcript" aria-label="Conversation" ref={scrollRef}>
       <div className="transcript-column">
+        {oldestCursor !== null && (
+          <button
+            type="button"
+            className="history-page-control"
+            disabled={loadingOlder}
+            onClick={() => void loadEarlier()}
+          >
+            {loadingOlder
+              ? "Loading earlier messages…"
+              : "Load earlier messages"}
+          </button>
+        )}
+        {!showingLatest && (
+          <button
+            type="button"
+            className="history-page-control"
+            onClick={() => {
+              setPages([snapshot.transcriptPage]);
+            }}
+          >
+            Jump to latest
+          </button>
+        )}
+        {historyError !== null && (
+          <p className="diagnostic warning" role="alert">
+            {historyError}{" "}
+            <button type="button" onClick={() => void loadEarlier()}>
+              Retry
+            </button>
+          </p>
+        )}
         {items.length === 0 && (
           <div className="empty conversation-empty">
             <strong>No messages yet</strong>
@@ -425,7 +542,11 @@ export function ThreadPane(props: ThreadPaneProps) {
         </main>
       ) : (
         <main className="center">
-          <Transcript snapshot={snapshot.data} />
+          <Transcript
+            projectId={projectId}
+            threadId={threadId}
+            snapshot={snapshot.data}
+          />
           {failureText !== null && (
             <div className="run-failure">
               <p className="run-failure-body" role="status">

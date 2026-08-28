@@ -29,12 +29,14 @@ import type {
   RuntimeSnapshot,
   TitleSuggestion,
 } from "@pi-web/agent-runtime";
-import { RuntimeFailure } from "@pi-web/agent-runtime";
+import { RuntimeFailure, TranscriptPager } from "@pi-web/agent-runtime";
 import {
   TimestampSchema,
   SessionIdSchema,
   TranscriptItemSchema,
+  type TranscriptCursor,
   type TranscriptItem,
+  type TranscriptPage,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -749,6 +751,7 @@ function mapEvent(event: unknown): RuntimeEvent {
 
 class PiOpenSession implements OpenRuntimeSession {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly pager = new TranscriptPager();
   private readonly unsubscribe: () => void;
   private bufferedEvents: RuntimeEvent[] | null = null;
   private disposed = false;
@@ -770,6 +773,20 @@ class PiOpenSession implements OpenRuntimeSession {
 
   public snapshot(): Promise<RuntimeSnapshot> {
     return Promise.resolve().then(() => transcriptFromManager(this.manager));
+  }
+
+  public latestTranscriptPage(): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.latest(snapshot.transcript),
+    );
+  }
+
+  public olderTranscriptPage(
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.older(snapshot.transcript, cursor),
+    );
   }
 
   public async prompt(

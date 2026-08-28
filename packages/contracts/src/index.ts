@@ -150,11 +150,37 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
 ]);
 export type TranscriptItem = z.infer<typeof TranscriptItemSchema>;
 
+/**
+ * Runtime-owned, opaque paging position. Browsers may return it only to the
+ * thread endpoint that issued it; they never decode or construct one.
+ */
+export const TranscriptCursorSchema = z
+  .string()
+  .min(16)
+  .max(2_048)
+  .regex(/^[A-Za-z0-9_-]+$/)
+  .brand<"TranscriptCursor">();
+export type TranscriptCursor = z.infer<typeof TranscriptCursorSchema>;
+
+export const TranscriptPageSchema = z
+  .object({
+    items: z.array(TranscriptItemSchema).max(100),
+    olderCursor: TranscriptCursorSchema.nullable(),
+    atLatest: z.boolean(),
+  })
+  .strict();
+export type TranscriptPage = z.infer<typeof TranscriptPageSchema>;
+
+export const TranscriptPageQuerySchema = z
+  .object({ cursor: TranscriptCursorSchema })
+  .strict();
+export type TranscriptPageQuery = z.infer<typeof TranscriptPageQuerySchema>;
+
 export const ThreadSnapshotSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   project: ProjectSchema,
   thread: ThreadSummarySchema,
-  transcript: z.array(TranscriptItemSchema).max(100_000),
+  transcriptPage: TranscriptPageSchema,
   currentRun: RunSchema.nullable(),
   lastRun: RunSchema.nullable(),
   epoch: uuid,

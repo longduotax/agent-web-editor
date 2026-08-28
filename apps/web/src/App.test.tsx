@@ -89,7 +89,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -113,7 +113,7 @@ describe("safe and accessible workspace rendering", () => {
         runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -162,7 +162,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -186,7 +186,7 @@ describe("safe and accessible workspace rendering", () => {
         runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -305,7 +305,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -329,7 +329,7 @@ describe("safe and accessible workspace rendering", () => {
         runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -487,7 +487,7 @@ describe("safe and accessible workspace rendering", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread: {
         id: threadId,
@@ -501,7 +501,7 @@ describe("safe and accessible workspace rendering", () => {
         runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -664,7 +664,7 @@ describe("safe and accessible workspace rendering", () => {
     // requested thread id rather than being a single fixed value.
     api.getSnapshot.mockImplementation((_projectId: string, tid: string) =>
       Promise.resolve({
-        version: 1,
+        version: 2,
         project: workspace.projects[0],
         thread:
           tid === importedThreadId
@@ -684,7 +684,7 @@ describe("safe and accessible workspace rendering", () => {
                 runState: null,
                 unread: false,
               },
-        transcript: [],
+        transcriptPage: { items: [], olderCursor: null, atLatest: true },
         currentRun: null,
         lastRun: null,
         epoch: "60000000-0000-4000-8000-000000000001",
@@ -979,10 +979,10 @@ describe("inspector follows the focused pane", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1589,10 +1589,10 @@ describe("inspector Files tab search", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1712,10 +1712,10 @@ describe("inspector Changes tab states", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",

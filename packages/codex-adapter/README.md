@@ -51,12 +51,36 @@ This is deliberately stricter than Pi, which runs with the server user's full
 permissions. The difference is a stated product property, not an accident; see
 [Agent backends](../../docs/product-specs/agent-backends.md) AGB-06.
 
+## Replaying stored history
+
+Codex app-server returns messages for past turns but not the shell and file
+items it streamed live. For each bounded history page, the adapter therefore
+reads the exact rollout JSONL path returned by `thread/read`. The path must
+resolve to a regular `.jsonl` file under the configured Codex `sessions/` root;
+symlinks, traversal, other suffixes, and outside paths are refused.
+
+The reader works backward in chunks and supports app-server response-item files
+and structured terminal/desktop `item_completed` files. It takes conversation
+text only from `thread/read`, so stored instructions and catalogues cannot enter
+the transcript. Sequential older pages continue from the prior opaque cursor
+instead of rescanning from EOF. Reads have a 4 MiB line cap and 32 MiB safety
+ceiling; any missing, unreadable, or unknown history degrades to bounded message
+pages plus one quiet diagnostic. Nothing writes to Codex storage.
+
+If app-server begins returning historical tools itself, this private-format
+reader should be removed and the protocol should become the sole source again.
+
 ## Configuration
 
 `PI_WEB_CODEX_BIN` selects the executable (default `codex`, resolved on PATH).
 A missing or unusable installation surfaces as `RuntimeFailure("unavailable")`
 naming Codex, and `probe()` reports it so the browser can show the backend
 disabled with its reason instead of failing at chat-creation time.
+
+`PI_WEB_CODEX_HOME` optionally selects the absolute Codex state root; otherwise
+`CODEX_HOME` and then `~/.codex` are used. `PI_WEB_CODEX_REPLAY_TOOLS=off` is an
+emergency kill switch for private-format replay. It leaves bounded messages,
+prompting, and live tool activity intact.
 
 ## Protocol types
 

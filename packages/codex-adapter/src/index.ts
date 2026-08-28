@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import {
   RuntimeFailure,
   type AgentRuntime,
@@ -9,6 +11,13 @@ import {
   type RuntimeSessionDescriptor,
   type RuntimeSnapshot,
 } from "@pi-web/agent-runtime";
+import {
+  TranscriptCursorSchema,
+  TranscriptPageSchema,
+  type TranscriptCursor,
+  type TranscriptItem,
+  type TranscriptPage,
+} from "@pi-web/contracts";
 import { z } from "zod";
 
 import { CodexClient, type CodexTransport } from "./client.js";
@@ -16,7 +25,10 @@ import {
   mapNotification,
   sessionDescriptor,
   transcriptFromThread,
+  transcriptTurnsFromThread,
+  type TranscriptTurn,
 } from "./mapping.js";
+import { RolloutReader, locateRollout } from "./rollout/index.js";
 import { spawnCodexTransport } from "./spawn.js";
 
 export { spawnCodexTransport } from "./spawn.js";
@@ -38,6 +50,10 @@ export interface CodexAgentRuntimeOptions {
   command?: string;
   /** File and network boundary for every Codex chat. */
   sandbox?: CodexSandbox;
+  /** Root containing `sessions/`; defaults to CODEX_HOME or ~/.codex. */
+  codexHome?: string;
+  /** Emergency switch for Codex's private rollout format. */
+  replayTools?: boolean;
   /** Test seam: supply a transport instead of spawning Codex. */
   connect?: () => Promise<CodexTransport>;
 }
@@ -50,7 +66,9 @@ const threadListSchema = z.object({
   data: z.array(z.unknown()).default([]),
   nextCursor: z.string().nullish(),
 });
-const threadReadSchema = z.object({ thread: z.unknown() });
+const threadReadSchema = z.object({
+  thread: z.looseObject({ path: z.string().nullish() }),
+});
 const turnEnvelopeSchema = z.object({
   turn: z.object({ id: z.string().min(1) }),
 });
@@ -70,9 +88,13 @@ const turnsSchema = z.object({
 export class CodexAgentRuntime implements AgentRuntime {
   private readonly client: CodexClient;
   private readonly sandbox: CodexSandbox;
+  private readonly codexHome: string | undefined;
+  private readonly replayTools: boolean;
 
   public constructor(options: CodexAgentRuntimeOptions = {}) {
     this.sandbox = options.sandbox ?? "workspace-write";
+    this.codexHome = options.codexHome;
+    this.replayTools = options.replayTools ?? true;
     const command = options.command ?? "codex";
     const connect =
       options.connect ??
@@ -154,7 +176,12 @@ export class CodexAgentRuntime implements AgentRuntime {
       approvalPolicy: APPROVAL_POLICY,
       sandbox: this.sandbox,
     });
-    return new CodexOpenSession(this.client, sessionId);
+    return new CodexOpenSession(
+      this.client,
+      sessionId,
+      this.codexHome,
+      this.replayTools,
+    );
   }
 
   /**
@@ -186,10 +213,32 @@ function isApprovalRequest(method: string): boolean {
   return /approval/i.test(method) || /elicitation/i.test(method);
 }
 
+interface CodexPagePosition {
+  turnEnd: number;
+  itemEnd?: number;
+}
+
+interface StoredCodexPagePosition {
+  position: CodexPagePosition;
+  boundaryTurnId: string | null;
+}
+
+const PAGE_ITEM_LIMIT = 100;
+const PAGE_BYTE_TARGET = 1_048_576;
+const CURSOR_LIMIT = 2_000;
+
 class CodexOpenSession implements OpenRuntimeSession {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly pageCursors = new Map<
+    TranscriptCursor,
+    StoredCodexPagePosition
+  >();
   private bufferedEvents: RuntimeEvent[] | null = null;
   private activeTurnId: string | null = null;
+  private turns: TranscriptTurn[] | null = null;
+  private rollout: RolloutReader | null = null;
+  private replayDiagnostic: TranscriptItem | null = null;
+  private replayWarningAdded = false;
   private settleActiveTurn:
     ((outcome: "completed" | "failed" | "interrupted") => void) | undefined;
   private disposed = false;
@@ -199,6 +248,8 @@ class CodexOpenSession implements OpenRuntimeSession {
   public constructor(
     private readonly client: CodexClient,
     public readonly id: string,
+    private readonly codexHome: string | undefined,
+    private readonly replayTools: boolean,
   ) {
     this.unsubscribeNotifications = client.onNotification((method, params) => {
       this.receive(method, params);
@@ -212,8 +263,53 @@ class CodexOpenSession implements OpenRuntimeSession {
   }
 
   public async snapshot(): Promise<RuntimeSnapshot> {
-    // `includeTurns` defaults to false, which returns thread metadata with no
-    // items at all. Without it every reopened chat renders as empty.
+    const thread = await this.readThread();
+    return {
+      sessionId: this.id,
+      transcript: transcriptFromThread(thread),
+      diagnostics: [],
+    };
+  }
+
+  public async latestTranscriptPage(): Promise<TranscriptPage> {
+    const thread = await this.readThread();
+    this.turns = transcriptTurnsFromThread(thread);
+    this.rollout = null;
+    this.replayDiagnostic = null;
+    this.replayWarningAdded = false;
+    if (this.replayTools) {
+      try {
+        const path = await locateRollout(thread.path, this.codexHome);
+        this.rollout = await RolloutReader.open(path);
+      } catch {
+        this.replayDiagnostic = {
+          id: "codex-tool-replay-unavailable",
+          kind: "diagnostic",
+          level: "info",
+          text: "Earlier tool activity could not be restored for this chat.",
+          timestamp: null,
+        };
+      }
+    }
+    return await this.buildPage({ turnEnd: this.turns.length }, true);
+  }
+
+  public async olderTranscriptPage(
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    const stored = this.pageCursors.get(cursor);
+    if (stored === undefined || this.turns === null)
+      throw new RuntimeFailure("rejected", "The transcript position is stale.");
+    const currentBoundary = this.turns[stored.position.turnEnd - 1]?.id ?? null;
+    if (currentBoundary !== stored.boundaryTurnId)
+      throw new RuntimeFailure("rejected", "The transcript position is stale.");
+    return await this.buildPage(stored.position, false);
+  }
+
+  private async readThread(): Promise<
+    z.infer<typeof threadReadSchema>["thread"]
+  > {
+    // `includeTurns` defaults to false, which returns metadata with no items.
     const raw = await this.client.request("thread/read", {
       threadId: this.id,
       includeTurns: true,
@@ -224,11 +320,142 @@ class CodexOpenSession implements OpenRuntimeSession {
         "malformed",
         "Codex returned an unreadable thread.",
       );
-    return {
-      sessionId: this.id,
-      transcript: transcriptFromThread(parsed.data.thread),
-      diagnostics: [],
-    };
+    return parsed.data.thread;
+  }
+
+  private cursor(position: CodexPagePosition): TranscriptCursor {
+    const cursor = TranscriptCursorSchema.parse(
+      randomBytes(24).toString("base64url"),
+    );
+    this.pageCursors.set(cursor, {
+      position,
+      boundaryTurnId: this.turns?.[position.turnEnd - 1]?.id ?? null,
+    });
+    while (this.pageCursors.size > CURSOR_LIMIT) {
+      const oldest = this.pageCursors.keys().next().value;
+      if (oldest === undefined) break;
+      this.pageCursors.delete(oldest);
+    }
+    return cursor;
+  }
+
+  private async turnItems(turn: TranscriptTurn): Promise<TranscriptItem[]> {
+    if (this.rollout === null) return [...turn.items];
+    let projection: Awaited<ReturnType<RolloutReader["projectTurn"]>>;
+    try {
+      projection = await this.rollout.projectTurn(turn.id);
+    } catch {
+      this.rollout = null;
+      if (this.replayWarningAdded) return [...turn.items];
+      this.replayWarningAdded = true;
+      return [
+        ...turn.items,
+        {
+          id: `codex-tool-replay-error-${turn.id}`.slice(0, 200),
+          kind: "diagnostic",
+          level: "info",
+          text: "Earlier tool activity could not be restored for this chat.",
+          timestamp: null,
+        },
+      ];
+    }
+    if (
+      projection.entries.length === 0 &&
+      !projection.incomplete &&
+      !projection.unknownDialect
+    )
+      return [...turn.items];
+    const messages = new Map(turn.items.map((item) => [item.id, item]));
+    const emitted = new Set<string>();
+    const result: TranscriptItem[] = [];
+    for (const entry of projection.entries) {
+      if (entry.item !== undefined) result.push(entry.item);
+      else if (entry.messageId !== undefined) {
+        const message = messages.get(entry.messageId);
+        if (message !== undefined && !emitted.has(message.id)) {
+          result.push(message);
+          emitted.add(message.id);
+        }
+      }
+    }
+    for (const message of turn.items)
+      if (!emitted.has(message.id)) result.push(message);
+    if (
+      (projection.incomplete || projection.unknownDialect) &&
+      !this.replayWarningAdded
+    ) {
+      this.replayWarningAdded = true;
+      result.unshift({
+        id: `${
+          projection.incomplete
+            ? "codex-tool-replay-boundary"
+            : "codex-tool-replay-unknown"
+        }-${turn.id}`.slice(0, 200),
+        kind: "diagnostic",
+        level: "info",
+        text: projection.incomplete
+          ? "Earlier tool activity could not be restored beyond this point."
+          : "Earlier tool activity could not be restored for this chat.",
+        timestamp: null,
+      });
+    }
+    return result;
+  }
+
+  private async buildPage(
+    position: CodexPagePosition,
+    atLatest: boolean,
+  ): Promise<TranscriptPage> {
+    const turns = this.turns;
+    if (turns === null)
+      throw new RuntimeFailure("rejected", "The transcript position is stale.");
+    const items: TranscriptItem[] = [];
+    let bytes = 0;
+    const diagnosticCount = atLatest && this.replayDiagnostic !== null ? 1 : 0;
+    if (this.replayDiagnostic !== null && diagnosticCount === 1) {
+      items.push(this.replayDiagnostic);
+      bytes = Buffer.byteLength(JSON.stringify(this.replayDiagnostic));
+    }
+    let turnIndex = position.turnEnd - 1;
+    let requestedItemEnd = position.itemEnd;
+    let older: CodexPagePosition | null = null;
+
+    while (turnIndex >= 0) {
+      const turn = turns[turnIndex];
+      if (turn === undefined) break;
+      const turnItems = await this.turnItems(turn);
+      let itemIndex =
+        Math.min(requestedItemEnd ?? turnItems.length, turnItems.length) - 1;
+      requestedItemEnd = undefined;
+      while (itemIndex >= 0) {
+        const item = turnItems[itemIndex];
+        if (item === undefined) {
+          itemIndex -= 1;
+          continue;
+        }
+        const itemBytes = Buffer.byteLength(JSON.stringify(item));
+        if (
+          items.length >= PAGE_ITEM_LIMIT ||
+          (items.length > diagnosticCount &&
+            bytes + itemBytes > PAGE_BYTE_TARGET)
+        ) {
+          older = { turnEnd: turnIndex + 1, itemEnd: itemIndex + 1 };
+          break;
+        }
+        items.unshift(item);
+        bytes += itemBytes;
+        itemIndex -= 1;
+      }
+      if (older !== null) break;
+      this.rollout?.releaseTurn(turn.id);
+      turnIndex -= 1;
+    }
+    if (older === null && turnIndex >= 0) older = { turnEnd: turnIndex + 1 };
+    return TranscriptPageSchema.parse({
+      items,
+      olderCursor: older === null ? null : this.cursor(older),
+      atLatest,
+    });
   }
 
   public async prompt(

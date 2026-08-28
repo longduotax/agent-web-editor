@@ -4,7 +4,7 @@
 
 **Subsystem:** Initial local agent workspace
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-23
 
 Pi Web Workspace is a local-first React application backed by a loopback-only
 Fastify process. The server owns request-integrity policy, SQLite metadata,
@@ -72,10 +72,12 @@ identities, and transfer tokens without performing Git operations.
 and interrupts unfinished runs during restart reconciliation.
 
 Projects retain a canonical path only in server storage. Removal is a soft
-metadata operation and never deletes workspace or Pi files. Threads point to an
-opaque Pi session UUID; full transcripts stay in native Pi JSONL. Archiving an
-inactive thread is likewise metadata-only: active queries and unread aggregates
-exclude it while its thread, run, receipt, and Pi history remain retained.
+metadata operation and never deletes workspace or native agent files. Threads
+point to an opaque runtime session UUID plus an immutable `pi` or `codex`
+discriminator; full transcripts stay in each backend's native history.
+Archiving an inactive thread is likewise metadata-only: active queries and
+unread aggregates exclude it while its thread, run, receipt, and native history
+remain retained.
 
 ## Runtime and live data flow
 
@@ -105,11 +107,18 @@ An idempotent archive command rejects in-process prompt preflight and persisted
 running work, atomically updates the project's active-thread fallback, then
 releases any inactive open runtime. Archived IDs are rejected by normal
 snapshot, prompt, steering, rename, and viewed routes. HTTP snapshots
-reconstructed from native history plus run metadata are authoritative.
-`LiveBroker` adds process-epoch, monotonic sequence events and a
-bounded replay ring for Origin-permitted WebSocket subscribers. Browser queries
-invalidate and replace snapshots after events or replay gaps; browser stream
-state is never durable truth.
+reconstructed from native history plus run metadata are authoritative, but
+carry only a fixed-limit latest transcript page. Opaque runtime-owned cursors
+fetch older pages; responses are capped at 100 items with a 1 MiB target, and
+one individually schema-bounded oversized item may travel alone. Pi pages are
+packed from its SDK projection. Codex pages combine app-server messages with
+tool activity read backward from the one confined rollout file named by
+`thread/read`; sequential older requests continue the reverse scan, and
+private-format failure degrades to message-only pages. `LiveBroker` adds
+process-epoch, monotonic sequence events and a bounded replay ring for
+Origin-permitted WebSocket subscribers. Browser queries invalidate and replace
+the bounded latest snapshot after events or replay gaps; browser stream state is
+never durable truth.
 
 ## Inspector and terminal boundaries
 
@@ -146,8 +155,9 @@ selected canonical paths never enter browser state or wire responses. New chat
 uses an inline project, execution-location, starting-state, and branch toolbar
 above the first prompt. Worktree and clean-start are the safe defaults;
 local-change transfer and direct checkout use are explicit. The workspace
-renders a nested project and thread sidebar, Markdown transcript and activity,
-direct active-run steering and stop controls, direct-execution disclosure,
+renders a nested project and thread sidebar, a bounded Markdown transcript with
+an explicit Load earlier action and a five-page/500-row window, direct
+active-run steering and stop controls, direct-execution disclosure,
 Files/Changes/Terminal inspector, and
 responsive drawers. The desktop inspector uses a reduced-motion-aware slide to
 close and reopen and can be resized with a pointer or keyboard; a versioned local

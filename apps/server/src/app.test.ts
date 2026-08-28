@@ -9,6 +9,7 @@ import type {
   AgentRuntime,
   OpenRuntimeSession,
   PromptAcceptance,
+  RuntimeSnapshot,
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
@@ -22,6 +23,8 @@ import {
   ProjectsResponseSchema,
   AgentBackendsResponseSchema,
   StartThreadResponseSchema,
+  ThreadSnapshotSchema,
+  TranscriptPageSchema,
 } from "@pi-web/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -55,11 +58,7 @@ class FakeRuntime implements AgentRuntime {
 class PromptingSession implements OpenRuntimeSession {
   public readonly id = "10000000-0000-4000-8000-000000000001";
 
-  public snapshot(): Promise<{
-    sessionId: string;
-    transcript: [];
-    diagnostics: [];
-  }> {
+  public snapshot(): Promise<RuntimeSnapshot> {
     return Promise.resolve({
       sessionId: this.id,
       transcript: [],
@@ -135,6 +134,31 @@ class PromptingRuntime implements AgentRuntime {
   }
 }
 
+class HistorySession extends PromptingSession {
+  public override snapshot(): Promise<RuntimeSnapshot> {
+    return Promise.resolve({
+      sessionId: this.id,
+      transcript: Array.from({ length: 250 }, (_, index) => ({
+        id: `message-${String(index)}`,
+        kind: "message" as const,
+        role: "assistant" as const,
+        text: `message ${String(index)}`,
+        timestamp: null,
+      })),
+      diagnostics: [],
+    });
+  }
+}
+
+class HistoryRuntime extends PromptingRuntime {
+  private readonly history = new HistorySession();
+
+  public override open(path: string): Promise<OpenRuntimeSession> {
+    this.openedPath = path;
+    return Promise.resolve(this.history);
+  }
+}
+
 async function directories(): Promise<{ state: string; project: string }> {
   const root = await mkdtemp(join(tmpdir(), "pi-web-http-"));
   roots.push(root);
@@ -149,6 +173,50 @@ const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
 describe("credential-free project API", () => {
+  it("returns one bounded latest page and loads older history by opaque cursor", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new HistoryRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const thread = await server.workspaceContext.workspace.createThread(
+      project.id,
+    );
+
+    const snapshotResponse = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}`,
+      headers: { host },
+    });
+    const snapshot = ThreadSnapshotSchema.parse(snapshotResponse.json());
+    expect(snapshot.version).toBe(2);
+    expect(snapshot.transcriptPage.items).toHaveLength(100);
+    expect(snapshot.transcriptPage.items[0]?.id).toBe("message-150");
+    expect(snapshot.transcriptPage.olderCursor).not.toBeNull();
+    const cursor = snapshot.transcriptPage.olderCursor;
+    if (cursor === null) throw new Error("Expected an older page");
+
+    const olderResponse = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/transcript?cursor=${encodeURIComponent(cursor)}`,
+      headers: { host },
+    });
+    expect(olderResponse.statusCode).toBe(200);
+    const older = TranscriptPageSchema.parse(olderResponse.json());
+    expect(older.items).toHaveLength(100);
+    expect(older.items[0]?.id).toBe("message-50");
+    await server.close();
+  });
+
   it("creates and names a shared thread from its first prompt", async () => {
     const paths = await directories();
     const config = parseConfig({

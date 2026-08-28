@@ -1,12 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeFailure, type RuntimeEvent } from "@pi-web/agent-runtime";
 
-import { CodexAgentRuntime, type CodexSandbox } from "./index.js";
+import {
+  CodexAgentRuntime,
+  type CodexAgentRuntimeOptions,
+  type CodexSandbox,
+} from "./index.js";
 import type { CodexTransport } from "./client.js";
 
 const THREAD = "019fa011-c136-7dc0-8c67-e5f7926bd517";
 const OTHER = "019fa2af-fc3c-7120-bbf5-9e970b2b7dd4";
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryRoots
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
 
 interface Frame {
   id?: number;
@@ -89,8 +106,13 @@ function thread(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function runtimeOver(server: ScriptedServer, sandbox?: CodexSandbox) {
+function runtimeOver(
+  server: ScriptedServer,
+  sandbox?: CodexSandbox,
+  options: Omit<CodexAgentRuntimeOptions, "connect" | "sandbox"> = {},
+) {
   return new CodexAgentRuntime({
+    ...options,
     connect: () => Promise.resolve(server),
     ...(sandbox === undefined ? {} : { sandbox }),
   });
@@ -247,6 +269,128 @@ describe("CodexOpenSession", () => {
     expect(snapshot.sessionId).toBe(THREAD);
     expect(snapshot.transcript).toHaveLength(2);
     expect(snapshot.transcript[1]).toMatchObject({ text: "done" });
+    await session.dispose();
+  });
+
+  it("restores stored tools into the bounded message page in original order", async () => {
+    const home = await mkdtemp(join(tmpdir(), "codex-page-"));
+    temporaryRoots.push(home);
+    const directory = join(home, "sessions", "2026", "08", "23");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "rollout-test.jsonl");
+    const metadata = { turn_id: "r1", create_time: 1 };
+    const line = (type: string, payload: unknown) =>
+      JSON.stringify({
+        timestamp: "2026-08-23T00:00:00.000Z",
+        type,
+        payload,
+      });
+    await writeFile(
+      path,
+      `${[
+        line("event_msg", { type: "task_started", turn_id: "r1" }),
+        line("response_item", {
+          type: "message",
+          id: "u1",
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "custom_tool_call",
+          id: "tool-1",
+          call_id: "tool-1",
+          name: "exec",
+          input: 'tools.exec_command({"cmd":"printf ok","workdir":"/repo"})',
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "custom_tool_call_output",
+          call_id: "tool-1",
+          output: '{"exit_code":0,"output":"ok"}',
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "message",
+          id: "a1",
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("event_msg", { type: "task_complete", turn_id: "r1" }),
+      ].join("\n")}\n`,
+    );
+    const server = new ScriptedServer({
+      "thread/resume": { thread: thread() },
+      "thread/read": {
+        thread: thread({
+          path,
+          turns: [
+            {
+              id: "r1",
+              status: "completed",
+              error: null,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "u1",
+                  content: [{ type: "text", text: "go" }],
+                },
+                { type: "agentMessage", id: "a1", text: "done" },
+              ],
+            },
+          ],
+        }),
+      },
+      "thread/unsubscribe": {},
+    });
+    const session = await runtimeOver(server, undefined, {
+      codexHome: home,
+    }).open("/repo", THREAD);
+    if (session.latestTranscriptPage === undefined)
+      throw new Error("Expected paged history");
+    const page = await session.latestTranscriptPage();
+    expect(page.items.map((item) => item.id)).toEqual(["u1", "tool-1", "a1"]);
+    expect(page.items[1]).toMatchObject({
+      kind: "tool",
+      input: "printf ok",
+      output: "ok",
+    });
+    await session.dispose();
+  });
+
+  it("returns bounded latest and older pages instead of the complete chat", async () => {
+    const turns = Array.from({ length: 150 }, (_, index) => ({
+      id: `turn-${String(index)}`,
+      status: "completed",
+      error: null,
+      items: [
+        {
+          type: "agentMessage",
+          id: `assistant-${String(index)}`,
+          text: `message ${String(index)}`,
+        },
+      ],
+    }));
+    const { session } = await opened({
+      "thread/read": { thread: thread({ turns }) },
+    });
+    if (
+      session.latestTranscriptPage === undefined ||
+      session.olderTranscriptPage === undefined
+    )
+      throw new Error("Expected paged history");
+    const latest = await session.latestTranscriptPage();
+    expect(latest.items).toHaveLength(100);
+    expect(latest.items.at(-2)).toMatchObject({ id: "assistant-149" });
+    expect(latest.items.at(-1)).toMatchObject({
+      id: "codex-tool-replay-unavailable",
+    });
+    expect(latest.olderCursor).not.toBeNull();
+    const cursor = latest.olderCursor;
+    if (cursor === null) throw new Error("Expected an older page");
+    // Polling refreshes the bounded latest page; an append-compatible older
+    // cursor must remain usable rather than expiring every 15 seconds.
+    await session.latestTranscriptPage();
+    const older = await session.olderTranscriptPage(cursor);
+    expect(older.items[0]).toMatchObject({ id: "assistant-0" });
+    expect(older.olderCursor).toBeNull();
     await session.dispose();
   });
 

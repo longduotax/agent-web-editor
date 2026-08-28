@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
-import type { AgentRuntime } from "@pi-web/agent-runtime";
+import { RuntimeFailure, type AgentRuntime } from "@pi-web/agent-runtime";
 import type { RuntimeKind } from "@pi-web/contracts";
 import type { RawData } from "ws";
 import {
@@ -23,6 +23,7 @@ import {
   SteerRequestSchema,
   TerminalClientFrameSchema,
   ThreadIdSchema,
+  TranscriptPageQuerySchema,
   UpdateProjectRequestSchema,
 } from "@pi-web/contracts";
 import { CodexAgentRuntime } from "@pi-web/codex-adapter";
@@ -100,6 +101,19 @@ function safeError(error: unknown): {
       code: "invalid_request",
       message: "The request is malformed.",
     };
+  if (error instanceof RuntimeFailure)
+    return error.code === "rejected"
+      ? {
+          status: 409,
+          code: "stale_transcript",
+          message:
+            "Conversation history changed. Return to the latest messages and try again.",
+        }
+      : {
+          status: 502,
+          code: "runtime_failure",
+          message: error.message,
+        };
   if (error instanceof ReceiptConflictError)
     return {
       status: 409,
@@ -286,6 +300,10 @@ export async function buildServer(
               codex: new CodexAgentRuntime({
                 command: config.codexCommand,
                 sandbox: config.codexSandbox,
+                ...(config.codexHome === undefined
+                  ? {}
+                  : { codexHome: config.codexHome }),
+                replayTools: config.codexReplayTools,
               }),
             }
           : { pi: options.runtime, codex: options.runtime }),
@@ -443,6 +461,18 @@ export async function buildServer(
     const params = threadParamsSchema.parse(request.params);
     return await workspace.snapshot(params.projectId, params.threadId);
   });
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/transcript",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const query = TranscriptPageQuerySchema.parse(request.query);
+      return await workspace.olderTranscriptPage(
+        params.projectId,
+        params.threadId,
+        query.cursor,
+      );
+    },
+  );
 
   server.post(
     "/api/projects/:projectId/threads/:threadId/prompt",

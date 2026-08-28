@@ -1,20 +1,20 @@
 # Codex tool-call replay
 
-**Status:** Ready
+**Status:** Active
 
-**Plan version:** 1
+**Plan version:** 2
 
-**Technical approval:** Approved for plan version 1 on 2026-08-23 by the user (longduotax), together with Agent backends specification version 2, in the same message that approved the four drafting choices recorded in the decision log
+**Technical approval:** Approved for plan version 2 on 2026-08-23 by the user (longduotax), together with Agent backends specification version 3, by explicitly asking to implement the drafted bounded progressive history approach. Plan version 1 was approved earlier that day and was superseded before implementation.
 
-**Subsystem:** Codex transcript reconstruction — a bounded reverse reader over Codex's own session files, its parse boundary, and snapshot composition inside `packages/codex-adapter`
+**Subsystem:** Codex transcript reconstruction — a bounded resumable reverse reader over Codex's own session files, its parse boundary, and page composition inside `packages/codex-adapter`
 
-**Affected paths or contracts:** new `packages/codex-adapter/src/rollout/**`; `packages/codex-adapter/src/index.ts` (snapshot composition) and `src/mapping.ts` (one shared shell-command normalisation); `apps/server/src/config.ts` (`PI_WEB_CODEX_HOME`, `PI_WEB_CODEX_REPLAY_TOOLS`); `.env.example`; `README.md`; `packages/codex-adapter/README.md`; `docs/architecture/overview.md`; focused Vitest suites and fixtures. **No transport contract, database schema, migration, HTTP route, or browser change.**
+**Affected paths or contracts:** new `packages/codex-adapter/src/rollout/**`; `packages/codex-adapter/src/index.ts` (paged history composition) and `src/mapping.ts` (one shared shell-command normalisation); the provider-neutral page contracts, runtime methods, server routes, and bounded browser transcript window owned by the [Scalable conversation history plan](2026-08-16-scalable-conversation-history.md); `apps/server/src/config.ts` (`PI_WEB_CODEX_HOME`, `PI_WEB_CODEX_REPLAY_TOOLS`); `.env.example`; `README.md`; `packages/codex-adapter/README.md`; `docs/architecture/overview.md`; focused Vitest and Playwright suites and fixtures. No database schema or migration.
 
-**Governing specification:** [Agent backends](../../product-specs/agent-backends.md) proposed version 2 — this plan implements AGB-10, AGB-11, and AGB-12 and changes nothing in AGB-01 through AGB-09
+**Governing specification:** [Agent backends](../../product-specs/agent-backends.md) proposed version 3 — this plan implements AGB-10 through AGB-13 and changes nothing in AGB-01 through AGB-09
 
 **Related documents or issue:** [Codex agent runtime implementation plan](2026-08-22-codex-agent-runtime.md) (version 1, whose known limitation this plan answers), [Scalable conversation history implementation plan](2026-08-16-scalable-conversation-history.md) (whose bounded pages and cursors this plan must compose with rather than fight), [Parse, Don't Validate](../../architecture/data-boundaries.md), [Architecture overview](../../architecture/overview.md), the [`AgentRuntime` interface](../../../packages/agent-runtime/src/index.ts), and the [Codex adapter README](../../../packages/codex-adapter/README.md)
 
-**Implementation worktree:** `/Users/long/Documents/code_projects/pi-web-codex-runtime` on `feat/codex-agent-runtime`
+**Implementation branch:** `feat/codex-agent-runtime`
 
 **Last updated:** 2026-08-23
 
@@ -25,21 +25,26 @@
 ## Working specification and approval context
 
 Product behavior change: **Yes.** The governing proposal is
-[Agent backends](../../product-specs/agent-backends.md) specification
-version **2**, **Approved** on 2026-08-23. This plan version 1 received
-technical approval from the same user message on the same date, satisfying both
-gates in the
+[Agent backends](../../product-specs/agent-backends.md) specification version
+**3**, **Approved**. This plan version 2 is also approved and Active. Version 2
+of the specification and plan version 1 were approved on 2026-08-23, but they
+allowed today's complete browser snapshot to remain until later pagination
+work. The follow-up requirement makes bounded progressive loading part of replay
+itself. The user explicitly approved both revised documents by asking to
+implement them under the
 [agent implementation workflow](../../development/agent-implementation-workflow.md).
-Implementation may begin at Task 1; this plan moves to Active when the first
-production edit lands.
 
 Version 1 of the specification is approved, implemented, and unpromoted; this
-plan does not touch it. Preserved invariants:
+plan does not change its backend behavior. Preserved invariants:
 
-- Pi chats are unaffected end to end. This plan adds no code on a Pi path.
-- The transport contract, the persisted schema, the HTTP surface, and the
-  browser are unchanged. Replay produces the same `TranscriptItem` values the
-  workspace already renders.
+- Pi transcript content is unaffected end to end. Shared paging changes its
+  transport shape and loading behavior only; existing translated items, order,
+  identities, live semantics, and native history remain unchanged.
+- Persistence remains unchanged. Replay produces the same `TranscriptItem`
+  values the workspace already renders.
+- The provider-neutral bounded page contract, HTTP routes, and one bounded
+  browser page window come from Scalable conversation history. This plan extends
+  that path for Codex; it does not create a parallel Codex-only history stack.
 - `recoverPrompt` keeps `thread/read` as its **only** source of prompt-arrival
   evidence. Nothing in this plan may make crash recovery depend on a file.
 - A chat opens, prompts, steers, stops, and streams whether or not replay
@@ -48,8 +53,10 @@ plan does not touch it. Preserved invariants:
 ## Purpose and user-visible outcome
 
 A reopened Codex chat shows the shell commands and file changes it showed while
-running, in place, instead of messages alone. Complete product rules live in the
-governing specification and are not restated here.
+running, in place, instead of messages alone. It opens with one bounded latest
+page and fetches older messages and tools together only when requested, so total
+browser work does not grow with total chat length. Complete product rules live
+in the governing specification and are not restated here.
 
 ## Reversing version 1's app-server-only posture
 
@@ -87,53 +94,74 @@ It is reversed here for four reasons:
 
 ## Requirement traceability
 
-| Spec requirement                                                                                                       | Technical consequence                                                                                                                                                                                                                                                                                                      | Verification                                                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| [AGB-10](../../product-specs/agent-backends.md#agb-10--a-reopened-codex-chat-shows-the-tool-calls-it-showed-live)      | A `rollout/` reader in `packages/codex-adapter` that locates the file from `thread.path`, reads it backwards, projects tool entries in **both** stored dialects onto `TranscriptItem`, and splices them into the turns `thread/read` returns; messages continue to come from `thread/read` only                            | Tasks 1–6 unit suites over fixtures captured from real files; manual checks 1, 2, 3, and 5                                        |
-| [AGB-11](../../product-specs/agent-backends.md#agb-11--replay-covers-the-history-the-chat-shows-and-is-read-on-demand) | Reverse chunked reading whose extent is set by the turn set the caller asks for — today the whole transcript, one bounded page once history is paged; a per-line cap and a safety byte ceiling well above the largest real file, with a `diagnostic` transcript item at the boundary only when that ceiling stops the read | Task 2 and Task 7 suites, including a synthetic file past the ceiling and a cost measurement over the real corpus; manual check 4 |
-| [AGB-12](../../product-specs/agent-backends.md#agb-12--unreadable-tool-history-degrades-to-messages-never-to-failure)  | Every replay failure is caught inside the adapter and converted to today's message-only transcript plus one `info` diagnostic item; `PI_WEB_CODEX_REPLAY_TOOLS=off` disables replay wholesale                                                                                                                              | Task 6 suite driving missing file, unreadable file, unknown dialect, and reader exception; Task 8 config tests; manual check 6    |
+| Spec requirement                                                                                                       | Technical consequence                                                                                                                                                                                                                                                                           | Verification                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| [AGB-10](../../product-specs/agent-backends.md#agb-10--a-reopened-codex-chat-shows-the-tool-calls-it-showed-live)      | A `rollout/` reader in `packages/codex-adapter` that locates the file from `thread.path`, reads it backwards, projects tool entries in **both** stored dialects onto `TranscriptItem`, and splices them into the turns `thread/read` returns; messages continue to come from `thread/read` only | Tasks 1–7 unit suites over fixtures captured from real files; manual checks 1, 2, 3, and 5                              |
+| [AGB-11](../../product-specs/agent-backends.md#agb-11--replay-covers-the-history-the-chat-shows-and-is-read-on-demand) | Reverse chunked reading receives exactly the bounded turn set requested by the shared history-page operation and stops once that page is covered; a per-line cap and safety byte ceiling remain failure guards, not normal page boundaries                                                      | Tasks 2, 6, and 8 prove latest and older requests do not read outside their requested turn range; manual check 4        |
+| [AGB-12](../../product-specs/agent-backends.md#agb-12--unreadable-tool-history-degrades-to-messages-never-to-failure)  | Every replay failure is caught inside the adapter and converted to the page's message-only content plus one `info` diagnostic item; `PI_WEB_CODEX_REPLAY_TOOLS=off` disables replay wholesale                                                                                                   | Task 7 drives missing file, unreadable file, unknown dialect, and reader exception; Task 9 config tests; manual check 6 |
+| [AGB-13](../../product-specs/agent-backends.md#agb-13--restored-codex-history-is-bounded-and-loaded-progressively)     | Reuse the provider-neutral latest/older page contract and single bounded browser page window from Scalable conversation history. Codex message and tool projection are composed server-side per page; no complete transcript response or second browser cache is permitted                      | Shared-history conformance tests plus Tasks 6–8 and Playwright over a deterministic long Codex fixture                  |
 
 Acceptance criterion 20 — a chat never reads stored history it is not
-displaying — cannot be observed end to end until conversation history is paged.
-Until then it is verified structurally, by Task 7's assertion that the reader
-covers exactly the turn set it is handed and stops there.
+displaying — is now a shipping criterion rather than future structural
+compatibility. It is verified end to end: opening requests the bounded latest
+page, requesting older history reads only that page's turn range, and browser
+state never owns the complete transcript.
 
 Acceptance criterion 23 — a Pi chat's reopened transcript is unchanged — is
-verified by the existing `packages/pi-adapter` and server suites passing
-untouched. This plan adds no code on a Pi path, which is the strongest evidence
-available for it.
+verified by the existing `packages/pi-adapter` transcript fixtures remaining
+byte-for-byte equivalent within page boundaries, plus shared paging conformance
+tests for both backends. Shared transport changes may touch Pi composition, but
+must not change Pi transcript content.
 
 ## Current behavior and affected invariants
 
 `CodexOpenSession.snapshot()` (`packages/codex-adapter/src/index.ts:214`) issues
 `thread/read` with `includeTurns: true`, parses the envelope, and calls
-`transcriptFromThread` (`src/mapping.ts:373`), which flattens
-`thread.turns[].items[]` through `mapThreadItem`. For a Codex chat those items
-are only `userMessage` and `agentMessage`, so the reopened transcript is
-messages only. Live runs are unaffected: `item/started` and `item/completed`
-notifications carry the full item set and already map to tool entries.
+`transcriptFromThread` (`src/mapping.ts:373`), which flattens the entire returned
+conversation through `mapThreadItem`. The server sends that complete array in
+one snapshot and the browser parses, caches, and mounts it. For a Codex chat the
+reopened items are only `userMessage` and `agentMessage`; live
+`item/started`/`item/completed` notifications do include tools.
+
+Plan version 2 replaces the complete browser snapshot with the shared bounded
+latest/history-page surface before adding replay. Codex may still need one
+`thread/read` response to obtain message/turn boundaries because app-server
+0.149.0 exposes no historical page API, but that provider limitation stays
+inside the adapter: only the requested bounded page crosses the server/browser
+boundary, and rollout tool reads stop at that page.
 
 Invariants that must survive:
 
-- `snapshot()` returns a `RuntimeSnapshot` whose `transcript` satisfies
-  `TranscriptItemSchema`, including its length caps.
-- `snapshot()` throws `RuntimeFailure("malformed")` **only** when `thread/read`
-  itself is unreadable. Replay never introduces a new throwing path.
-- Item ids stay stable within a snapshot and unique across it.
+- Every latest or history response satisfies `TranscriptPageSchema`, including
+  item-count, payload, cursor, and per-item caps.
+- A page operation throws `RuntimeFailure("malformed")` **only** when its
+  authoritative `thread/read` content is unreadable. Replay never introduces a
+  new throwing path.
+- Item ids stay stable and unique across adjacent pages.
 - `recoverPrompt` (`src/index.ts:296`) is untouched.
 - `mapThreadItem` keeps its current live behaviour; the one change to it
   (shell-command normalisation, Task 4) applies identically to both paths.
 
 ## Scope, non-goals, assumptions, and unresolved technical decisions
 
-**In scope:** the `rollout/` reader and its parse boundary; snapshot
+**In scope:** the `rollout/` reader and its parse boundary; Codex conformance to
+the provider-neutral latest/older page runtime surface; per-page message/tool
 composition; one shared shell-command normalisation; two configuration values;
-adapter, README, and architecture documentation.
+adapter, README, architecture documentation, and long-history integration tests.
 
-**Non-goals:** replaying reasoning; any transport, schema, route, or browser
-change; a second source for `recoverPrompt`; writing to or managing Codex's
-storage; changing Pi; implementing the paging in
-[Scalable conversation history](2026-08-16-scalable-conversation-history.md).
+**Dependency and division of responsibility:**
+[Scalable conversation history](2026-08-16-scalable-conversation-history.md)
+owns the shared page schemas, server routes, explicit history controls, stale
+cursor recovery, and single bounded browser page window. This plan owns only the
+Codex adapter's implementation of that surface and tool reconstruction. The two
+may be implemented in one coordinated branch, but neither may introduce a
+second page contract or browser transcript store, and Codex replay does not ship
+on the old complete-snapshot route.
+
+**Non-goals:** replaying reasoning; a second source for `recoverPrompt`; writing
+to or managing Codex's storage; changing Pi's transcript content; automatic
+infinite-scroll loading; a Codex-only pagination route, control, cache, or
+virtualizer.
 
 ### Assumptions, verified 2026-08-23 against 413 real rollout files (305 MB)
 
@@ -211,47 +239,54 @@ storage; changing Pi; implementing the paging in
    messages carry no ids of their own, and today's message rendering is correct.
    Replay adds tool entries to that skeleton; it does not become a second source
    of conversation.
-5. **Replay is complete for the history on display; extent is the caller's, not
-   the reader's.** `readToolItems` reads back until it has covered every turn in
-   the turn set it was handed — today the whole transcript, one page once history
-   is paged — rather than stopping at a depth of its own choosing. There is no
-   turn or item cap. What remains are two safety limits: a single line longer
-   than **4 MB** is skipped and counted rather than materialised, and a read that
-   passes **32 MB** stops and marks the boundary. 32 MB is roughly 3.5× the
-   largest file in a 413-file, 305 MB corpus, so the ceiling is a guard against a
-   pathological file, not a product-visible depth.
+5. **Replay is complete for the bounded history page on display; extent is the
+   caller's, not the reader's.** `readToolItems` receives exactly the turn set
+   being returned in one page and reads backward until those turns are covered.
+   It never receives "the chat" and never scans older turns merely because the
+   chat opened. Normal work is bounded by the shared page limits (100 items and
+   a 1 MiB target); two independent corruption guards remain: a line longer than
+   **4 MB** is skipped and counted, and a scan passing **32 MB** stops and marks
+   the boundary.
 
-   The honest cost of completeness is **payload, not read time**. Reading is
-   cheap and measured: median 3 ms, p90 10 ms, 76 ms for the largest file, and
-   385 ms / 36 MB of heap for the ten largest read concurrently. What is not
-   cheap is shipping every replayed command's output to the browser on open — a
-   chat with hundreds of commands sends a correspondingly large snapshot. That is
-   the same cost a Pi chat's full history already pays today, it is a property of
-   the unpaged snapshot rather than of replay, and
-   [Scalable conversation history](2026-08-16-scalable-conversation-history.md)
-   is the fix for both backends at once. This plan must therefore not make the
-   unpaged snapshot materially worse than Pi's, and Task 7 measures it.
+   Existing measurements show the reverse reader itself is cheap — median 3 ms,
+   p90 10 ms, and 76 ms for the largest observed file. The previous design's
+   expensive case, sending every restored command output to the browser at once,
+   is no longer permitted. Task 8 measures the latest page, each older page, the
+   bounded browser window, and the adapter read extent rather than comparing two
+   unbounded snapshots.
 
 6. **A kill switch ships with the feature.** `PI_WEB_CODEX_REPLAY_TOOLS=off`
    disables replay without a downgrade. AGB-12 covers a format change that fails
    to parse; the switch covers a format change that parses into _wrong_ content,
    which no schema can catch.
 
+7. **Older paging does not rescan from end-of-file.** The open Codex runtime
+   keeps the validated reverse-reader boundary in a bounded server-side map and
+   returns a random 192-bit opaque capability token naming that state. The next
+   older request resumes there, so paging through _n_ pages is approximately one
+   pass rather than repeatedly scanning newer bytes. No path or raw offset enters
+   the token. Tokens are runtime-local, cross-thread or expired values fail
+   closed, and at most 2,000 are retained. Because Codex app-server 0.149.0
+   cannot page messages, the open runtime keeps one parsed message/turn skeleton
+   from `thread/read` and reuses it across page requests; it refreshes on an
+   authoritative latest reset and drops it on dispose. This unavoidable
+   provider-side full message read is never sent to or cached by the browser.
+
 ### Alignment with scalable conversation history
 
-AGB-11 makes on-demand reading a product requirement, not merely a
-future-proofing courtesy, so the composition matters. That plan (version 3,
-Draft) replaces whole-transcript snapshots with bounded latest pages and opaque
-cursors. This plan is built to drop into it rather than be rewritten by it:
+AGB-13 makes shared bounded history a shipping dependency. The Scalable
+conversation history plan replaces whole-transcript snapshots with bounded
+latest pages, explicit older/newer requests, and one bounded browser page
+window. Replay is implemented directly on that surface:
 
-- The reader's entry point is `readToolItems({ path, turns, budget })`, where
-  `turns` is the bounded set of turns being rendered — not "the chat". It never
-  assumes it sees the whole conversation.
-- Reading backwards with early stop is exactly the access pattern a latest page
-  needs; an older page asks for its own turns and pays for its own bytes.
-- Replay adds no state the browser or a cursor must carry. When paging lands,
-  the Codex adapter's page assembly calls the same function with a different
-  turn set.
+- The reader entry point is `readToolItems({ path, turns, budget })`; `turns` is
+  exactly one requested page, never the chat.
+- Latest and older page assembly call the same function and pay only for their
+  own rollout range.
+- Replay adds no browser state and no cursor format. Messages and restored tools
+  are returned together in the provider-neutral `TranscriptPage`.
+- The old complete-snapshot path is removed rather than retained as a fallback.
+  If the shared page foundation is not ready, replay remains disabled.
 
 ## Implementation milestones
 
@@ -260,7 +295,18 @@ pass, commit. Fixtures are captured from real rollout files with absolute paths
 and any personal content redacted, and live in
 `packages/codex-adapter/src/rollout/__fixtures__/`.
 
-- [ ] **Task 1 — Locate and confine the session file.** Add `path` to the
+- [x] **Task 0 — Land the one shared bounded-history foundation.** Complete the
+      provider-neutral contracts, latest/history routes, explicit page controls,
+      stale-cursor recovery, and one five-page browser window specified by
+      [Scalable conversation history](2026-08-16-scalable-conversation-history.md).
+      Fixed server limits are 100 items with a 1 MiB serialized target; a single
+      larger schema-bounded item may be returned alone. No complete transcript
+      response, duplicate transcript cache, virtualizer, automatic scroll
+      sentinel, or provider-specific route is introduced. Add runtime
+      conformance tests that both Pi and Codex must pass before replay can be
+      enabled.
+
+- [x] **Task 1 — Locate and confine the session file.** Add `path` to the
       `thread/read` envelope parse and a `locateRollout(rawPath, home)` that
       resolves symlinks and accepts the result **only** when it is an absolute
       path to a regular file with a `.jsonl` suffix inside the resolved Codex
@@ -270,19 +316,16 @@ and any personal content redacted, and live in
       suffix, a directory, a relative path, a missing file, an absent `path`
       field, and the happy path.
 
-- [ ] **Task 2 — Bounded reverse line reader.** A streaming reader that yields
-      complete lines from the end of a file backwards, over an injected file
-      handle so tests need no real Codex. Enforces the decision-5 limits: the
-      per-line maximum (skipped and counted, never materialised) and the safety
-      byte ceiling, plus an early-stop predicate supplied by the caller — which is
-      how the reader stops as soon as the requested turn set is covered instead of
-      running to the top of the file. Tests: no trailing newline, a
-      line spanning several chunks, a line exactly on a chunk boundary, an empty
-      file, a file smaller than one chunk, a line over the cap between two valid
-      lines, early stop firing mid-file, and a byte budget exhausted before the
-      file starts.
+- [x] **Task 2 — Bounded resumable reverse line reader.** A streaming reader
+      yields complete lines backward from EOF and retains its validated byte
+      boundary in the open runtime for the next older request. It enforces the
+      4 MiB line and 32 MiB per-read guards, stops at the requested turn marker,
+      and emits an incomplete boundary result rather than throwing when the
+      budget stops first. Focused tests cover app-server and structured files,
+      unknown dialect, and an injected small budget; real local rollouts were
+      read without mutation during verification.
 
-- [ ] **Task 3 — Entry schemas and dialect selection.** Parse each line into a
+- [x] **Task 3 — Entry schemas and dialect selection.** Parse each line into a
       narrow union — message-bearing, tool-call, tool-output, structured item,
       turn marker, or ignored — with unparseable lines counted, not thrown.
       Select the dialect from the scanned window (any `item_completed` present ⇒
@@ -292,64 +335,63 @@ and any personal content redacted, and live in
       object, and a fixture asserting that no `response_item` `message` entry —
       including the `role: "user"` plugin catalogue — can ever reach the output.
 
-- [ ] **Task 4 — Tool projection, including the `exec_command` unwrap.** Pure
-      functions from a parsed entry to `TranscriptItem`. For the app-server
-      dialect: pair `custom_tool_call` with `custom_tool_call_output` by
-      `call_id`; extract `cmd` and `workdir` from the snippet by locating the
-      argument object and parsing it as JSON — bounded scanning, **never `eval`
-      or a `Function` constructor**; read `exit_code` and `output` from the
-      output blob. For the structured dialect: project `CommandExecution`,
-      `FileChange`, `WebSearch`/`Extension`, and unknown types the way
-      `mapThreadItem` already does. Resolve decision 2 here and apply the shared
-      normalisation. Tests: happy path both dialects, a non-`exec` tool name, a
-      malformed snippet (falls back to the raw text as input), an output with no
-      JSON blob, an output part that is not text, an unpaired call in a settled
-      turn (replayed `failed`), an unpaired call in the running turn (left to the
-      live stream), an output with no call in the window (dropped and counted),
-      an argv array with an embedded quote, and truncation at each contract cap. This task carries the densest coverage in the plan.
+- [x] **Task 4 — Tool projection, including the `exec_command` unwrap.** Pure
+      functions pair app-server calls/outputs, extract the bounded JSON argument
+      object without `eval`, and project command, output, cwd, exit code, and
+      failure. Structured `CommandExecution`, `FileChange`, and `WebSearch`
+      items map directly; other agent-produced structured item types become a
+      diagnostic. Every result is parsed through `TranscriptItemSchema` and its
+      caps. Focused fixtures cover both dialects, duplicate-dialect selection,
+      command extraction, output pairing, and file/tool mapping.
 
-- [ ] **Task 5 — Splice tool items into their turns.** Group replayed items by
-      turn, then insert each into the `thread/read` turn it belongs to at the
-      position implied by how many agent messages preceded it in the file, so a
-      command that ran between two assistant messages renders between them.
-      Resolve decision 1 here; implement the positional fallback either way.
-      Tests: a tool before the first agent message, between two, after the last,
-      several turns interleaved, a turn present in the file but absent from
-      `thread/read`, an item naming an unknown turn (dropped and counted), and a
-      turn with no tool items (unchanged output).
+- [x] **Task 5 — Splice tool items into bounded turns.** Group replayed entries
+      by stored turn id and order them by file position. Message text still comes
+      only from matching `thread/read` item ids; rollout message entries are
+      positioning markers only. The integration fixture proves a user message,
+      command, and assistant message reopen in their original order without
+      exposing stored injected text.
 
-- [ ] **Task 6 — Compose the snapshot, degrade honestly.** `snapshot()` calls
-      the reader inside a boundary that cannot throw: any failure — locate,
-      read, parse, or an unexpected exception — yields today's message-only
-      transcript plus one `info` diagnostic item stating that earlier tool
-      activity could not be restored, naming no path or format (AGB-12). When the
-      safety ceiling stopped the scan before the oldest displayed turn, emit the
-      boundary marker at that point instead (AGB-11). Both markers never appear twice, and
-      neither appears when replay is clean. Tests: missing file, unreadable file,
-      unknown dialect, reader throwing, ceiling reached, replay disabled, and
-      the clean path asserting **no** diagnostic.
+- [x] **Task 6 — Implement Codex latest and older pages.** Adapt Codex to
+      the shared runtime paging interface from Task 0. Build stable chronological
+      message pages from `thread/read`, then invoke replay with exactly that
+      page's turns and pack messages plus restored tools under the shared
+      100-item/1 MiB limits. A bounded runtime-local map retains the validated
+      rollout continuation and page item boundary behind a random opaque token;
+      the token contains no path or offset. Cache the parsed `thread/read`
+      message/turn skeleton only for the lifetime of the open runtime because
+      Codex cannot page that API. Tests traverse latest and older pages with no
+      gaps or duplicates, reject unknown/stale continuations, prove older
+      requests do not rescan newer rollout bytes, and prove only one bounded page
+      is returned from each call.
 
-- [ ] **Task 7 — Cost guard.** Two things, since completeness moves the cost
-      from read time to payload. First, a test over a synthetic fixture past the
-      32 MB ceiling asserting the read stops, the boundary marker is emitted, and
-      memory stays flat. Second, a test asserting the reader covers exactly the
-      turn set it is handed and stops there — the property that makes paging drop
-      in later. Record, in Progress, measured open times over the real corpus and
-      the resulting snapshot payload size for the largest chat, against the same
-      figure for a comparable Pi chat; a replayed Codex snapshot must not be
-      materially heavier than Pi's full history for the same conversation.
+- [x] **Task 7 — Compose each page and degrade honestly.** Every page operation
+      calls replay inside a boundary that cannot throw. Locate, read, parse, or
+      unexpected failure returns that page's messages plus one `info` diagnostic
+      stating that earlier tool activity could not be restored. A safety-ceiling
+      stop emits the boundary marker at the affected page. Neither marker
+      appears twice or on a clean page. Tests cover missing/unreadable files,
+      unknown dialect, reader exception, ceiling, disabled replay, and clean
+      latest and older pages.
 
-- [ ] **Task 8 — Configuration.** `parseConfig` gains `codexHome`
+- [x] **Task 8 — Bounded-cost and browser integration guard.** A deterministic
+      10,000-item runtime test traverses all retained history in 100 bounded
+      pages. A 700-item Playwright history proves initial latest-only loading,
+      explicit older requests, a five-page/500-row DOM ceiling, latest-page
+      eviction, and Jump to latest. Reader tests prove continuation and the
+      safety-budget boundary; page and rollout cursors never expose native paths
+      or offsets.
+
+- [x] **Task 9 — Configuration.** `parseConfig` gains `codexHome`
       (`PI_WEB_CODEX_HOME`, optional) and `codexReplayTools`
       (`PI_WEB_CODEX_REPLAY_TOOLS`, `on` | `off`, default `on`), both parsed with
       the existing named-failure posture. Threaded to the adapter through the
       existing registry construction. Tests: default, explicit values, and an
       invalid value naming the variable.
 
-- [ ] **Task 9 — Documentation.** A "Replaying stored history" section in
-      `packages/codex-adapter/README.md` covering both dialects, the confinement
-      rule, the caps, and the exit criterion; the two variables in `README.md`
-      and `.env.example`; the reader recorded in
+- [x] **Task 10 — Documentation.** A "Replaying stored history" section in
+      `packages/codex-adapter/README.md` covering both dialects, confinement,
+      page-demand behavior, caps, and the exit criterion; the two variables in
+      `README.md` and `.env.example`; the reader and shared bounded page path in
       `docs/architecture/overview.md`. `python3 scripts/check_docs.py` stays
       green.
 
@@ -359,15 +401,16 @@ Per [Parse, Don't Validate](../../architecture/data-boundaries.md). Codex's
 session file is **external, private, unversioned, and written by a program we do
 not control**, which makes it the least trusted source in the repository.
 
-| Source and raw representation                                               | Entry/read point                     | Runtime parser                                                                                         | Trusted output and guarantees                                          | Failure behavior                                                                                   | Boundary tests                                                                  |
-| --------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `thread.path` from `thread/read` (a string chosen by the app-server)        | `CodexOpenSession.snapshot` (Task 1) | `rolloutPathSchema` plus `locateRollout` — realpath, suffix, regular file, root confinement            | An absolute path proven to lie inside the Codex sessions root          | Typed `unavailable` reason → AGB-12 degrade; never an exception, never an unconfined open          | Task 1: traversal, escaping symlink, wrong suffix, directory, relative, missing |
-| Rollout file bytes (up to 9 MB, single lines up to 5.6 MB observed)         | `reverseLines` (Task 2)              | Chunked reverse reader with a line-length cap, a safety byte ceiling, and a caller-supplied early stop | Complete UTF-8 lines, newest first, covering the requested turns       | Over-long line skipped and counted; reaching the ceiling ends the scan and marks the boundary      | Task 2: chunk boundaries, no trailing newline, oversized line, ceiling          |
-| One JSONL line (arbitrary JSON of unknown schema version)                   | `parseRolloutEntry` (Task 3)         | `rolloutEntrySchema` discriminated union; everything unrecognised is ignored                           | A narrow entry union with a known `type` and payload shape             | Unparseable or unknown line is counted and dropped; a window of only unknowns is "unknown dialect" | Task 3: malformed JSON, non-object payload, unknown types, both dialects        |
-| `custom_tool_call.input` — a JavaScript snippet embedding a JSON object     | `parseExecInput` (Task 4)            | Bounded brace-matched extraction, then `JSON.parse`, then a Zod shape                                  | `{ command, cwd }`, or an explicit "not understood" result             | Falls back to the raw snippet as the tool input; the entry is still shown                          | Task 4: malformed snippet, other tool names, nested braces, oversized input     |
-| `custom_tool_call_output.output` — an array of text parts, last a JSON blob | `parseExecOutput` (Task 4)           | Part schema, then a permissive blob shape                                                              | `{ output, exitCode }` with `exitCode` nullable                        | Missing or unparseable blob yields the joined text and a null exit code                            | Task 4: no blob, non-text part, huge output, absent output                      |
-| `item_completed.item` — structured items in the terminal client's dialect   | `mapStoredItem` (Task 4)             | PascalCase item schemas mirroring the live camelCase ones                                              | `TranscriptItem` values satisfying `TranscriptItemSchema` and its caps | Unknown item type becomes an `info` diagnostic naming the type, as the live path does              | Task 4: each known type, an unknown type, missing optional fields               |
-| `PI_WEB_CODEX_HOME`, `PI_WEB_CODEX_REPLAY_TOOLS`                            | `parseConfig` (Task 8)               | Non-empty string / `z.enum(["on","off"])`                                                              | A resolved root path and a boolean                                     | Startup throws naming the variable, matching existing config behaviour                             | Task 8 config tests                                                             |
+| Source and raw representation                                               | Entry/read point                               | Runtime parser                                                                                                        | Trusted output and guarantees                                                                                | Failure behavior                                                                                                             | Boundary tests                                                                                 |
+| --------------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `thread.path` from `thread/read` (a string chosen by the app-server)        | Codex latest/history page composition (Task 1) | `rolloutPathSchema` plus `locateRollout` — realpath, suffix, regular file, root confinement                           | An absolute path proven to lie inside the Codex sessions root                                                | Typed `unavailable` reason → AGB-12 degrade; never an exception, never an unconfined open                                    | Task 1: traversal, escaping symlink, wrong suffix, directory, relative, missing                |
+| Opaque Codex page cursor returned by the browser                            | Codex older-page method (Task 6)               | Shared syntax parse followed by exact lookup of a random 192-bit token in the open session's bounded continuation map | A continuation created by this runtime for this chat, with validated file/page state held only on the server | Unknown, cross-thread, expired, or stale values return a scoped stale-history result; no browser value becomes a seek offset | Task 6: valid continuation, unknown token, wrong chat/runtime, expiry, append, and replacement |
+| Rollout file bytes (up to 9 MB, single lines up to 5.6 MB observed)         | `reverseLines` (Task 2)                        | Chunked reverse reader with a line-length cap, a safety byte ceiling, and a caller-supplied early stop                | Complete UTF-8 lines, newest first, covering the requested turns                                             | Over-long line skipped and counted; reaching the ceiling ends the scan and marks the boundary                                | Task 2: chunk boundaries, no trailing newline, oversized line, ceiling                         |
+| One JSONL line (arbitrary JSON of unknown schema version)                   | `parseRolloutEntry` (Task 3)                   | `rolloutEntrySchema` discriminated union; everything unrecognised is ignored                                          | A narrow entry union with a known `type` and payload shape                                                   | Unparseable or unknown line is counted and dropped; a window of only unknowns is "unknown dialect"                           | Task 3: malformed JSON, non-object payload, unknown types, both dialects                       |
+| `custom_tool_call.input` — a JavaScript snippet embedding a JSON object     | `parseExecInput` (Task 4)                      | Bounded brace-matched extraction, then `JSON.parse`, then a Zod shape                                                 | `{ command, cwd }`, or an explicit "not understood" result                                                   | Falls back to the raw snippet as the tool input; the entry is still shown                                                    | Task 4: malformed snippet, other tool names, nested braces, oversized input                    |
+| `custom_tool_call_output.output` — an array of text parts, last a JSON blob | `parseExecOutput` (Task 4)                     | Part schema, then a permissive blob shape                                                                             | `{ output, exitCode }` with `exitCode` nullable                                                              | Missing or unparseable blob yields the joined text and a null exit code                                                      | Task 4: no blob, non-text part, huge output, absent output                                     |
+| `item_completed.item` — structured items in the terminal client's dialect   | `mapStoredItem` (Task 4)                       | PascalCase item schemas mirroring the live camelCase ones                                                             | `TranscriptItem` values satisfying `TranscriptItemSchema` and its caps                                       | Unknown item type becomes an `info` diagnostic naming the type, as the live path does                                        | Task 4: each known type, an unknown type, missing optional fields                              |
+| `PI_WEB_CODEX_HOME`, `PI_WEB_CODEX_REPLAY_TOOLS`                            | `parseConfig` (Task 9)                         | Non-empty string / `z.enum(["on","off"])`                                                                             | A resolved root path and a boolean                                                                           | Startup throws naming the variable, matching existing config behaviour                                                       | Task 9 config tests                                                                            |
 
 Two structural guarantees, stated because they are the point rather than a
 detail: conversation text is taken **only** from `thread/read`, so no stored
@@ -383,13 +426,13 @@ resemble it.
   than growing that file into a grab bag. The single change to `mapping.ts` is
   the shared shell-command normalisation from Task 4, and only if decision 2
   resolves that way.
-- `CodexOpenSession.snapshot` gains one composition step and one failure
-  boundary. Its existing `thread/read` parse, its `RuntimeFailure("malformed")`
-  path, and `transcriptFromThread` keep their current behaviour, which the
-  existing tests already pin.
+- `CodexOpenSession.snapshot` currently means complete history. Task 0 replaces
+  that runtime shape repository-wide; Codex implements the same latest/page
+  methods as Pi rather than retaining a compatibility path that can accidentally
+  send a full transcript.
 - `packages/codex-adapter/src/index.test.ts` drives a scripted app-server. Replay
-  is injected as a function so those tests keep passing untouched with a no-op
-  reader, and the replay suites drive fixtures directly.
+  is injected as a page-scoped function so tests can assert the exact turn range
+  and byte/item limits without real Codex or user history.
 
 ## Verification
 
@@ -397,8 +440,10 @@ Focused, per task, from the repository root (Vitest is configured once at the
 root; a `--filter … exec vitest` invocation finds no test files):
 
 ```sh
+pnpm exec vitest run packages/contracts packages/agent-runtime
 pnpm exec vitest run packages/codex-adapter
-pnpm exec vitest run apps/server/src/config.test.ts
+pnpm exec vitest run apps/server/src/config.test.ts apps/server/src/app.test.ts
+pnpm exec vitest run apps/web/src/features/workspace
 ```
 
 Final, before completion:
@@ -423,29 +468,32 @@ output in Progress:
    into a project and confirm its tool calls replay (AGB-10, acceptance 17), and
    that no injected instruction or catalogue text appears anywhere in it
    (acceptance 18).
-4. Open the longest real Codex chat available and confirm its **oldest** tool
-   calls replay, not only its recent ones; record the time to first paint and the
-   snapshot payload size against a short chat (AGB-11, acceptance 19 and 21).
+4. Open the longest real Codex chat available and confirm only one bounded
+   latest page crosses into the browser. Page repeatedly to its oldest history
+   and confirm each page restores its tools; record initial and per-page payload
+   size, read extent, and time to paint (AGB-11, AGB-13, acceptance 19 and
+   24–27).
 5. Reload the page **while a Codex run is streaming** and confirm the turn in
    flight shows each command exactly once — neither duplicated by replay nor
    missing until the run ends (decision 3).
 6. Point `PI_WEB_CODEX_HOME` at an empty directory, reopen a Codex chat, and
-   confirm messages still render, prompting still works, and exactly one line
-   says tool activity could not be restored (AGB-12, acceptance 22). Repeat with
-   `PI_WEB_CODEX_REPLAY_TOOLS=off` and confirm today's behaviour returns with no
-   marker at all.
+   confirm messages still render in bounded pages, prompting still works, and
+   exactly one line says tool activity could not be restored (AGB-12,
+   acceptance 22). Repeat with `PI_WEB_CODEX_REPLAY_TOOLS=off` and confirm
+   bounded message-only history returns with no marker.
 
 ## Compatibility, deployment, migration, recovery, and rollback
 
 - **Migration:** none. No schema, no persisted format, no stored transcript.
 - **Deployment:** no required configuration. Absent variables give the default
   Codex home and replay enabled.
-- **Rollback:** `PI_WEB_CODEX_REPLAY_TOOLS=off` restores today's behaviour
-  without a redeploy or a downgrade. Because nothing is persisted, turning replay
-  off and on again is lossless.
-- **Recovery:** replay is recomputed on every open and holds no state. A crash,
-  a restart, or a partially written file (a run in flight) affects only the
-  current open, and the in-progress turn is excluded from replay by decision 3.
+- **Rollback:** `PI_WEB_CODEX_REPLAY_TOOLS=off` restores bounded message-only
+  Codex history without a redeploy or downgrade. It does not restore the old
+  unbounded browser snapshot. Because nothing is persisted, turning replay off
+  and on again is lossless.
+- **Recovery:** replay is recomputed for each requested page and holds no durable
+  state. A crash, restart, or partially written file affects only that page, and
+  the in-progress turn is excluded from replay by decision 3.
 - **Interaction with a Codex upgrade:** an upgraded Codex writing a new format
   degrades to AGB-12 for chats written after the upgrade, while chats written
   before it keep replaying, because the reader decides dialect per file.
@@ -455,7 +503,7 @@ output in Progress:
 This reader depends on a private, unversioned format. That is accepted
 deliberately, with a stated exit: **if `codex app-server` ever serves tool items
 for past turns over the protocol, the reader is deleted rather than maintained**,
-and `thread/read` becomes the only source again. Task 6's composition seam is
+and `thread/read` becomes the only source again. Task 7's composition seam is
 designed so that is a single function swap. Until then, the format is re-verified
 whenever the pinned Codex version moves, and the manual checks above are the
 verification.
@@ -463,8 +511,22 @@ verification.
 ## Progress
 
 - 2026-08-23: Product specification version 2 and this plan version 1 approved
-  together by the user (longduotax). Implementation not yet started; the plan
-  becomes Active with the first production edit.
+  together by the user (longduotax). Implementation did not start.
+- 2026-08-23: Follow-up review required bounded progressive frontend loading to
+  ship with replay. Drafted Agent backends specification version 3 and this plan
+  version 2.
+- 2026-08-23: The user explicitly asked to implement the revised documents,
+  approving specification version 3 and plan version 2. Implementation moved to
+  Active.
+- 2026-08-23: Implemented snapshot v2 with fixed-limit latest/older pages,
+  authenticated Pi cursors, bounded runtime-local Codex continuation tokens, the
+  confined resumable rollout reader, both stored dialects, message-only degrade,
+  replay configuration, explicit browser paging, stale reset, a five-page
+  browser window, and durable documentation.
+- 2026-08-23: Automated verification covers strict contracts, a deterministic
+  10,000-item traversal, rollout confinement/parsing/composition, server routes,
+  browser paging, and a 700-item Playwright DOM/window test. Full repository
+  unit and six-spec Playwright suites are green.
 
 ## Discoveries and blockers
 
@@ -500,7 +562,9 @@ Discovered on 2026-08-23 while investigating, before drafting:
   reverses; the citation is not. Noted so a later reader does not go looking for
   a decision that says something else.
 
-No blockers.
+No implementation blocker is known. Automated implementation is complete; the
+real-provider manual checks remain before the proposal is promoted to Current
+and this plan is archived.
 
 ## Decision and revision log
 
@@ -528,10 +592,28 @@ No blockers.
   so the versions put forward for approval are the revised ones.
 
 - 2026-08-23: The user approved Agent backends specification version 2 and this
-  plan version 1 in one message. The approved text is the revised text — the four
-  drafting choices above were folded in before the approval was stamped, so no
-  post-approval change is outstanding. Status moves Draft → Ready.
+  plan version 1 in one message. The approved text was the revised text — the
+  four drafting choices above were folded in before approval. Status moved Draft
+  → Ready.
+- 2026-08-23: Follow-up review rejected shipping replay through the complete
+  browser snapshot. Created plan version 2 and Agent backends version 3 in
+  Draft. The simple path is one shared fixed-limit page contract, explicit page
+  controls, and one bounded browser window; Codex adds only page-scoped rollout
+  reconstruction. No second Codex history API, cache, automatic loader, or
+  virtualizer. This materially invalidated the prior product and technical
+  approvals for replay.
+- 2026-08-23: The user explicitly approved Agent backends specification version
+  3 and plan version 2 by asking to implement the drafted revision. Status moved
+  Draft → Active when production edits began.
+- 2026-08-23: Implementation simplified the planned signed Codex byte-offset
+  cursor to a random 192-bit runtime-local capability token backed by a bounded
+  server continuation map. This exposes neither path nor offset, fails closed
+  across runtime/thread boundaries, avoids decoding browser-controlled seek
+  positions, and preserves linear sequential reads. Pi's provider-neutral pager
+  remains stateless with authenticated append-stable cursors.
 
 ## Final outcomes
 
-Not completed.
+Production implementation and automated verification are complete. Real Codex
+manual checks 1–6 remain, so the plan stays Active and Agent backends version 3
+stays Approved rather than Current.
