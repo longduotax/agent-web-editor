@@ -32,8 +32,9 @@ and approved designs under `docs/design/`.
   running run per thread, v3 adds thread archives, v4 adds durable
   thread-creation operations and managed worktrees, v5 adds creation-session
   recovery, v6 adds worktree transfer tokens, and v7 adds recoverable initial-prompt dispatches.
-- `PI_WEB_NAMING_MODEL=provider/model` optionally selects the lightweight model
-  used to name new threads/worktrees; failure falls back to local naming.
+- `PI_WEB_NAMING_MODEL=provider/model` optionally overrides the configured
+  default Pi model used to name new threads/worktrees; failure falls back to
+  local naming.
 
 Tests use newly created temporary state/project directories and injected
 runtimes/PTYS. They do not use configured databases or native user sessions.
