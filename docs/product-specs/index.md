@@ -9,7 +9,7 @@ belong here.
 | ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | ------------------------------------------------------------------------------------------------- |
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)             |
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
-| [Thread management](thread-management.md)                         | 2               | 3                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
+| [Thread management](thread-management.md)                         | 3               | None             | None     | Current        | —                                                                                                 |
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
@@ -30,11 +30,15 @@ version 1 on 2026-08-16. Technical approvals for plan versions 1 and 2 are
 invalidated; plan version 3 is Draft with technical approval pending, and
 implementation remains paused until that approval is granted.
 
-Thread management version 2 is Current. It provides a Codex-style action menu,
-non-destructive inactive-thread archival, a direct hover/focus Archive action,
-and compact inline run-state signals. Version 3 is a Draft proposal that makes
-archival reversible: a per-project Archived list with a per-thread Restore, and
-independently staged archives so no undo window is cut short.
+Thread management version 3 is Current. It retains the Codex-style action menu,
+non-destructive inactive-thread archival, and compact run-state signals while
+giving sidebar and pane-header titles the same one-row inline rename editor:
+double-click enters editing, blur or Enter saves, and Escape or one Revert
+control restores the prior title without an accept/cancel action row. The user
+approved the bounded revision on 2026-08-29 under its conversational label 2.1;
+it was renumbered without a content change to satisfy integer lifecycle
+metadata. The separate archival-recovery text remains a deferred candidate
+outside Current version 3 and needs its own later version and approval.
 
 Tiling workspace surface is a Draft proposal for version 1, distilled from the
 multi-agent tiling workspace design as its first phase. It turns the project

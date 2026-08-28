@@ -26,6 +26,7 @@ const api = vi.hoisted(() => ({
   getWorkspace: vi.fn(),
   markViewed: vi.fn(),
   prompt: vi.fn(),
+  renameThread: vi.fn(),
   steer: vi.fn(),
   stop: vi.fn(),
   unarchiveThread: vi.fn(),
@@ -171,6 +172,38 @@ describe("ThreadPane", () => {
     expect(screen.getByLabelText("Conversation")).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "Message Pi" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renames from the pane header and updates its cached title immediately", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.renameThread.mockImplementation(
+      (_projectId: ProjectId, _threadId: ThreadId, title: string) =>
+        Promise.resolve({
+          thread: { ...snapshot.thread, title },
+        }),
+    );
+    const user = userEvent.setup();
+    renderPane();
+
+    await user.dblClick(
+      await screen.findByRole("heading", { name: "Example thread" }),
+    );
+    const field = screen.getByRole("textbox", {
+      name: "Rename Example thread",
+    });
+    await user.clear(field);
+    await user.type(field, "Header rename{Enter}");
+
+    await waitFor(() => {
+      expect(api.renameThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Header rename",
+      );
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Header rename" }),
     ).toBeInTheDocument();
   });
 

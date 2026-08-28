@@ -28,6 +28,10 @@ specifications, designs, code, or tests.
   added right-click and keyboard Rename/Archive actions, a direct hover/focus
   Archive icon, durable inactive-thread archival, and compact inline run
   signals.
+- [Inline thread title editing](2026-08-29-inline-thread-title-editing.md) —
+  replaced the sidebar's multi-row Save/Cancel form and the pane header's
+  static title with one shared one-row editor: double-click enters editing,
+  blur or Enter saves, and Escape or Revert restores the prior title.
 - [Thread workspace and worktree support](2026-08-16-thread-workspaces.md) —
   added the Codex-style new-chat flow, clean or explicitly transferred managed
   worktrees, prompt-derived names, durable creation recovery, and thread-scoped

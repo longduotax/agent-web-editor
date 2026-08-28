@@ -1,5 +1,6 @@
-import type { JSX, ReactNode } from "react";
+import { useState, type JSX, type ReactNode } from "react";
 
+import { ThreadRenameForm } from "../../components/ThreadRenameForm.js";
 import {
   PANE_STATUS_LABEL,
   PANE_STATUS_TOKEN,
@@ -24,6 +25,8 @@ export interface PaneHeaderProps {
   // button is named for what it does, matching the shortcut row that already
   // read "Split right into a new chat". A bare "Split" told a screen-reader
   // user neither the direction nor what would appear.
+  /** Omitted for a threadless New chat pane. */
+  onRename?: ((title: string) => Promise<void>) | undefined;
   onSplit(): void;
   onClose(): void;
 }
@@ -31,6 +34,7 @@ export interface PaneHeaderProps {
 export function PaneHeader(props: PaneHeaderProps): JSX.Element {
   const { status, elapsed, title, projectLabel, focused, detail, detailTitle } =
     props;
+  const [editingTitle, setEditingTitle] = useState(false);
 
   return (
     <header className={`pane-head ${focused ? "focused" : "dim"}`}>
@@ -51,9 +55,38 @@ export function PaneHeader(props: PaneHeaderProps): JSX.Element {
             user-or-model text that may be RTL, and it sits in a row of
             app-written LTR labels. `dir="auto"` keeps its base direction to
             itself. */}
-        <h1 className="title" dir="auto">
-          {title}
-        </h1>
+        {editingTitle && props.onRename !== undefined ? (
+          <ThreadRenameForm
+            key={title}
+            initialValue={title}
+            label={`Rename ${title}`}
+            onCommit={async (nextTitle) => {
+              await props.onRename?.(nextTitle);
+              setEditingTitle(false);
+            }}
+            onRevert={() => {
+              setEditingTitle(false);
+            }}
+          />
+        ) : (
+          <h1
+            className={`title ${props.onRename === undefined ? "" : "editable"}`}
+            dir="auto"
+            title={
+              props.onRename === undefined
+                ? title
+                : `${title} — Double-click to rename`
+            }
+            onDoubleClick={(event) => {
+              if (props.onRename === undefined) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setEditingTitle(true);
+            }}
+          >
+            {title}
+          </h1>
+        )}
         <span className="repo">{projectLabel}</span>
         <span className="acts">
           <button
