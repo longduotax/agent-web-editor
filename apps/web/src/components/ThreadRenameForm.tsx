@@ -1,115 +1,139 @@
-import { ErrorNotice } from "./ErrorNotice.js";
-import { useAutoGrow } from "./useAutoGrow.js";
+import { useId, useRef, useState } from "react";
 
 export interface ThreadRenameFormProps {
-  /** The title being edited. Owned by the caller. */
-  value: string;
+  /** The authoritative title to restore when this edit is abandoned. */
+  initialValue: string;
   /** Accessible name for the field, e.g. `Rename Nightly build`. */
   label: string;
-  pending: boolean;
-  error: unknown;
-  onChange(value: string): void;
-  onSubmit(): void;
-  onCancel(): void;
-  /** Clears `error`. Without one the notice below the field has no exit. */
-  onDismissError(): void;
+  /** Persist a normalized, changed title. The editor stays open on rejection. */
+  onCommit(value: string): Promise<void>;
+  /** Exit without writing and render the authoritative title again. */
+  onRevert(): void;
+}
+
+function renameErrorMessage(error: unknown): string {
+  const reason =
+    error instanceof Error ? error.message : "An unexpected error occurred.";
+  return `Could not rename this thread: ${reason}`;
 }
 
 /**
- * The in-place thread rename field.
+ * The shared one-row thread-title editor used by the sidebar and pane header.
  *
- * It was a single-line `<input>` sharing a 227px sidebar row with a Save and
- * a Cancel button: 95px of field for a 52-character title, about twelve
- * characters visible, editing blind through a window narrower than the two
- * buttons beside it. Renaming exists precisely because generated titles are
- * bad, so doing it blind defeats the point.
- *
- * The field is a WRAPPING textarea that grows with its content, and it now
- * owns the whole row -- the buttons moved to a second line under it. That is
- * what makes the whole title visible at once rather than merely making the
- * window wider: a 52-character title occupies two short lines here instead of
- * scrolling through a twelve-character slot. Titles are still single-line
- * values, so Enter submits (it never inserts a newline) and pasted line
- * breaks collapse to spaces.
- *
- * Save and Cancel stay. Enter and Escape already worked and are named in the
- * hint, but a pointer-only user needs a target to hit, and a field that
- * commits on blur would turn every stray click into a rename.
+ * There is deliberately no accept/cancel action row. Enter or focus leaving
+ * the editor commits; Escape or the one trailing Revert control abandons it.
+ * Revert remains a real pointer target, and keeping it inside the form makes a
+ * focus move from the input to that button an internal move rather than a
+ * blur-save. Preventing pointer-down preserves input focus until Revert's click
+ * runs on browsers that report no relatedTarget for that transition.
  */
 export function ThreadRenameForm(props: ThreadRenameFormProps) {
-  const { value, label, pending, error } = props;
-  const ref = useAutoGrow<HTMLTextAreaElement>(value);
-  // Save and Cancel are both `disabled={pending}`; Enter went straight to
-  // `onSubmit` and was not, so holding Enter -- or pressing it again because
-  // a slow rename looked like it had not registered -- fired a second rename
-  // of the same thread. The guard lives here so every route into the
-  // mutation passes it, rather than on the one control that had it.
-  const submit = () => {
-    if (!pending) props.onSubmit();
+  const [draft, setDraft] = useState(props.initialValue);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pendingRef = useRef(false);
+  const selectedInitialValue = useRef(false);
+  const errorId = useId();
+
+  const revert = () => {
+    if (pendingRef.current) return;
+    props.onRevert();
   };
+
+  const commit = async () => {
+    if (pendingRef.current) return;
+    const title = draft.trim();
+    if (title === "") {
+      setError("Title cannot be empty.");
+      return;
+    }
+    if (title === props.initialValue) {
+      props.onRevert();
+      return;
+    }
+
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await props.onCommit(title);
+    } catch (caught) {
+      setError(renameErrorMessage(caught));
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  };
+
   return (
     <form
       className="thread-rename"
       onSubmit={(event) => {
         event.preventDefault();
-        submit();
+        void commit();
+      }}
+      onBlur={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        void commit();
       }}
     >
-      <textarea
-        ref={ref}
-        aria-label={label}
-        // The field holds the same text the sidebar row does, so it takes its
-        // base direction the same way: from the title, not from the app.
+      <input
+        type="text"
+        aria-label={props.label}
+        aria-invalid={error === null ? undefined : "true"}
+        aria-describedby={error === null ? undefined : errorId}
         dir="auto"
         autoFocus
-        rows={1}
         maxLength={200}
         spellCheck={false}
-        value={value}
+        readOnly={pending}
+        value={draft}
         onFocus={(event) => {
+          if (selectedInitialValue.current) return;
+          selectedInitialValue.current = true;
           event.currentTarget.select();
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
+            event.preventDefault();
             event.stopPropagation();
-            props.onCancel();
+            revert();
             return;
           }
           if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-          // Including Shift+Enter: a thread title has no second line, so
-          // there is nothing for a newline to do but break the layout.
           event.preventDefault();
-          submit();
+          void commit();
         }}
         onChange={(event) => {
-          props.onChange(event.target.value.replace(/\s*[\r\n]+\s*/gu, " "));
+          setDraft(event.target.value);
+          if (error !== null) setError(null);
         }}
       />
-      <div className="thread-rename-actions">
-        <span className="thread-rename-hint" aria-hidden="true">
-          Enter saves · Esc cancels
-        </span>
-        <button type="submit" disabled={pending}>
-          Save
-        </button>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => {
-            props.onCancel();
-          }}
+      <button
+        type="button"
+        className="thread-rename-revert"
+        aria-label={pending ? "Saving title" : "Revert title"}
+        title={pending ? "Saving title" : "Revert title"}
+        disabled={pending}
+        onPointerDown={(event) => {
+          // Blur fires before click. Do not let it start a save that wins the
+          // race against the explicit Revert instruction.
+          event.preventDefault();
+        }}
+        onClick={revert}
+      >
+        <span
+          className={pending ? "thread-rename-spinner" : undefined}
+          aria-hidden="true"
         >
-          Cancel
-        </button>
-      </div>
-      {error !== null && error !== undefined && (
-        <ErrorNotice
-          error={error}
-          context="Could not rename this thread"
-          onDismiss={() => {
-            props.onDismissError();
-          }}
-        />
+          {pending ? "" : "↶"}
+        </span>
+      </button>
+      {error !== null && (
+        <span className="thread-rename-error" id={errorId} role="alert">
+          {error}
+        </span>
       )}
     </form>
   );
