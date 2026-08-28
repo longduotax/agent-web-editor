@@ -218,22 +218,30 @@ function renderWorkspace(
 }
 
 describe("WorkspaceView", () => {
-  it("dispatches a split command on the split-right keychord and prevents the browser default", async () => {
-    stubMacPlatform();
-    renderWorkspace(`/projects/${projectId}`);
-    await screen.findByLabelText("New chat");
+  it.each([
+    ["right", "+", "row"],
+    ["down", "_", "column"],
+  ])(
+    "dispatches the split-%s keychord while the composer is focused and prevents the browser default",
+    async (_direction, pressedKey, axis) => {
+      stubMacPlatform();
+      renderWorkspace(`/projects/${projectId}`);
+      const composer = await screen.findByLabelText("First message");
+      composer.focus();
 
-    const before = fireEvent.keyDown(window, {
-      key: "+",
-      metaKey: true,
-      shiftKey: true,
-    });
-    // fireEvent.keyDown returns false when preventDefault() was called.
-    expect(before).toBe(false);
+      const before = fireEvent.keyDown(composer, {
+        key: pressedKey,
+        metaKey: true,
+        shiftKey: true,
+      });
+      // fireEvent.keyDown returns false when preventDefault() was called.
+      expect(before).toBe(false);
 
-    await screen.findAllByLabelText("New chat");
-    expect(screen.getAllByLabelText("New chat")).toHaveLength(2);
-  });
+      await screen.findAllByLabelText("New chat");
+      expect(screen.getAllByLabelText("New chat")).toHaveLength(2);
+      expect(document.querySelector(`.tiling-split-${axis}`)).not.toBeNull();
+    },
+  );
 
   it("does nothing on a non-matching keydown", async () => {
     stubMacPlatform();
@@ -585,18 +593,17 @@ describe("WorkspaceView", () => {
     expect(region).toHaveAttribute("aria-current", "true");
   });
 
-  it("suppresses workspace shortcuts while a text-editing target is focused, so native text-editing shortcuts (e.g. select-to-start/end, delete-to-start) reach the input untouched", async () => {
+  it("keeps text-editing chords suppressed while a composer is focused", async () => {
     stubMacPlatform();
     renderWorkspace(`/projects/${projectId}`);
     const composer = await screen.findByLabelText("First message");
     composer.focus();
 
-    // Cmd+Shift+ArrowDown used to be the "collapse" chord; on a mac it also
-    // means select-to-end-of-field inside a text input. With a
-    // text-editing target focused, the workspace shortcut must be
-    // suppressed entirely (no preventDefault, no dispatch).
+    // Unlike split, Cmd+Shift+Backspace is a native delete-to-start command
+    // in a text field as well as the workspace's close-pane chord. Typing
+    // keeps ownership of that chord: no preventDefault and no pane close.
     const result = fireEvent.keyDown(composer, {
-      key: "ArrowDown",
+      key: "Backspace",
       metaKey: true,
       shiftKey: true,
     });
