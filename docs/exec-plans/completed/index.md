@@ -36,3 +36,10 @@ specifications, designs, code, or tests.
   added a manually invoked project-local Pi skill and checked-in start/close
   commands for random-port, disposable-SQLite UI review environments that
   install missing dependencies and hard-refuse the main worktree.
+- [Default-model thread and worktree naming](2026-08-29-default-model-thread-naming.md) —
+  changed automatic first-prompt naming from a distinct lower-cost
+  same-provider model to the selected project's configured default Pi model,
+  while preserving the explicit override and deterministic fallback.
+- [Accept provider metadata in naming completions](2026-08-29-naming-completion-metadata.md) —
+  fixed prompt-prefix fallback when valid default-model title blocks include
+  additive provider metadata by projecting only the required text fields.
