@@ -36,12 +36,10 @@ export function releaseFocusToPane(from: HTMLElement): HTMLElement | null {
 /**
  * Land focus on a pane, given its tile element.
  *
- * The counterpart to `releaseFocusToPane`, for the other direction: a command
- * moved pane focus (split / close / a direction key) and DOM focus has to
- * follow it. It must land on the PANE and not on its composer — every
- * workspace chord is suppressed while a text entry has focus, so a split that
- * dropped you into the new pane's textarea disarmed the whole keyboard, and
- * the split chord could not even be pressed twice (G15).
+ * The counterpart to `releaseFocusToPane`, for the other direction: a close
+ * or direction command moved pane focus and DOM focus has to follow it. Split
+ * commands instead use `landFocusOnComposer`, because their new-chat pane is
+ * expected to be ready for immediate typing.
  *
  * Scrolling is done as a separate `scrollIntoView`, not by letting `focus()`
  * do it: the surface scrolls horizontally once there are more panes than fit
@@ -56,11 +54,27 @@ export function landFocusOnPane(tile: Element | null): HTMLElement | null {
       : null;
   if (pane === null) return null;
   pane.focus({ preventScroll: true });
+  scrollPaneIntoView(pane);
+  return pane;
+}
+
+/** Focus the message field in a newly split pane so it is ready for typing. */
+export function landFocusOnComposer(
+  tile: Element | null,
+): HTMLTextAreaElement | null {
+  if (!(tile instanceof HTMLElement)) return null;
+  const composer = tile.querySelector<HTMLTextAreaElement>("textarea");
+  if (composer === null) return null;
+  composer.focus({ preventScroll: true });
+  scrollPaneIntoView(composer.closest<HTMLElement>(".pane") ?? tile);
+  return composer;
+}
+
+function scrollPaneIntoView(pane: HTMLElement): void {
   // Guarded because jsdom does not implement it and the surface must not
   // depend on a scroll to be correct.
   if (typeof pane.scrollIntoView === "function")
     pane.scrollIntoView({ block: "nearest", inline: "nearest" });
-  return pane;
 }
 
 /**

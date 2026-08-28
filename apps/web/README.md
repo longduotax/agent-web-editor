@@ -27,11 +27,9 @@ selected-thread center.
 - **Panes**: each pane is either a threaded pane (transcript, composer, run
   status) or a threadless "New chat" pane. Panes can be split, resized with a
   pointer or keyboard, focused, and closed. The only pane actions are
-  **Split** and **Close**. Close is immediate — the pane disappears right
-  away and the thread's archive is briefly deferred behind an "Archived —
-  Undo" toast, so clicking Undo restores the pane (with its splits intact)
-  before anything is actually archived; letting the toast time out commits
-  the archive. A new-chat pane closes with no toast and archives nothing.
+  **Split** and **Close**. Split focuses the new pane's first-message field so
+  typing can begin immediately. Close is an immediate, pure layout operation:
+  the pane disappears, while its thread remains available in the sidebar.
   Clicking anywhere in a non-focused pane focuses it, and the focused pane
   shows a visible focus ring.
 - **Splitting and pane keybindings** (Cmd on macOS, Alt elsewhere for the

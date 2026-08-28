@@ -225,6 +225,24 @@ describe("TilingSurface", () => {
     expect(divider).toHaveAttribute("aria-valuenow");
   });
 
+  it("focuses the new pane's message field after the user splits a pane", async () => {
+    renderSurface();
+    const user = userEvent.setup();
+
+    await user.click(
+      screen.getByRole("button", { name: "Split right into a new chat" }),
+    );
+
+    const focusedPane = screen
+      .getAllByRole("region", { name: "New chat" })
+      .find((pane) => pane.getAttribute("aria-current") === "true");
+    expect(focusedPane).toBeDefined();
+    if (focusedPane === undefined) return;
+    expect(
+      within(focusedPane).getByRole("textbox", { name: "First message" }),
+    ).toHaveFocus();
+  });
+
   it("adjusts split sizes on the controller when the divider is resized with the keyboard", async () => {
     const { getController } = renderSurface();
     await seedTwoPanes(getController);

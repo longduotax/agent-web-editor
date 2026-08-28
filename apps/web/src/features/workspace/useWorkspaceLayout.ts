@@ -20,6 +20,11 @@ import { pruneNewChatDrafts } from "./drafts.js";
 import { readLayout, writeLayout } from "./layoutStorage.js";
 import type { WorkspaceCommand } from "./keybindings.js";
 
+export interface PaneFocusIntent {
+  sequence: number;
+  target: "pane" | "composer";
+}
+
 export interface WorkspaceLayoutController {
   layout: WorkspaceLayout;
   dispatch(command: WorkspaceCommand): void;
@@ -33,17 +38,13 @@ export interface WorkspaceLayoutController {
   // destructures it to use as an effect dependency, and a method signature
   // would make that an unbound-method lint error at every call site.
   registerPaneElement: (paneId: PaneId, element: Element | null) => void;
-  // Bumped whenever a COMMAND moved pane focus — a split, a close, or a
-  // directional move. It is the signal for "put DOM focus on the newly
-  // focused pane", which is what keeps the keyboard armed for the next chord
-  // (a composer swallows every workspace binding: see isTextEntryTarget).
-  //
-  // A counter rather than a pane id, deliberately: focus has to move again on
-  // a second command that lands on the SAME pane, and it must NOT move when a
-  // pane becomes focused for any other reason — clicking into its composer,
-  // most of all. `0` means nothing has been commanded yet, which is how the
-  // entry pane's composer keeps its autofocus on a cold load.
-  paneFocusIntent: number;
+  // Updated whenever a command moves pane focus. Splitting targets the new
+  // pane's composer so it is immediately ready for input; close and direction
+  // commands target the pane shell so workspace shortcuts remain available.
+  // The sequence distinguishes repeated commands that land on the same pane.
+  // Sequence 0 means nothing has been commanded yet, allowing cold-load
+  // autofocus to behave normally.
+  paneFocusIntent: PaneFocusIntent;
   assignThreadToPane(paneId: PaneId, threadId: ThreadId): void;
   newPane(): void;
   focus(paneId: PaneId): void;
@@ -137,7 +138,10 @@ export function useWorkspaceLayout(
   }, [projectId, layout]);
 
   const paneElements = useRef(new Map<PaneId, Element>());
-  const [paneFocusIntent, setPaneFocusIntent] = useState(0);
+  const [paneFocusIntent, setPaneFocusIntent] = useState<PaneFocusIntent>({
+    sequence: 0,
+    target: "pane",
+  });
 
   const registerPaneElement = useCallback(
     (paneId: PaneId, element: Element | null) => {
@@ -166,7 +170,10 @@ export function useWorkspaceLayout(
     // at the edge of the layout is a no-op now, and a no-op must not yank DOM
     // focus off whatever the user was on.
     if (next.focusedPaneId !== current.focusedPaneId)
-      setPaneFocusIntent((intent) => intent + 1);
+      setPaneFocusIntent((intent) => ({
+        sequence: intent.sequence + 1,
+        target: command.type === "split" ? "composer" : "pane",
+      }));
   }, []);
 
   const assignThreadToPane = useCallback(

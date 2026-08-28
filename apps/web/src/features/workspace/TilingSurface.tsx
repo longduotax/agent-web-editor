@@ -10,7 +10,11 @@ import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
 import { tiledPaneIds } from "./layoutTree.js";
-import { isComposerEntryKey, landFocusOnPane } from "./paneFocus.js";
+import {
+  isComposerEntryKey,
+  landFocusOnComposer,
+  landFocusOnPane,
+} from "./paneFocus.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 import { ThreadPane } from "./ThreadPane.js";
 import { NewChatPane } from "./NewChatPane.js";
@@ -165,24 +169,20 @@ function PaneRegion({
     };
   }, [paneId, registerPaneElement]);
 
-  // Parks focus on the pane a command just moved to, instead of letting a
-  // freshly split new-chat pane autofocus its composer.
-  //
-  // The composer is what made G15 bite: every workspace chord is suppressed
-  // while a text entry has focus (isTextEntryTarget), so a split disarmed the
-  // keyboard it was pressed from — ⇧⌘= could not be pressed twice, and no
-  // arrow key worked after a split until you pressed Escape.
-  //
-  // This is a plain effect and not a fight with `autoFocus`: React applies
-  // autoFocus while committing the newly mounted composer, and this runs
-  // after that commit. Verified in the running app rather than assumed — a
-  // new-chat pane's worktree preflight resolves seconds after the split, and
-  // focus stays on the pane across it.
+  // Follow command-driven pane focus in the DOM. A split lands directly in
+  // the new pane's composer so the user can type immediately. Direction and
+  // close commands still park on the pane shell, keeping workspace shortcuts
+  // armed until the user starts typing. This runs after React's `autoFocus`
+  // handling, making the target explicit rather than depending on mount order.
   useEffect(() => {
-    // 0 is "no command has moved focus yet", i.e. a cold load: leave the
-    // entry pane's composer autofocused, which is right for the one pane the
-    // user opened the surface to type in.
-    if (paneFocusIntent === 0 || !focusedRef.current) return;
+    // Sequence 0 is a cold load: leave the entry composer's normal autofocus
+    // alone.
+    if (paneFocusIntent.sequence === 0 || !focusedRef.current) return;
+    if (
+      paneFocusIntent.target === "composer" &&
+      landFocusOnComposer(tileRef.current) !== null
+    )
+      return;
     landFocusOnPane(tileRef.current);
   }, [paneFocusIntent]);
 
