@@ -302,9 +302,10 @@ export function normalizeKey(key: string): string {
 }
 
 /**
- * True while the event's target is somewhere the user is typing. Both
- * surfaces' handlers bail out on this rather than hijacking a native
- * text-editing shortcut (e.g. Cmd+Shift+ArrowUp select-to-start).
+ * True while the event's target is somewhere the user is typing. Handlers use
+ * this to avoid hijacking native text-editing shortcuts (e.g. Cmd+Shift+
+ * Backspace delete-to-start). The chat surface deliberately still allows its
+ * punctuation-based split commands, which do not edit or navigate text.
  *
  * Structural rather than `instanceof HTMLElement` so this module stays
  * usable — and testable — without a DOM realm.

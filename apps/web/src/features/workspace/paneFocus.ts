@@ -1,12 +1,11 @@
 /**
  * Escape out of a composer.
  *
- * Every workspace chord is suppressed while the event target is a text entry
- * (see `isTextEntryTarget`), which is correct — nothing should hijack
- * select-to-start while you are typing. But the composer had no way OUT:
- * Escape left both the value and `document.activeElement` untouched, so Tab
- * was the only exit and every pane shortcut the Settings page advertises was
- * unreachable the moment you started typing.
+ * Workspace chords that would hijack text editing are suppressed while the
+ * event target is a text entry (see `isTextEntryTarget`). Split's punctuation
+ * chords remain available, but focus movement and close still need a way OUT:
+ * Escape used to leave both the value and `document.activeElement` untouched,
+ * so Tab was the only exit for those commands.
  *
  * Focus goes to the pane shell rather than to `document.body`, for two
  * reasons: `body` is not a landmark, so a screen reader user is dropped
