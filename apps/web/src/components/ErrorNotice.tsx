@@ -23,6 +23,7 @@ function loopbackUrl(): string {
 export function ErrorNotice({
   error,
   onRetry,
+  onDismiss,
   context,
 }: {
   error: unknown;
@@ -30,6 +31,12 @@ export function ErrorNotice({
   // `refetch`, or a mutation's `mutate`). Without it the notice stays a
   // plain message, so non-retryable notices are unchanged.
   onRetry?: (() => void) | undefined;
+  // Supplied by callers whose failure is not tied to a retryable mutation the
+  // user still wants -- an abandoned folder browse, say. Without it a red
+  // `role="alert"` block sat permanently in the primary navigation for an
+  // action the user had already given up on, clearable only by a reload. A
+  // notice that offers Retry needs no dismiss: acting on it clears it.
+  onDismiss?: (() => void) | undefined;
   // What the app was doing, e.g. `Could not archive "Nightly build"`. Kept
   // INSIDE the alert so assistive technology announces the subject along with
   // the reason: several of these can be on screen at once (one per failed
@@ -37,6 +44,17 @@ export function ErrorNotice({
   context?: string | undefined;
 }) {
   const prefix = context === undefined ? "" : `${context}: `;
+  const dismiss =
+    onDismiss === undefined ? null : (
+      <button
+        type="button"
+        className="error-notice-dismiss"
+        aria-label="Dismiss this message"
+        onClick={onDismiss}
+      >
+        <span aria-hidden="true">✕</span>
+      </button>
+    );
   if (isOriginRefusal(error)) {
     const target = loopbackUrl();
     return (
@@ -48,6 +66,7 @@ export function ErrorNotice({
           </a>
           {" and try again."}
         </span>
+        {dismiss}
       </div>
     );
   }
@@ -61,6 +80,7 @@ export function ErrorNotice({
           Retry
         </button>
       )}
+      {dismiss}
     </div>
   );
 }

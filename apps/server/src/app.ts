@@ -9,6 +9,7 @@ import type { RawData } from "ws";
 import {
   ArchiveThreadRequestSchema,
   UnarchiveThreadRequestSchema,
+  AddProjectRequestSchema,
   BrowseProjectRequestSchema,
   CommandRequestSchema,
   ImportThreadRequestSchema,
@@ -21,10 +22,15 @@ import {
   RunIdSchema,
   StartThreadRequestSchema,
   SteerRequestSchema,
+  TERMINAL_MAX_PER_SCOPE,
   TerminalClientFrameSchema,
+  TerminalServerFrameSchema,
+  TerminalsResponseSchema,
   ThreadIdSchema,
   TranscriptPageQuerySchema,
   UpdateProjectRequestSchema,
+  type TerminalErrorCode,
+  type TerminalServerFrame,
 } from "@pi-web/contracts";
 import { CodexAgentRuntime } from "@pi-web/codex-adapter";
 import { PiAgentRuntime } from "@pi-web/pi-adapter";
@@ -47,7 +53,11 @@ import { WorkspaceService } from "./domain/workspace.js";
 import { previewProjectFile, listProjectFiles } from "./inspector/files.js";
 import { getGitDiff, getGitStatus } from "./inspector/git.js";
 import { LiveBroker } from "./live/broker.js";
-import { ProjectTerminalManager, type PtyFactory } from "./terminal/manager.js";
+import {
+  ProjectTerminalManager,
+  TerminalRejection,
+  type PtyFactory,
+} from "./terminal/manager.js";
 
 const projectParamsSchema = z.object({ projectId: ProjectIdSchema });
 const threadParamsSchema = z.object({
@@ -62,6 +72,18 @@ const runParamsSchema = z.object({
 const fileQuerySchema = z.object({
   path: z.string().default(""),
   search: z.string().max(500).default(""),
+  // `"full"` by default so the parameter is additive: a browser built before
+  // the file tree, or one that drops the parameter, still receives the whole
+  // recursive listing it expects (WSP-05 as revised by specification
+  // version 2).
+  depth: z.enum(["1", "full"]).default("full"),
+  // A query string carries no booleans, so the flag is an exact pair of
+  // spellings rather than a truthiness test: `?showIgnored=0` must not
+  // reveal a dependency tree because "0" is a non-empty string.
+  showIgnored: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 });
 
 export interface BuildServerOptions {
@@ -83,6 +105,16 @@ export interface ServerContext {
   config: ServerConfig;
   store: MetadataStore;
   workspace: WorkspaceService;
+  /**
+   * The live terminals of this server.
+   *
+   * Exposed because a terminal deliberately outlives the browser that opened
+   * it (WSP-07), which means an end-to-end suite driving one server through
+   * many pages accumulates shells against a shared execution scope until the
+   * per-scope cap refuses the next one. A suite needs a way to put the
+   * server back as it found it; nothing here is reachable over HTTP.
+   */
+  terminals: ProjectTerminalManager;
   launchUrl: string;
 }
 
@@ -153,7 +185,33 @@ function safeError(error: unknown): {
       project_not_directory: {
         status: 400,
         code: "project_not_directory",
-        message: "The selected item is not a directory.",
+        message: "That path is a file, not a directory.",
+      },
+      // A typo, and by far the likeliest failure now that a path can be
+      // typed. It has to say THAT, not "unavailable or inaccessible", which
+      // sends the reader hunting a permissions problem they do not have.
+      project_path_not_found: {
+        status: 404,
+        code: "project_path_not_found",
+        message: "There is nothing at that path.",
+      },
+      // Distinct from not-found on purpose: the directory is there and the
+      // fix is a permissions one, not a spelling one.
+      project_not_readable: {
+        status: 403,
+        code: "project_not_readable",
+        message: "That directory exists, but its contents cannot be read.",
+      },
+      project_path_relative: {
+        status: 400,
+        code: "project_path_relative",
+        message:
+          "Enter the full path to the directory, starting from the root.",
+      },
+      project_path_invalid: {
+        status: 400,
+        code: "project_path_invalid",
+        message: "That is not a usable path.",
       },
       project_unavailable: {
         status: 400,
@@ -180,6 +238,17 @@ function safeError(error: unknown): {
         code: "run_not_active",
         message: "There is no matching active run.",
       },
+      // 504 rather than 500: the stop was dispatched and it is the agent
+      // downstream that did not answer. The message says what is true of the
+      // run afterwards, because the run row still says `running` and the
+      // reader is looking at it -- "stopped" would be a claim nothing here
+      // can support.
+      stop_timed_out: {
+        status: 504,
+        code: "stop_timed_out",
+        message:
+          "Stop was sent, but the agent did not come to rest. The run is still active — try again.",
+      },
       prompt_rejected: {
         status: 409,
         code: "prompt_rejected",
@@ -189,6 +258,40 @@ function safeError(error: unknown): {
         status: 400,
         code: "invalid_path",
         message: "The requested path is not permitted.",
+      },
+      // `.git` is excluded from every file route in both modes, whether it
+      // is walked into or asked for by name (H2).
+      path_excluded: {
+        status: 403,
+        code: "path_excluded",
+        message: "The requested path is not available.",
+      },
+      path_ignored: {
+        status: 403,
+        code: "path_ignored",
+        message:
+          "The requested path is hidden by this workspace's ignore rules.",
+      },
+      // A directory that was expanded and persisted, and then deleted (H6).
+      path_not_found: {
+        status: 404,
+        code: "path_not_found",
+        message: "The requested path was not found.",
+      },
+      path_not_directory: {
+        status: 400,
+        code: "path_not_directory",
+        message: "The requested path is not a directory.",
+      },
+      path_unreadable: {
+        status: 403,
+        code: "path_unreadable",
+        message: "The requested path could not be read.",
+      },
+      file_not_regular: {
+        status: 400,
+        code: "file_not_regular",
+        message: "The requested path is not a regular file.",
       },
       git_unavailable: {
         status: 409,
@@ -269,6 +372,34 @@ function socketText(raw: RawData): string {
   return Buffer.from(raw).toString("utf8");
 }
 
+/**
+ * What the browser is told about a terminal command that was refused.
+ *
+ * The message is the server's own prose in every case: nothing from the
+ * error, which could carry a path or a command line. What the code adds is
+ * WHICH refusal it was, for the three the tab has to render differently.
+ */
+function terminalRefusal(error: unknown): TerminalServerFrame {
+  if (!(error instanceof TerminalRejection))
+    return TerminalServerFrameSchema.parse({
+      version: 1,
+      type: "error",
+      message: "Terminal command was rejected.",
+    });
+  const messages: Record<TerminalErrorCode, string> = {
+    terminal_limit_reached: `Up to ${String(TERMINAL_MAX_PER_SCOPE)} terminals can run in one worktree. Close one to open another.`,
+    terminal_gone: "That terminal is no longer running.",
+    terminal_cwd_invalid:
+      "That directory is not available in this worktree, so no terminal was started there.",
+  };
+  return TerminalServerFrameSchema.parse({
+    version: 1,
+    type: "error",
+    message: messages[error.code],
+    code: error.code,
+  });
+}
+
 function requireSocketPolicy(
   request: FastifyRequest,
   context: ServerContext,
@@ -316,7 +447,13 @@ export async function buildServer(
     options.directoryPicker ?? createNativeDirectoryPicker();
   const launchPort = config.production ? config.port : config.devPort;
   const launchUrl = `http://127.0.0.1:${String(launchPort)}/`;
-  const context: ServerContext = { config, store, workspace, launchUrl };
+  const context: ServerContext = {
+    config,
+    store,
+    workspace,
+    terminals,
+    launchUrl,
+  };
   const server: WorkspaceServer = Object.assign(
     Fastify({ logger: options.logger ?? true, bodyLimit: config.bodyLimit }),
     { workspaceContext: context },
@@ -356,6 +493,24 @@ export async function buildServer(
       body.idempotencyKey,
       async () => await directoryPicker.chooseDirectory(),
     );
+  });
+  // The second way in. `/browse` calls a native OS folder chooser, which is
+  // the better route when it works and the only route there was: the dialog
+  // opens as a separate window that can land behind the browser or on another
+  // desktop, and when it failed the app said so and offered nothing else.
+  // Adding a project is the first thing anyone must do and it had no
+  // alternative.
+  //
+  // Nothing is relaxed here. The path goes through the same
+  // `canonicalProject` gate the picker's result does, and this server is
+  // loopback-only running with the user's own permissions -- a path typed
+  // into this field reaches nothing the picker could not have chosen. It
+  // shells out to nothing.
+  server.post("/api/projects", async (request) => {
+    const body = AddProjectRequestSchema.parse(request.body);
+    return {
+      project: await workspace.addProjectByPath(body.path, body.idempotencyKey),
+    };
   });
   server.patch("/api/projects/:projectId", async (request) => {
     const params = projectParamsSchema.parse(request.params);
@@ -542,16 +697,16 @@ export async function buildServer(
         params.projectId,
         params.threadId,
       );
-      if (query.path !== "") RelativePathSchema.parse(query.path);
-      const target =
-        query.path === ""
-          ? root
-          : (
-              await (
-                await import("./inspector/files.js")
-              ).resolveContained(root, query.path, true)
-            ).target;
-      return await listProjectFiles(target, query.search);
+      // Containment is `listProjectFiles`' own first step, through the same
+      // `resolveContained` this route used to call: the listed directory is
+      // proven to be the execution root or under it before a single entry is
+      // read, and entry paths come back relative to that root.
+      return await listProjectFiles(root, {
+        search: query.search,
+        depth: query.depth,
+        showIgnored: query.showIgnored,
+        path: query.path,
+      });
     },
   );
   server.get(
@@ -616,6 +771,24 @@ export async function buildServer(
     socket.on("close", () => unsubscribe?.());
   });
 
+  // WSP-07: a reloaded browser reclaims its own shells by identity rather
+  // than orphaning them, which it can only do if it can ask what is live.
+  // The answer is scoped to the requesting thread's execution scope, and it
+  // is a read, so it needs only the exact Host every other read needs.
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/terminals",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const context = await workspace.threadExecutionContext(
+        params.projectId,
+        params.threadId,
+      );
+      return TerminalsResponseSchema.parse({
+        terminals: terminals.list(context.projectId, context.scopeId),
+      });
+    },
+  );
+
   server.get("/api/terminal", { websocket: true }, (socket, request) => {
     try {
       requireSocketPolicy(request, server.workspaceContext);
@@ -637,18 +810,23 @@ export async function buildServer(
           );
           const root = context.executionRoot;
           const scopeId = context.scopeId;
-          if (frame.type === "attach") {
+          if (frame.type === "attach" || frame.type === "create") {
             detach?.();
-            detach = await terminals.attach(
-              frame.projectId,
-              root,
-              {
+            detach = await terminals.attach({
+              projectId: frame.projectId,
+              scopeId,
+              executionRoot: root,
+              attachment: {
                 send: (message) => {
                   socket.send(JSON.stringify(message));
                 },
               },
-              scopeId,
-            );
+              // `create` never names a terminal, and `attach` names one only
+              // when it is reclaiming that exact shell (WSP-07).
+              terminalId:
+                frame.type === "attach" ? frame.terminalId : undefined,
+              cwd: frame.cwd,
+            });
           } else if (frame.type === "input")
             terminals.input(
               frame.projectId,
@@ -665,16 +843,19 @@ export async function buildServer(
               scopeId,
             );
           else if (frame.type === "restart")
-            await terminals.restart(frame.projectId, frame.terminalId, scopeId);
+            await terminals.restart(
+              frame.projectId,
+              frame.terminalId,
+              scopeId,
+              frame.cwd,
+            );
           else terminals.terminate(frame.projectId, frame.terminalId, scopeId);
-        } catch {
-          socket.send(
-            JSON.stringify({
-              version: 1,
-              type: "error",
-              message: "Terminal command was rejected.",
-            }),
-          );
+        } catch (error) {
+          // A typed rejection reaches the tab as its own state — the cap
+          // message, the restart action, the refused directory — rather than
+          // as one string it would have to match on prose (D-2). Everything
+          // else stays the single opaque refusal it has always been.
+          socket.send(JSON.stringify(terminalRefusal(error)));
         }
       })();
     });

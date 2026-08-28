@@ -13,6 +13,11 @@ import type {
 import { buildServer, type WorkspaceServer } from "../apps/server/src/app.js";
 import { parseConfig } from "../apps/server/src/config.js";
 
+// The complete notice, as the pane puts it into the accessibility tree. The
+// visible forms are shortened by pane width; this one never is.
+const TRUST_NOTICE =
+  "Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.";
+
 // Same stub runtime shape as e2e/workspace.spec.ts: prompt() never settles,
 // which mirrors an agent run that stays "running" for the lifetime of the
 // test (there is no live external agent in this harness), and snapshot()
@@ -22,13 +27,13 @@ import { parseConfig } from "../apps/server/src/config.js";
 // which the server sets synchronously to "running" on accept — see
 // apps/server/src/domain/workspace.ts's prompt()/startThread()) but it can
 // never produce actual transcript content: no user pill, no assistant
-// flowing text, and no "Worked for" tool-activity header ever render here.
+// flowing text, and no "N steps ·" tool-activity header ever render here.
 // Those Codex-reading-model DOM shapes are covered at the unit level instead
 // (apps/web/src/features/workspace/ThreadPane.test.tsx and
 // apps/web/src/components/Activity.test.tsx), which control the transcript
 // items directly. This spec covers what the stub CAN produce end-to-end:
 // pane run-status, split (button + chord), theme persistence, the single
-// workspace inspector, the non-destructive close and the sidebar's
+// workspace panel, the non-destructive close and the sidebar's
 // archive/undo flow, and the absence of any dock chrome or horizontal page
 // scroll.
 class BrowserSession implements OpenRuntimeSession {
@@ -200,7 +205,7 @@ async function startThreadInNewChatPane(pane: Locator, message: string) {
   await pane.getByRole("button", { name: "Create chat and send" }).click();
 }
 
-test("codex workspace surface: run status, split (button + chord), single inspector, non-destructive close, visible sidebar actions, no dock", async ({
+test("codex workspace surface: run status, split (button + chord), one docked panel, non-destructive close, visible sidebar actions, no dock", async ({
   page,
 }) => {
   await page.goto(launchUrl);
@@ -236,9 +241,18 @@ test("codex workspace surface: run status, split (button + chord), single inspec
   // header region (CWS-01), never a full-width banner in the transcript
   // flow. Assert it renders inside a <header> ancestor rather than asserting
   // on a CSS class, so this stays a structural (not styling) check.
-  const trustNote = page.getByText(/Pi tools run with your user permissions/);
+  // The notice renders in two forms by design: the complete wording for
+  // assistive technology, and a width-appropriate visible form chosen by a
+  // container query on the pane header. Both carry the same words, so matching
+  // on the text alone now finds two nodes. Assert on the single wrapper
+  // instead — the structural claim is unchanged, and it holds whichever
+  // visible form this pane's width selects.
+  const trustNote = page.locator(".trust-note");
+  await expect(trustNote).toHaveCount(1);
   await expect(trustNote).toBeVisible();
   await expect(trustNote.locator("xpath=ancestor::header[1]")).toHaveCount(1);
+  // Whatever is shown, the whole notice reaches assistive technology once.
+  await expect(page.getByText(TRUST_NOTICE, { exact: true })).toHaveCount(1);
 
   // Split right via the pane header's "Split" button (not the chord) — only
   // one pane exists yet, so this is unambiguous.
@@ -273,9 +287,9 @@ test("codex workspace surface: run status, split (button + chord), single inspec
   await expect(page.getByRole("region")).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
 
-  // CWS-06: exactly one panel is docked right of the pane surface, and it is
-  // the Changes | Files | Terminal inspector. No standalone Environment
-  // column and no control for one exists at any width.
+  // CWS-06, as superseded by WSP-01: exactly one region is docked right of
+  // the pane surface, and it is the workspace panel. No standalone
+  // Environment column and no control for one exists at any width.
   await expect(
     page.getByRole("complementary", { name: "Environment" }),
   ).toHaveCount(0);

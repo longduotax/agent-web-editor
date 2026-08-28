@@ -7,6 +7,7 @@ import {
   UnarchiveThreadResponseSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
+  LiveDiagnosticSchema,
   ProjectIdSchema,
   SessionIdSchema,
   RelativePathSchema,
@@ -20,6 +21,9 @@ import {
   TerminalClientFrameSchema,
   TranscriptCursorSchema,
   TranscriptPageSchema,
+  TerminalServerFrameSchema,
+  TerminalsResponseSchema,
+  TERMINAL_MAX_PER_SCOPE,
 } from "./index.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -204,6 +208,190 @@ describe("wire contracts", () => {
       { version: 1, type: "terminate", projectId: id, terminalId },
     ])
       expect(TerminalClientFrameSchema.safeParse(frame).success).toBe(false);
+  });
+
+  // WSP-07: several terminals per execution scope. `attach` naming a terminal
+  // is a RE-ATTACH to that one; `attach` naming none takes a new one, and
+  // `create` always makes one. A reloaded browser therefore reclaims its own
+  // shells by identity rather than by luck of a scope key.
+  it("distinguishes re-attaching to a named terminal from taking a new one", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      TerminalClientFrameSchema.parse({
+        version: 1,
+        type: "attach",
+        projectId: id,
+        threadId,
+        terminalId,
+      }),
+    ).toMatchObject({ type: "attach", terminalId });
+    expect(
+      TerminalClientFrameSchema.parse({
+        version: 1,
+        type: "attach",
+        projectId: id,
+        threadId,
+      }),
+    ).not.toHaveProperty("terminalId");
+    expect(
+      TerminalClientFrameSchema.parse({
+        version: 1,
+        type: "create",
+        projectId: id,
+        threadId,
+        cwd: "apps/server",
+      }),
+    ).toMatchObject({ type: "create", cwd: "apps/server" });
+    // A create still needs to know which worktree it is creating in.
+    expect(
+      TerminalClientFrameSchema.safeParse({
+        version: 1,
+        type: "create",
+        projectId: id,
+      }).success,
+    ).toBe(false);
+  });
+
+  // The spawn directory is client text that becomes a filesystem path, so it
+  // is held to exactly the rules every other path on this wire obeys. The
+  // execution root is spelled by OMITTING the field: the relative-path schema
+  // rejects the empty string, and inventing a second spelling for the root
+  // would be a second thing for the server to have to contain.
+  it("holds a terminal's spawn directory to the relative-path rules", () => {
+    for (const cwd of ["/etc", "../secret", "a/../b", "a\0b", "a//b"])
+      for (const type of ["attach", "create", "restart"] as const)
+        expect(
+          TerminalClientFrameSchema.safeParse({
+            version: 1,
+            type,
+            projectId: id,
+            threadId,
+            terminalId: "00000000-0000-4000-8000-000000000002",
+            cwd,
+          }).success,
+        ).toBe(false);
+  });
+
+  // A rejection the client has to act on differently — the per-scope cap, a
+  // stale id, a refused directory — carries a code. Without one the client
+  // could only match on prose (D-2).
+  it("types the rejections a terminal client must tell apart", () => {
+    expect(
+      TerminalServerFrameSchema.parse({
+        version: 1,
+        type: "error",
+        projectId: id,
+        message: "Too many terminals.",
+        code: "terminal_limit_reached",
+      }),
+    ).toMatchObject({ code: "terminal_limit_reached" });
+    // Still optional: an untyped refusal is the ordinary case.
+    expect(
+      TerminalServerFrameSchema.parse({
+        version: 1,
+        type: "error",
+        message: "Terminal command was rejected.",
+      }),
+    ).not.toHaveProperty("code");
+    expect(
+      TerminalServerFrameSchema.safeParse({
+        version: 1,
+        type: "error",
+        message: "Unknown",
+        code: "something_else",
+      }).success,
+    ).toBe(false);
+  });
+
+  // The observed working directory is a WORKSPACE-RELATIVE display path:
+  // `""` is the execution root, and `null` means it could not be observed —
+  // an unsupported platform, or a shell that has left the worktree. An
+  // absolute server path never appears in a browser DTO.
+  it("carries an observed directory as a relative display path or nothing", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    for (const cwd of ["", "apps/web", null])
+      expect(
+        TerminalServerFrameSchema.parse({
+          version: 1,
+          type: "cwd",
+          projectId: id,
+          terminalId,
+          cwd,
+        }),
+      ).toMatchObject({ type: "cwd", cwd });
+    for (const cwd of ["/Users/someone/project", "../elsewhere"])
+      expect(
+        TerminalServerFrameSchema.safeParse({
+          version: 1,
+          type: "cwd",
+          projectId: id,
+          terminalId,
+          cwd,
+        }).success,
+      ).toBe(false);
+  });
+
+  it("lists the live terminals of one scope by identity and directory", () => {
+    const terminalId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      TerminalsResponseSchema.parse({
+        terminals: [
+          { id: terminalId, cwd: "" },
+          { id: id, cwd: null },
+        ],
+      }).terminals,
+    ).toHaveLength(2);
+    expect(
+      TerminalsResponseSchema.safeParse({
+        terminals: [{ id: terminalId, cwd: "/absolute" }],
+      }).success,
+    ).toBe(false);
+    // The cap is a number the browser states to the user, so it lives with
+    // the frames rather than only inside the server that enforces it.
+    expect(TERMINAL_MAX_PER_SCOPE).toBe(8);
+  });
+});
+
+// `LiveEventSchema.payload` is `unknown` because four event types share one
+// envelope, so a diagnostic payload has to be asserted at the point of use —
+// the same arrangement `transcript` already has with TranscriptItemSchema.
+// Before this existed there was nothing to assert it WITH, which is part of
+// why the client used diagnostics only as a refetch trigger.
+describe("LiveDiagnosticSchema", () => {
+  it("accepts the payload the server republishes, code and all", () => {
+    expect(
+      LiveDiagnosticSchema.parse({
+        type: "diagnostic",
+        level: "warning",
+        code: "provider_retry",
+        message: "Provider retry 2 of 5.",
+      }),
+    ).toEqual({
+      type: "diagnostic",
+      level: "warning",
+      code: "provider_retry",
+      message: "Provider retry 2 of 5.",
+    });
+  });
+
+  it("accepts a runtime that predates the code field", () => {
+    expect(
+      LiveDiagnosticSchema.safeParse({
+        type: "diagnostic",
+        level: "info",
+        message: "Compacted the session.",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects payloads from the envelope's other event types", () => {
+    for (const payload of [
+      { type: "transcript", level: "warning", message: "x" },
+      { type: "diagnostic", level: "fatal", message: "x" },
+      { type: "diagnostic", level: "warning", message: "" },
+      { type: "diagnostic", level: "warning" },
+    ])
+      expect(LiveDiagnosticSchema.safeParse(payload).success).toBe(false);
   });
 });
 

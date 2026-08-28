@@ -1,6 +1,8 @@
 import {
+  useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -8,6 +10,11 @@ import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
 import { tiledPaneIds } from "./layoutTree.js";
+import {
+  isComposerEntryKey,
+  landFocusOnComposer,
+  landFocusOnPane,
+} from "./paneFocus.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
 import { ThreadPane } from "./ThreadPane.js";
 import { NewChatPane } from "./NewChatPane.js";
@@ -50,7 +57,19 @@ export function TilingSurface(props: TilingSurfaceProps): JSX.Element {
   const paneCount = tiledPaneIds(controller.layout).length;
 
   return (
-    <div className="tiling-surface" style={{ overflowX: "auto" }}>
+    // `--pane-min-width` is the one number behind CWS-07's minimum: the
+    // stylesheet clamps each .tiling-region to it, so the constant lives here
+    // and cannot drift from the CSS. The total floor on .tiling-tiles is kept
+    // as a backstop -- it is what guarantees the surface can still SCROLL to
+    // reach every pane if a future rule ever relaxes a region's minimum.
+    <div
+      className="tiling-surface"
+      style={
+        {
+          "--pane-min-width": `${String(MIN_PANE_WIDTH_PX)}px`,
+        } as CSSProperties
+      }
+    >
       <div
         className="tiling-tiles"
         style={{ minWidth: paneCount * MIN_PANE_WIDTH_PX }}
@@ -134,8 +153,62 @@ function PaneRegion({
 }) {
   const focused = paneId === controller.layout.focusedPaneId;
   const threadId = controller.layout.panes[paneId]?.threadId ?? null;
+  const tileRef = useRef<HTMLDivElement>(null);
+  // Read through a ref inside the focus effect below, never listed as a
+  // dependency of it. Focus must follow a COMMAND, and `focused` also turns
+  // true when the user clicks a pane — including when they click straight
+  // into its composer, which the effect would then rudely undo.
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+  const { paneFocusIntent, registerPaneElement } = controller;
+
+  useEffect(() => {
+    registerPaneElement(paneId, tileRef.current);
+    return () => {
+      registerPaneElement(paneId, null);
+    };
+  }, [paneId, registerPaneElement]);
+
+  // Follow command-driven pane focus in the DOM. Splits, directions, and close
+  // commands park on the pane shell so workspace shortcuts remain armed; a
+  // printable key then enters the composer without losing that character.
+  // This runs after React's `autoFocus` handling, making the target explicit
+  // rather than depending on mount order.
+  useEffect(() => {
+    // Sequence 0 is a cold load: leave the entry composer's normal autofocus
+    // alone.
+    if (paneFocusIntent.sequence === 0 || !focusedRef.current) return;
+    if (
+      paneFocusIntent.target === "composer" &&
+      landFocusOnComposer(tileRef.current) !== null
+    )
+      return;
+    landFocusOnPane(tileRef.current);
+  }, [paneFocusIntent]);
+
   return (
-    <div className="tiling-region">
+    <div
+      className="tiling-region"
+      ref={tileRef}
+      onKeyDown={(event) => {
+        // Only from the parked pane itself. A key pressed in a composer, a
+        // header button or the resize handle belongs to that control.
+        if (
+          event.defaultPrevented ||
+          !(event.target instanceof HTMLElement) ||
+          !event.target.classList.contains("pane") ||
+          !isComposerEntryKey(event)
+        )
+          return;
+        const composer =
+          tileRef.current?.querySelector<HTMLTextAreaElement>("textarea");
+        if (composer === null || composer === undefined) return;
+        composer.focus({ preventScroll: true });
+        // The printable character is left to arrive in the composer by
+        // itself; Enter would submit an empty message, so it stops here.
+        if (event.key === "Enter") event.preventDefault();
+      }}
+    >
       {threadId !== null ? (
         <ThreadPane
           projectId={projectId}

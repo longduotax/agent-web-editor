@@ -107,9 +107,10 @@ geometry is predictable and serializable; panes never free-float or overlap.
 
 ### TWS-03 — Splitting opens a focused new-chat pane
 
-Splitting the focused pane divides it and opens a new-chat pane in the new half,
-which immediately takes focus so the user can type. Split right divides along the
-horizontal axis; split down divides along the vertical axis. A new-chat pane has
+Splitting the focused pane divides it and opens a new-chat pane in the new half.
+Keyboard focus lands in that pane's first-message field so the user can type
+immediately. Split right divides along the horizontal axis; split down divides
+along the vertical axis. A new-chat pane has
 no thread until its first prompt is submitted, at which point it starts a thread
 in the project and becomes that thread's pane. The clean-worktree start state is
 the default for a pane started this way, consistent with

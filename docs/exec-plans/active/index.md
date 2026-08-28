@@ -32,6 +32,53 @@ superseded, or abandoned.
   (layout v1→v2). Implementation is complete and verified (unit coverage,
   end-to-end Playwright coverage, and the tiling-spec supersession); kept Active
   pending merge.
+- [Workspace panel](2026-08-22-workspace-panel.md) — Draft plan version 2,
+  technical approval pending; plan version 1 was approved on 2026-08-22 and its
+  milestones are carried forward, with milestones 1 through 4 implemented,
+  reviewed, and their hands-on UI passes performed; milestone 4 shipped on
+  2026-08-23. Milestones 5 through 9 are specified and not started.
+  Product approval for
+  [Workspace panel](../../product-specs/workspace-panel.md) v1 was granted from
+  the design as presented in session, not from a reading of the document;
+  **specification version 2 — a bounded WSP-05 revision making the Files tab a
+  navigable, ignore-aware tree — was approved by the user on 2026-08-23**, under
+  the same qualification: the approval is of the behaviour as described in
+  session, and a discrepancy between the document and that discussion resolves
+  in favour of the discussion and returns the proposal to Draft. Plan version
+  2's milestone 4 (directory-scoped server listing, ignore-rule parsing over
+  both listing and search, the browser tree with persisted expansion, flat
+  search, panel storage v2 → v3) was gated on that approval and was implemented
+  ahead of it on the coordinator's instruction; the gate is now satisfied and
+  the sequence is recorded in the plan's Discoveries section. Plan version 2
+  also folds a keyboard close-control question into milestone 3 and a
+  file-content overflow defect into milestone 5, and adds a standing hands-on UI
+  pass to every remaining milestone, all after a 2026-08-22 manual pass found
+  six issues in a milestone the automated suite had passed. On 2026-08-23 the
+  user also chose to **position tab body hosts over their group's rectangle
+  instead of relocating them between groups**, which becomes a new milestone 8
+  (one never-detached layer, rectangle tracking through a `ResizeObserver`, the
+  scroll save/restore workaround retired) and moves the browser tab to milestone
+  9; the rejected alternative was accepting a page reload for Browser tabs
+  alone. Two of those six —
+  panel tabs and file rows reported as having no accessible name — were probed
+  against the live DOM and closed as false positives from the accessibility-tree
+  dump tool; the computed-name and keyboard-walk verification they prompted is
+  kept, and pass findings are now confirmed before they become work.
+  Replaces the
+  `Changes | Files | Terminal` inspector (CWS-06, superseded) with a docked
+  panel of tab groups in their own binary tiling tree, holding durable tabs
+  that carry their own `(project, thread, execution scope)` context: Changes,
+  Diff, Files, File, Terminal, and Browser. Extracts the chat surface's binary
+  tree into a generic `features/layout/binaryTree.ts` without changing the
+  chat layout's persisted format; migrates the device-local
+  `pi-workspace:inspector` record to `pi-workspace:panel` v2; deletes the
+  inspector outright in milestone 2 with no feature flag. Server work: terminal
+  owners rekeyed from execution scope to `TerminalId` so a scope may hold up to
+  eight PTYs, a `create` frame and re-attach by id, a terminals-listing route, a
+  bounded working-directory probe, and a new headers-only browser URL probe
+  with `frame-src` CSP and an opaque-origin iframe sandbox. Overlaps
+  [Codex-style workspace surface](2026-08-22-codex-workspace-surface.md) at
+  CWS-06 only; that plan's other requirements are unaffected.
 - [Scalable conversation history](2026-08-16-scalable-conversation-history.md) —
   Draft plan version 3 has technical approval pending. Its provider-neutral
   fixed-limit latest/older page contract, explicit older control, stale reset,

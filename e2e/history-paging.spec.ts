@@ -135,7 +135,9 @@ test("long history opens bounded, pages explicitly, and keeps only five pages", 
   await expect(page.getByText("History item 699")).toHaveCount(0);
   await expect(page.locator(".a-block")).toHaveCount(500);
 
-  await page.getByRole("button", { name: "Jump to latest" }).click();
+  await page
+    .getByRole("button", { name: "Jump to latest", exact: true })
+    .click();
   await expect(page.getByText("History item 699")).toBeVisible();
   await expect(page.locator(".a-block")).toHaveCount(100);
 });

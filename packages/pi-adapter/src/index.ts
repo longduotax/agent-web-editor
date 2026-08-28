@@ -485,15 +485,32 @@ function translateToolCall(
     cwd: toolMetadata(parsed.data.arguments).cwd,
     exitCode: null,
     timestamp,
+    completedAt: null,
   });
   return item.success ? item.data : null;
 }
 
+/**
+ * A tool result is a separate history entry from the tool call that produced
+ * it, so its own timestamp is the step's *completion* time. Overwriting the
+ * call's timestamp with it -- which is what replacing the item in place used
+ * to do -- discarded the only record of when the step began and left the
+ * duration of a single-step run unrepresentable.
+ *
+ * When no start was recorded the step reports `null` rather than borrowing the
+ * end. A result can outlive its call -- compaction can summarise the issuing
+ * entry away, a branch or resume can begin after it, and the duplicate-id path
+ * below drops it deliberately -- and falling back to `completedAt` would turn
+ * every one of those into a step that claims to have taken no time. That is
+ * the same false zero this whole change exists to remove, so "unknown" has to
+ * stay expressible all the way to the UI.
+ */
 function translateToolResult(
   id: string,
-  timestamp: string | null,
+  completedAt: string | null,
   raw: unknown,
   inputs: ReadonlyMap<string, string>,
+  starts: ReadonlyMap<string, string | null>,
 ): { item: TranscriptItem; toolCallId: string } | null {
   const parsed = toolResultMessageSchema.safeParse(raw);
   if (!parsed.success) return null;
@@ -507,7 +524,8 @@ function translateToolResult(
     output: textFromContent(parsed.data.content),
     cwd: metadata.cwd,
     exitCode: metadata.exitCode,
-    timestamp,
+    timestamp: starts.get(parsed.data.toolCallId) ?? null,
+    completedAt,
   });
   return item.success
     ? { item: item.data, toolCallId: parsed.data.toolCallId }
@@ -534,7 +552,13 @@ function translateBashExecution(
     output: parsed.data.output.slice(0, 1_000_000),
     cwd: null,
     exitCode,
+    // A bashExecution entry is a single history record: it reports the shell
+    // command after the fact and carries no separate start time. Reporting the
+    // one instant it does carry as both ends would say "this took no time",
+    // which for a five-minute command is a confident lie -- so the span is
+    // left unknown and only the instant is stated.
     timestamp,
+    completedAt: null,
   });
   return item.success ? item.data : null;
 }
@@ -569,6 +593,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
   const diagnostics: string[] = [];
   const toolInputs = new Map<string, string>();
   const toolIndexes = new Map<string, number | null>();
+  const toolStarts = new Map<string, string | null>();
   for (const raw of parseNativeHistory(manager.getBranch())) {
     const parsed = baseEntrySchema.safeParse(raw);
     if (!parsed.success) {
@@ -582,6 +607,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
         timestamp,
         parsed.data.message,
         toolInputs,
+        toolStarts,
       );
       if (result !== null) {
         const callIndex = toolIndexes.get(result.toolCallId);
@@ -591,6 +617,7 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
           transcript[callIndex] = result.item;
           toolIndexes.delete(result.toolCallId);
         }
+        toolStarts.delete(result.toolCallId);
         continue;
       }
       const bash = translateBashExecution(
@@ -644,9 +671,11 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
                 if (toolIndexes.has(call.data.id)) {
                   toolIndexes.set(call.data.id, null);
                   toolInputs.delete(call.data.id);
+                  toolStarts.delete(call.data.id);
                 } else {
                   toolIndexes.set(call.data.id, toolIndex);
                   toolInputs.set(call.data.id, tool.input);
+                  toolStarts.set(call.data.id, tool.timestamp);
                 }
               }
             });
@@ -696,6 +725,7 @@ function mapEvent(event: unknown): RuntimeEvent {
     return {
       type: "diagnostic",
       level: "warning",
+      code: "unsupported_event",
       message: "Pi emitted an unsupported event.",
     };
   if (parsed.data.type === "message_end") {
@@ -708,6 +738,7 @@ function mapEvent(event: unknown): RuntimeEvent {
       ? {
           type: "diagnostic",
           level: "warning",
+          code: "unsupported_message",
           message: "Pi emitted an unsupported message.",
         }
       : { type: "transcript", item };
@@ -722,6 +753,7 @@ function mapEvent(event: unknown): RuntimeEvent {
       ? {
           type: "diagnostic",
           level: "warning",
+          code: "unsupported_message",
           message: "Pi emitted an unsupported message.",
         }
       : { type: "transcript-update", item };
@@ -734,17 +766,23 @@ function mapEvent(event: unknown): RuntimeEvent {
       return {
         type: "diagnostic",
         level: "warning",
+        code: "unsupported_event",
         message: "Pi emitted an unsupported event.",
       };
+    // `warning`, not `info`: the run is not progressing, and the reason is
+    // outside Pi. This is the one diagnostic worth interrupting a reader
+    // with, and `info` had it filtered out everywhere downstream.
     return {
       type: "diagnostic",
-      level: "info",
+      level: "warning",
+      code: "provider_retry",
       message: `Provider retry ${String(retry.data.attempt)} of ${String(retry.data.maxAttempts)}.`,
     };
   }
   return {
     type: "diagnostic",
     level: "warning",
+    code: "unsupported_event",
     message: "Pi emitted an unsupported event.",
   };
 }
@@ -831,6 +869,30 @@ class PiOpenSession implements OpenRuntimeSession {
         if (error instanceof Error && /abort/i.test(error.message))
           return "interrupted" as const;
         return "failed" as const;
+      })
+      .then((outcome) => {
+        // The invariant `stop()` establishes, stated once for every way a run
+        // can end: a run that did not COMPLETE leaves no steering queue
+        // behind. Only a completed run drained its own queue -- `runLoop`
+        // polls `getSteeringMessages` at the head of each pass -- so on any
+        // other ending whatever is still in there is a message the user was
+        // told was never delivered, waiting to be injected ahead of whatever
+        // they type next.
+        //
+        // `stop()` covered the one ending it is called on. A run that ends in
+        // FAILURE calls nothing, and `runLoop` returns on
+        // `stopReason === "error"` without reaching the end-of-turn drain, so
+        // the same stranded steer survived there. This is the place that
+        // knows: the settlement outcome is already `completed | failed |
+        // interrupted` in the runtime contract, so nothing had to widen to
+        // tell them apart -- it is the `agent_settled` EVENT that cannot,
+        // and that event is not what settles a run.
+        //
+        // Clearing after a completed run would be wrong, not merely
+        // redundant: a steer that arrives between the last drain and the
+        // final event is legitimately queued for the next prompt.
+        if (outcome !== "completed") this.clearSteeringQueue();
+        return outcome;
       });
     const accepted = await Promise.race([
       preflight,
@@ -883,8 +945,53 @@ class PiOpenSession implements OpenRuntimeSession {
   public async steer(text: string): Promise<void> {
     await this.session.steer(text);
   }
+  /**
+   * Stop the run, and take Pi's steering queue with it.
+   *
+   * Aborting does not empty that queue. `AgentSession.abort()` is
+   * `abortRetry(); agent.abort(); waitForIdle()` and `Agent.abort()` is
+   * `this.activeRun?.abortController.abort()` — neither touches
+   * `steeringQueue`. The queue belongs to the SESSION, and `openRuntime`
+   * memoises one session per thread for its whole life, so a steer stranded
+   * by a Stop survives the run: the next `prompt()` drains it before the
+   * model call (`runLoop` polls `getSteeringMessages` at its head) and emits
+   * the `message_start`/`message_end` pair that persists it. The user is told
+   * their words were never delivered, is handed the text back in the
+   * composer, presses Enter — and Pi has the instruction twice. For "delete
+   * the temp files" that is not cosmetic, and because the app moves the text
+   * INTO the composer, the double send is the action the UI invites rather
+   * than a hazard the reader might stumble into.
+   *
+   * Cleared BEFORE the abort, which is the order Pi's own TUI uses
+   * (`restoreQueuedMessagesToEditor` clears the queue and only then calls
+   * `agent.abort()`). The order is load-bearing: of the two abort outcomes in
+   * `agent-loop.js`, aborting during the model stream returns before the
+   * drain and persists nothing, while aborting during tool execution returns
+   * NORMALLY, reaches the end-of-turn drain and persists the queued steer on
+   * the next pass. Clearing first empties that drain, so both branches now
+   * agree with what the pane tells the reader.
+   *
+   * Stop is not the only ending that strands a steer -- see the settlement
+   * handler in `prompt`, which applies the same rule to a run that ends in
+   * failure, an ending nothing calls `stop()` for.
+   */
   public async stop(): Promise<void> {
+    this.clearSteeringQueue();
     await this.session.abort();
+  }
+
+  /**
+   * Empty Pi's steering queue, if this Pi has the method for it.
+   *
+   * The guard is deliberate: `clearQueue` is present on the installed
+   * `@earendil-works/pi-coding-agent@0.84.2` and is what the TUI calls, but a
+   * Pi that does not have it must still be able to stop a run.
+   */
+  private clearSteeringQueue(): void {
+    const clearQueue: unknown = (this.session as Partial<AgentSession>)
+      .clearQueue;
+    if (typeof clearQueue === "function")
+      Reflect.apply(clearQueue, this.session, []);
   }
   public subscribe(listener: (event: RuntimeEvent) => void): () => void {
     this.listeners.add(listener);

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -20,17 +21,23 @@ import {
   FileTreeResponseSchema,
   GitDiffResponseSchema,
   GitStatusResponseSchema,
+  ProjectMutationResponseSchema,
   ProjectsResponseSchema,
   AgentBackendsResponseSchema,
   StartThreadResponseSchema,
   ThreadSnapshotSchema,
   TranscriptPageSchema,
+  TerminalServerFrameSchema,
+  TerminalsResponseSchema,
+  type TerminalServerFrame,
 } from "@pi-web/contracts";
+import { WebSocket, type RawData } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildServer } from "./app.js";
 import type { DirectoryPicker } from "./directory-picker/native.js";
 import { parseConfig } from "./config.js";
+import type { PtyFactory, PtyProcess } from "./terminal/manager.js";
 import { GitWorktreeManager } from "./worktrees/manager.js";
 
 const exec = promisify(execFile);
@@ -257,6 +264,165 @@ describe("credential-free project API", () => {
     expect(StartThreadResponseSchema.parse(retry.json())).toEqual(parsed);
     expect(runtime.namingCount).toBe(1);
     expect(runtime.createCount).toBe(1);
+    await server.close();
+  });
+
+  // WSP-05 as revised by specification version 2: the listing route gained a
+  // depth bound and an ignore opt-in. Both are client-supplied strings, so
+  // both are parsed rather than interpreted.
+  it("bounds the file listing by depth and honours ignore rules", async () => {
+    const paths = await directories();
+    await mkdir(join(paths.project, "node_modules", "dep"), {
+      recursive: true,
+    });
+    await mkdir(join(paths.project, "src"));
+    await mkdir(join(paths.project, ".git"));
+    await writeFile(join(paths.project, ".gitignore"), "node_modules\n");
+    await writeFile(join(paths.project, "README.md"), "# The project\n");
+    await writeFile(join(paths.project, "src", "main.ts"), "export const a=1;");
+    await writeFile(
+      join(paths.project, "node_modules", "dep", "README.md"),
+      "# A dependency\n",
+    );
+    await writeFile(join(paths.project, ".git", "config"), "[core]\n");
+
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const start = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Browse the files",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000031",
+      },
+    });
+    const thread = StartThreadResponseSchema.parse(start.json()).thread;
+    const base = `/api/projects/${project.id}/threads/${thread.id}/files`;
+    const list = async (query: string) => {
+      const response = await server.inject({
+        method: "GET",
+        url: `${base}${query}`,
+        headers: { host },
+      });
+      const body: unknown = response.json();
+      return { status: response.statusCode, body };
+    };
+
+    const oneLevel = await list("?depth=1");
+    expect(oneLevel.status).toBe(200);
+    const shallow = FileTreeResponseSchema.parse(oneLevel.body);
+    expect(shallow.entries.map((entry) => entry.path)).toEqual([
+      "src",
+      ".gitignore",
+      "README.md",
+    ]);
+    expect(shallow.ignoredHidden).toBe(true);
+
+    // No `depth` at all is the whole recursive listing, exactly as before.
+    const full = FileTreeResponseSchema.parse((await list("")).body);
+    expect(full.entries.map((entry) => entry.path)).toContain("src/main.ts");
+
+    // The scenario the milestone exists for.
+    const search = FileTreeResponseSchema.parse(
+      (await list("?search=README.md")).body,
+    );
+    expect(search.entries.map((entry) => entry.path)).toEqual(["README.md"]);
+
+    const revealed = FileTreeResponseSchema.parse(
+      (await list("?depth=1&showIgnored=true")).body,
+    );
+    expect(revealed.entries.map((entry) => entry.path)).toContain(
+      "node_modules",
+    );
+    // The opt-in reveals ignored paths; `.git` is not one of them.
+    expect(revealed.entries.map((entry) => entry.path)).not.toContain(".git");
+    expect(revealed.ignoredHidden).toBe(false);
+
+    // A nested listing addresses the same root-relative paths.
+    const nested = FileTreeResponseSchema.parse(
+      (await list("?depth=1&path=src")).body,
+    );
+    expect(nested.entries.map((entry) => entry.path)).toEqual(["src/main.ts"]);
+
+    for (const rejected of [
+      "?depth=2",
+      "?depth=full%20",
+      "?depth=",
+      "?showIgnored=1",
+      "?showIgnored=TRUE",
+      "?depth=1&path=../escape",
+    ]) {
+      expect((await list(rejected)).status).toBe(400);
+    }
+
+    // The filter used to be applied to entries encountered while walking and
+    // never to the requested root, so a directory with no row to click was
+    // reachable by asking for it (H2). Each of these answered 200.
+    const excluded = await list("?path=.git&depth=1");
+    expect(excluded.status).toBe(403);
+    expect(excluded.body).toEqual({
+      error: {
+        code: "path_excluded",
+        message: "The requested path is not available.",
+      },
+    });
+    expect((await list("?path=.git/config&depth=1")).status).toBe(403);
+    expect((await list("?path=.git&depth=1&showIgnored=true")).status).toBe(
+      403,
+    );
+    const ignoredRoot = await list("?path=node_modules&depth=1");
+    expect(ignoredRoot.status).toBe(403);
+    expect(ignoredRoot.body).toEqual({
+      error: {
+        code: "path_ignored",
+        message:
+          "The requested path is hidden by this workspace's ignore rules.",
+      },
+    });
+    // ...and the opt-in that reveals it in a listing also opens it.
+    expect(
+      (await list("?path=node_modules&depth=1&showIgnored=true")).status,
+    ).toBe(200);
+
+    // A directory that was expanded, persisted, and then deleted (H6). This
+    // answered 500 `internal_error`, which says nothing a client can act on.
+    const missing = await list("?path=does/not/exist&depth=1");
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({
+      error: {
+        code: "path_not_found",
+        message: "The requested path was not found.",
+      },
+    });
+    expect((await list("?path=README.md&depth=1")).status).toBe(400);
+    // Containment itself was never at fault and stays where it was.
+    expect((await list("?path=../../../etc&depth=1")).status).toBe(400);
+
+    const read = async (query: string) => {
+      const response = await server.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}/threads/${thread.id}/file${query}`,
+        headers: { host },
+      });
+      return response.statusCode;
+    };
+    // `.git/config` returned the file, remote URL and all.
+    expect(await read("?path=.git/config")).toBe(403);
+    expect(await read("?path=does/not/exist")).toBe(404);
+    expect(await read("?path=src")).toBe(400);
     await server.close();
   });
 
@@ -1076,34 +1242,505 @@ describe("credential-free project API", () => {
     await server.close();
   });
 
-  it("rejects browser-supplied paths without registering a project", async () => {
-    const paths = await directories();
-    const config = parseConfig({
-      argv: [],
-      environment: { PI_WEB_STATE_DIR: paths.state },
+  // REPLACES "rejects browser-supplied paths without registering a project".
+  //
+  // That test guarded a posture that has since cost more than it bought: with
+  // the native chooser as the ONLY way in, a dialog that failed to open, or
+  // opened behind the window, left no way to add a project at all -- and
+  // adding a project is the first thing anyone must do. The path route is a
+  // fallback beside the chooser, not a replacement for it.
+  //
+  // It grants nothing: this server is loopback-only, has no client
+  // authentication by design, and Pi already runs with the user's own
+  // permissions, so a path typed into the sidebar reaches exactly what a path
+  // chosen in the OS dialog reaches. The origin and CSRF checks that guard
+  // every other mutation guard this one unchanged (see the 403 cases above).
+  //
+  // NOTE: `docs/product-specs/initial-workspace.md` still says the sidebar
+  // presents "a single Browse control rather than a path text field". That
+  // spec is approved and is NOT edited here; the change is flagged for
+  // approval rather than made quietly.
+  describe("adding a project by path", () => {
+    const key = (n: number) =>
+      `00000000-0000-4000-8000-00000000000${String(n)}`;
+    const add = async (
+      server: Awaited<ReturnType<typeof buildServer>>,
+      path: string,
+      idempotencyKey: string,
+    ) =>
+      await server.inject({
+        method: "POST",
+        url: "/api/projects",
+        headers: { host, origin, "x-pi-web-request": "1" },
+        payload: { path, idempotencyKey },
+      });
+    const start = async (state: string) =>
+      await buildServer({
+        config: parseConfig({
+          argv: [],
+          environment: { PI_WEB_STATE_DIR: state },
+        }),
+        runtime: new FakeRuntime(),
+        logger: false,
+      });
+
+    it("registers an absolute path and lists it", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, paths.project, key(1));
+      expect(added.statusCode).toBe(200);
+      const project = ProjectMutationResponseSchema.parse(added.json()).project;
+      expect(project.displayName).toBe("project");
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      const workspace = ProjectsResponseSchema.parse(listed.json());
+      expect(workspace.projects.map((entry) => entry.id)).toEqual([project.id]);
+      await server.close();
     });
-    const server = await buildServer({
-      config,
-      runtime: new FakeRuntime(),
-      logger: false,
+
+    it("replays the same idempotency key instead of registering twice", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const first = await add(server, paths.project, key(1));
+      const replay = await add(server, paths.project, key(1));
+      expect(replay.statusCode).toBe(200);
+      expect(
+        ProjectMutationResponseSchema.parse(replay.json()).project.id,
+      ).toBe(ProjectMutationResponseSchema.parse(first.json()).project.id);
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      expect(ProjectsResponseSchema.parse(listed.json()).projects).toHaveLength(
+        1,
+      );
+      await server.close();
     });
-    const rejected = await server.inject({
-      method: "POST",
-      url: "/api/projects",
-      headers: { host, origin, "x-pi-web-request": "1" },
-      payload: {
-        path: paths.project,
-        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+
+    it("reports a directory that is already registered", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      await add(server, paths.project, key(1));
+      const again = await add(server, paths.project, key(2));
+      expect(again.statusCode).toBe(409);
+      expect(again.json()).toEqual({
+        error: {
+          code: "project_already_registered",
+          message: "This directory is already registered.",
+        },
+      });
+      await server.close();
+    });
+
+    // The four honest refusals. Each says which of the four things is wrong,
+    // because "unavailable or inaccessible" for all of them sends someone
+    // hunting a permissions problem when they have made a typo.
+    it("says a path does not exist rather than failing generically", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const missing = await add(
+        server,
+        join(paths.project, "no-such-directory"),
+        key(1),
+      );
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toEqual({
+        error: {
+          code: "project_path_not_found",
+          message: "There is nothing at that path.",
+        },
+      });
+      await server.close();
+    });
+
+    it("refuses a relative path", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const relative = await add(server, "some/relative/path", key(1));
+      expect(relative.statusCode).toBe(400);
+      expect(relative.json()).toEqual({
+        error: {
+          code: "project_path_relative",
+          message:
+            "Enter the full path to the directory, starting from the root.",
+        },
+      });
+      await server.close();
+    });
+
+    it("refuses a file that is not a directory", async () => {
+      const paths = await directories();
+      const file = join(paths.project, "README.md");
+      await writeFile(file, "not a directory\n");
+      const server = await start(paths.state);
+      const notDirectory = await add(server, file, key(1));
+      expect(notDirectory.statusCode).toBe(400);
+      expect(notDirectory.json()).toEqual({
+        error: {
+          code: "project_not_directory",
+          message: "That path is a file, not a directory.",
+        },
+      });
+      await server.close();
+    });
+
+    it("refuses an empty path and a path containing a NUL byte", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      for (const path of ["", "   ", `${paths.project}\u0000/etc`]) {
+        const refused = await add(server, path, key(1));
+        expect(refused.statusCode).toBe(400);
+        expect(refused.json()).toEqual({
+          error: {
+            code: "invalid_request",
+            message: "The request is malformed.",
+          },
+        });
+      }
+      const listed = await server.inject({
+        method: "GET",
+        url: "/api/projects",
+        headers: { host },
+      });
+      expect(ProjectsResponseSchema.parse(listed.json()).projects).toEqual([]);
+      await server.close();
+    });
+
+    it("trims a pasted path's surrounding whitespace", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, `  ${paths.project}\n`, key(1));
+      expect(added.statusCode).toBe(200);
+      await server.close();
+    });
+
+    // A directory with no Git repository in it is a PROJECT, not an error:
+    // the new-chat pane already says so and offers the shared-checkout mode.
+    it("accepts a directory that is not a Git working tree", async () => {
+      const paths = await directories();
+      const server = await start(paths.state);
+      const added = await add(server, paths.project, key(1));
+      expect(added.statusCode).toBe(200);
+      expect(
+        ProjectMutationResponseSchema.parse(added.json()).project.gitAvailable,
+      ).toBe(false);
+      await server.close();
+    });
+  });
+});
+
+/**
+ * The terminal routes need a real socket, because that is the only way a
+ * terminal comes into existence: the listing route reports what the socket
+ * created. The PTY itself is a fake — this suite is about the wire and the
+ * ownership rules, and `manager.test.ts` is about the process.
+ */
+class SocketFakePty implements PtyProcess {
+  public readonly pid = null;
+  public write(): void {
+    return undefined;
+  }
+  public resize(): void {
+    return undefined;
+  }
+  public kill(): void {
+    return undefined;
+  }
+  public onData(): { dispose(): void } {
+    return { dispose: () => undefined };
+  }
+  public onExit(): { dispose(): void } {
+    return { dispose: () => undefined };
+  }
+}
+
+class SocketFakePtyFactory implements PtyFactory {
+  public readonly directories: string[] = [];
+  public spawn(cwd: string): PtyProcess {
+    this.directories.push(cwd);
+    return new SocketFakePty();
+  }
+}
+
+async function availablePort(): Promise<number> {
+  return await new Promise<number>((settle, fail) => {
+    const probe = createServer();
+    probe.once("error", fail);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        fail(new Error("Could not allocate a test port"));
+        return;
+      }
+      const port = address.port;
+      probe.close((error) => {
+        if (error !== undefined) fail(error);
+        else settle(port);
+      });
+    });
+  });
+}
+
+/** A ws frame, whatever transport shape it arrived in, as text. */
+function frameText(raw: RawData): string {
+  if (typeof raw === "string") return raw;
+  if (Buffer.isBuffer(raw)) return raw.toString("utf8");
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
+  return Buffer.from(raw).toString("utf8");
+}
+
+/** One terminal socket, with the frames it has received so far. */
+class TerminalClient {
+  private readonly socket: WebSocket;
+  public readonly frames: TerminalServerFrame[] = [];
+  public constructor(port: number) {
+    this.socket = new WebSocket(`ws://127.0.0.1:${String(port)}/api/terminal`, {
+      headers: {
+        host: `127.0.0.1:${String(port)}`,
+        origin: `http://127.0.0.1:${String(port)}`,
       },
     });
-    expect(rejected.statusCode).toBe(404);
+    this.socket.on("message", (raw: RawData) => {
+      this.frames.push(
+        TerminalServerFrameSchema.parse(JSON.parse(frameText(raw))),
+      );
+    });
+  }
+  public async opened(): Promise<void> {
+    await new Promise<void>((settle, fail) => {
+      this.socket.once("open", () => {
+        settle();
+      });
+      this.socket.once("error", fail);
+    });
+  }
+  public send(frame: unknown): void {
+    this.socket.send(JSON.stringify(frame));
+  }
+  /** The next frame of this type to arrive, or a timeout. */
+  public async next<Type extends TerminalServerFrame["type"]>(
+    type: Type,
+  ): Promise<Extract<TerminalServerFrame, { type: Type }>> {
+    const matches = (
+      frame: TerminalServerFrame,
+    ): frame is Extract<TerminalServerFrame, { type: Type }> =>
+      frame.type === type;
+    const seen = this.frames.filter(matches).length;
+    let found: Extract<TerminalServerFrame, { type: Type }> | undefined;
+    await vi.waitFor(() => {
+      const matching = this.frames.filter(matches);
+      expect(matching.length).toBeGreaterThan(seen);
+      found = matching[seen];
+    });
+    if (found === undefined) throw new Error(`no ${type} frame arrived`);
+    return found;
+  }
+  public close(): void {
+    this.socket.close();
+  }
+}
+
+describe("terminal routes", () => {
+  async function serverWithThread(): Promise<{
+    server: Awaited<ReturnType<typeof buildServer>>;
+    factory: SocketFakePtyFactory;
+    port: number;
+    projectId: string;
+    threadId: string;
+    otherProjectId: string;
+    otherThreadId: string;
+    projectPath: string;
+  }> {
+    const paths = await directories();
+    const otherProject = join(paths.project, "..", "other-project");
+    await mkdir(otherProject);
+    await mkdir(join(paths.project, "apps"));
+    const port = await availablePort();
+    const config = parseConfig({
+      argv: ["--port", String(port)],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const factory = new SocketFakePtyFactory();
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      ptyFactory: factory,
+      logger: false,
+    });
+    const workspace = server.workspaceContext.workspace;
+    const project = await workspace.registerSelectedProject(paths.project);
+    const other = await workspace.registerSelectedProject(otherProject);
+    const thread = await workspace.startThread(
+      project.id,
+      "Run a shell here",
+      { mode: "shared" },
+      "00000000-0000-4000-8000-000000000101",
+    );
+    const otherThread = await workspace.startThread(
+      other.id,
+      "Run a shell there",
+      { mode: "shared" },
+      "00000000-0000-4000-8000-000000000102",
+    );
+    await server.listen({ host: config.host, port });
+    return {
+      server,
+      factory,
+      port,
+      projectId: project.id,
+      threadId: thread.thread.id,
+      otherProjectId: other.id,
+      otherThreadId: otherThread.thread.id,
+      projectPath: paths.project,
+    };
+  }
+
+  // WSP-07: a reloaded browser reclaims its own shells by identity, so it
+  // has to be able to ask which ones are live. The answer is scoped to the
+  // thread that asked — another project's terminal is not reachable through
+  // it, and is not even visible.
+  it("lists the live terminals of the requesting thread's scope only", async () => {
+    const fixture = await serverWithThread();
+    const { server, port, projectId, threadId } = fixture;
+    const client = new TerminalClient(port);
+    await client.opened();
+
+    const empty = await server.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/threads/${threadId}/terminals`,
+      headers: { host: `127.0.0.1:${String(port)}` },
+    });
+    expect(empty.statusCode).toBe(200);
+    expect(TerminalsResponseSchema.parse(empty.json()).terminals).toEqual([]);
+
+    client.send({ version: 1, type: "create", projectId, threadId });
+    const ready = await client.next("ready");
+
     const listed = await server.inject({
       method: "GET",
-      url: "/api/projects",
-      headers: { host },
+      url: `/api/projects/${projectId}/threads/${threadId}/terminals`,
+      headers: { host: `127.0.0.1:${String(port)}` },
     });
-    const workspace = ProjectsResponseSchema.parse(listed.json());
-    expect(workspace.projects).toEqual([]);
+    expect(TerminalsResponseSchema.parse(listed.json()).terminals).toEqual([
+      { id: ready.terminalId, cwd: null },
+    ]);
+
+    // Another project's thread is a different execution scope, and sees
+    // nothing of this one.
+    const elsewhere = await server.inject({
+      method: "GET",
+      url: `/api/projects/${fixture.otherProjectId}/threads/${fixture.otherThreadId}/terminals`,
+      headers: { host: `127.0.0.1:${String(port)}` },
+    });
+    expect(TerminalsResponseSchema.parse(elsewhere.json()).terminals).toEqual(
+      [],
+    );
+
+    // And a thread that does not belong to the named project is not a route
+    // that answers at all.
+    const mismatched = await server.inject({
+      method: "GET",
+      url: `/api/projects/${fixture.otherProjectId}/threads/${threadId}/terminals`,
+      headers: { host: `127.0.0.1:${String(port)}` },
+    });
+    expect(mismatched.statusCode).toBe(404);
+
+    client.close();
+    await server.close();
+  });
+
+  // Two terminals in one scope, then a re-attach by id: the reload path.
+  it("creates several terminals in one scope and re-attaches to one by id", async () => {
+    const fixture = await serverWithThread();
+    const { server, port, projectId, threadId } = fixture;
+    const first = new TerminalClient(port);
+    const second = new TerminalClient(port);
+    await first.opened();
+    await second.opened();
+    first.send({ version: 1, type: "create", projectId, threadId });
+    const firstReady = await first.next("ready");
+    second.send({ version: 1, type: "create", projectId, threadId });
+    const secondReady = await second.next("ready");
+    expect(firstReady.terminalId).not.toBe(secondReady.terminalId);
+
+    // A reload: a new socket claiming the id it recorded.
+    first.close();
+    const reloaded = new TerminalClient(port);
+    await reloaded.opened();
+    reloaded.send({
+      version: 1,
+      type: "attach",
+      projectId,
+      threadId,
+      terminalId: firstReady.terminalId,
+    });
+    expect((await reloaded.next("ready")).terminalId).toBe(
+      firstReady.terminalId,
+    );
+    const listed = await server.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/threads/${threadId}/terminals`,
+      headers: { host: `127.0.0.1:${String(port)}` },
+    });
+    // Two, not three: re-attaching reclaimed a shell rather than starting one.
+    expect(TerminalsResponseSchema.parse(listed.json()).terminals).toHaveLength(
+      2,
+    );
+
+    reloaded.close();
+    second.close();
+    await server.close();
+  });
+
+  // D-2: the refusals a tab must render differently arrive with a code, not
+  // as one string it would have to match on prose.
+  it("answers a stale id and a refused directory with their own codes", async () => {
+    const fixture = await serverWithThread();
+    const { server, port, projectId, threadId, factory } = fixture;
+    const client = new TerminalClient(port);
+    await client.opened();
+
+    client.send({
+      version: 1,
+      type: "attach",
+      projectId,
+      threadId,
+      terminalId: "50000000-0000-4000-8000-000000000009",
+    });
+    expect(await client.next("error")).toMatchObject({
+      code: "terminal_gone",
+    });
+
+    client.send({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "not-a-directory",
+    });
+    expect(await client.next("error")).toMatchObject({
+      code: "terminal_cwd_invalid",
+    });
+    expect(factory.directories).toEqual([]);
+
+    // And a directory that IS inside the execution root is spawned in.
+    client.send({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "apps",
+    });
+    await client.next("ready");
+    expect(factory.directories).toEqual([
+      join(await realpath(fixture.projectPath), "apps"),
+    ]);
+
+    client.close();
     await server.close();
   });
 });

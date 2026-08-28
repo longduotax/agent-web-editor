@@ -47,4 +47,10 @@ describe("stickToBottom", () => {
     scrollToBottom(box);
     expect(box.scrollTop).toBe(1000);
   });
+
+  it("STICK_TO_BOTTOM_THRESHOLD_PX is small enough to be sub-pixel slack, not a policy", () => {
+    // If this grows into the tens of lines, "the reader has scrolled away"
+    // stops being true near the bottom and the pin starts fighting them.
+    expect(STICK_TO_BOTTOM_THRESHOLD_PX).toBeLessThanOrEqual(64);
+  });
 });

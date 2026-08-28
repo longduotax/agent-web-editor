@@ -138,7 +138,22 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
     output: z.string().max(1_000_000),
     cwd: z.string().max(500).nullable(),
     exitCode: z.number().int().nullable(),
+    /**
+     * When the step *started* -- the moment the agent issued the call.
+     *
+     * A tool step is the only transcript item that occupies a span rather
+     * than an instant, and the two ends arrive as two separate entries in the
+     * native session history. Carrying only one of them made a step's own
+     * elapsed time unrepresentable, which is how a 45-second shell command
+     * came to be summarised as "Worked for <1s".
+     */
     timestamp: TimestampSchema.nullable(),
+    /**
+     * When the step finished. `null` while it is still running, and
+     * `undefined` on a transcript produced before this field existed, so a
+     * reader must treat both as "no completion time" rather than as zero.
+     */
+    completedAt: TimestampSchema.nullable().optional(),
   }),
   z.object({
     id: z.string().min(1).max(200),
@@ -262,6 +277,39 @@ export const StartThreadResponseSchema = z.object({
 export const BrowseProjectRequestSchema = z
   .object({ idempotencyKey: IdempotencyKeySchema })
   .strict();
+/* Adding a project by typing or pasting its path, as the second route in
+   beside the native folder picker. The picker is the better path when it
+   works; this one exists because it is the only one that still works when
+   the picker does not -- it opens as a separate OS window that can land
+   behind the browser or on another desktop, and until now a failure there
+   left no way to add a project at all.
+   `.trim()` because a pasted path routinely carries a trailing newline or a
+   leading space from a terminal. The cost is that a directory whose name
+   really does end in a space cannot be added THIS way; it can still be added
+   with the picker, and that trade is worth one keystroke of forgiveness on
+   every ordinary paste.
+   The NUL check is structural, not security theatre: this server is loopback
+   only and Pi already runs with the user's own permissions, so a path from
+   this field grants nothing the picker did not. But a NUL byte truncates a
+   path in every C API underneath us, so a string containing one never means
+   what it appears to mean and is refused rather than silently reinterpreted.
+   Absoluteness is checked on the server with node:path, not here: "absolute"
+   is spelled differently on Windows and a regex in a shared contract would
+   get one of the two platforms wrong. */
+export const AddProjectRequestSchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(4096)
+      .refine((value) => !value.includes("\u0000"), {
+        message: "A project path cannot contain a NUL byte.",
+      }),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export type AddProjectRequest = z.infer<typeof AddProjectRequestSchema>;
 export const UpdateProjectRequestSchema = z
   .object({
     sidebarExpanded: z.boolean(),
@@ -403,6 +451,11 @@ export const FileEntrySchema = z.object({
 export const FileTreeResponseSchema = z.object({
   entries: z.array(FileEntrySchema),
   truncated: z.boolean(),
+  // Whether this listing omitted anything because the working tree's ignore
+  // rules matched it. The browser states it rather than under-reporting
+  // quietly (WSP-05 as revised by specification version 2). `.git` is not an
+  // ignore rule and never sets this.
+  ignoredHidden: z.boolean(),
 });
 export const FilePreviewResponseSchema = z.object({
   path: z.string(),
@@ -464,6 +517,106 @@ export const LiveSnapshotRequiredSchema = z.object({
   type: z.literal("snapshot_required"),
   threadId: ThreadIdSchema,
 });
+/**
+ * The payload of a `diagnostic` live event.
+ *
+ * `LiveEventSchema.payload` is `unknown` because four event types share the
+ * envelope, so the shape has to be asserted per type at the point of use --
+ * exactly as `TranscriptItemSchema` is for `transcript`. The server
+ * republishes the runtime's whole diagnostic event (`workspace.ts`
+ * `onRuntimeEvent`), which is why the redundant `type` discriminator is still
+ * on the payload.
+ *
+ * `code` is optional because it post-dates the field it explains: a runtime
+ * that predates it still sends level and message.
+ */
+export const LiveDiagnosticSchema = z.object({
+  type: z.literal("diagnostic"),
+  level: z.enum(["info", "warning", "error"]),
+  message: z.string().min(1).max(2_000),
+  code: z.string().min(1).max(80).optional(),
+});
+export type LiveDiagnostic = z.infer<typeof LiveDiagnosticSchema>;
+
+/**
+ * What a terminal may be resized to.
+ *
+ * Exported because the client has to obey these bounds BEFORE it sends a
+ * frame, not discover them from a rejection: the fit addon happily proposes
+ * `rows: 1` for a group shrunk to its floor, and a frame the schema refuses
+ * costs the user an error in their shell (F1). The schema below is built
+ * from these constants, and the server's own resize guard reads them, so
+ * there is exactly one place the numbers live.
+ */
+export const TERMINAL_MIN_COLUMNS = 2;
+export const TERMINAL_MAX_COLUMNS = 500;
+export const TERMINAL_MIN_ROWS = 2;
+export const TERMINAL_MAX_ROWS = 200;
+
+/**
+ * How many terminals one execution scope may hold at once (WSP-07).
+ *
+ * Exported for the same reason the size bounds are: the browser states the
+ * limit to the user when it is reached, and a number the message invents
+ * separately from the number the server enforces would eventually disagree
+ * with it. Shared threads count against their project scope, isolated
+ * threads against their worktree scope.
+ */
+export const TERMINAL_MAX_PER_SCOPE = 8;
+
+/**
+ * A workspace-relative display path, where `""` is the execution root.
+ *
+ * {@link RelativePathSchema} rejects the empty string, because an empty
+ * segment is how traversal spellings start. A DISPLAYED directory, though,
+ * genuinely can be the root itself, so the root is spelled `""` in what the
+ * server reports and by OMITTING the field in what the client asks for.
+ * Absolute server paths never appear in a browser DTO, here or anywhere.
+ */
+export const WorkspaceDisplayPathSchema = z.union([
+  z.literal(""),
+  RelativePathSchema,
+]);
+
+/**
+ * The terminal rejections a client has to act on differently.
+ *
+ * Reaching the per-scope cap, naming a terminal that is gone, and asking for
+ * a spawn directory outside the execution root each need their own state in
+ * the tab — a cap message, a restart action, a refused path. They used to be
+ * one untyped string, which a client could only tell apart by matching on
+ * prose (D-2).
+ */
+export const TerminalErrorCodeSchema = z.enum([
+  "terminal_limit_reached",
+  "terminal_gone",
+  "terminal_cwd_invalid",
+]);
+export type TerminalErrorCode = z.infer<typeof TerminalErrorCodeSchema>;
+
+/** A proposed size brought inside {@link TerminalClientFrameSchema}'s bounds. */
+export function clampTerminalSize(
+  columns: number,
+  rows: number,
+): { columns: number; rows: number } {
+  return {
+    columns: clampDimension(
+      columns,
+      TERMINAL_MIN_COLUMNS,
+      TERMINAL_MAX_COLUMNS,
+    ),
+    rows: clampDimension(rows, TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS),
+  };
+}
+
+function clampDimension(
+  value: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.min(maximum, Math.max(minimum, Math.trunc(value)));
+}
 
 export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
   z.object({
@@ -471,6 +624,21 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     type: z.literal("attach"),
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
+    /**
+     * Which terminal to re-attach to (WSP-07). With one, this claims that
+     * existing terminal — the reload path, which replays its scrollback.
+     * Without one, it takes a new terminal, exactly as `create` does.
+     */
+    terminalId: TerminalIdSchema.optional(),
+    /** Spawn directory for a terminal this frame creates; root when absent. */
+    cwd: RelativePathSchema.optional(),
+  }),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("create"),
+    projectId: ProjectIdSchema,
+    threadId: ThreadIdSchema,
+    cwd: RelativePathSchema.optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -486,8 +654,12 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
-    columns: z.number().int().min(2).max(500),
-    rows: z.number().int().min(2).max(200),
+    columns: z
+      .number()
+      .int()
+      .min(TERMINAL_MIN_COLUMNS)
+      .max(TERMINAL_MAX_COLUMNS),
+    rows: z.number().int().min(TERMINAL_MIN_ROWS).max(TERMINAL_MAX_ROWS),
   }),
   z.object({
     version: z.literal(1),
@@ -495,6 +667,15 @@ export const TerminalClientFrameSchema = z.discriminatedUnion("type", [
     projectId: ProjectIdSchema,
     threadId: ThreadIdSchema,
     terminalId: TerminalIdSchema,
+    /**
+     * Where the replacement starts. A restart disposes the process and
+     * creates another, so the replacement has no directory of its own to
+     * inherit — the tab supplies the one it recorded, which is what makes
+     * "restart carries the working directory forward" true (WSP-07). The
+     * observed directory cannot serve here: it is `null` wherever the
+     * platform cannot answer, and the tab's record is not.
+     */
+    cwd: RelativePathSchema.optional(),
   }),
   z.object({
     version: z.literal(1),
@@ -535,9 +716,42 @@ export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
     type: z.literal("error"),
     projectId: ProjectIdSchema.optional(),
     message: z.string().max(500),
+    code: TerminalErrorCodeSchema.optional(),
+  }),
+  z.object({
+    version: z.literal(1),
+    type: z.literal("cwd"),
+    projectId: ProjectIdSchema,
+    terminalId: TerminalIdSchema,
+    /**
+     * The directory the shell is in, reduced against its execution root:
+     * `""` for the root itself, a relative path for a descendant, and `null`
+     * where it cannot be observed — an unsupported platform, a process the
+     * server cannot see, or a shell that has `cd`'d out of the worktree. A
+     * `null` is not a stale value: the tab shows the directory it was
+     * STARTED in and says so, rather than presenting one as the other.
+     */
+    cwd: WorkspaceDisplayPathSchema.nullable(),
   }),
 ]);
 export type TerminalServerFrame = z.infer<typeof TerminalServerFrameSchema>;
+
+/**
+ * One live terminal of an execution scope, as the listing route reports it.
+ *
+ * The route exists so a reloaded browser can reclaim the shells it has the
+ * ids of rather than orphaning them (WSP-07). `cwd` is the same observed,
+ * workspace-relative value the `cwd` frame carries, and is `null` for the
+ * same reasons.
+ */
+export const TerminalDescriptorSchema = z.object({
+  id: TerminalIdSchema,
+  cwd: WorkspaceDisplayPathSchema.nullable(),
+});
+export const TerminalsResponseSchema = z.object({
+  terminals: z.array(TerminalDescriptorSchema),
+});
+export type TerminalDescriptor = z.infer<typeof TerminalDescriptorSchema>;
 
 export function parseContract<T>(schema: z.ZodType<T>, value: unknown): T {
   return schema.parse(value);

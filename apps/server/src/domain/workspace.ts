@@ -94,6 +94,29 @@ async function parseProjectRoot(path: unknown): Promise<string | null> {
   }
 }
 
+/**
+ * Distinguishes "there is nothing at that path" from "there is something and
+ * we could not look at it".
+ *
+ * The difference did not matter while a native folder picker was the only way
+ * in -- an OS chooser does not hand back paths that do not exist -- but a
+ * person typing a path mistypes it, and "unavailable or inaccessible" sends
+ * them looking for a permissions problem they do not have.
+ */
+function missingPathError(cause: unknown): Error {
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? cause.code
+      : undefined;
+  const symptom =
+    code === "ENOENT" || code === "ENOTDIR"
+      ? "project_path_not_found"
+      : code === "EACCES" || code === "EPERM"
+        ? "project_not_readable"
+        : "project_unavailable";
+  return new Error(symptom, { cause });
+}
+
 function runDto(record: RunRecord): Run {
   return RunSchema.parse({
     id: record.id,
@@ -114,17 +137,211 @@ const browseReceiptSchema = z.discriminatedUnion("outcome", [
 const removedReceiptSchema = z.object({ removed: z.literal(true) });
 const viewedReceiptSchema = z.object({ viewed: z.literal(true) });
 
-function fallbackTitle(prompt: string): string {
-  const words = prompt
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 7);
-  const value = words.join(" ").slice(0, 60).trim();
+/**
+ * How long a Stop is given to bring the agent to rest before the request
+ * gives up on it.
+ *
+ * `OpenRuntimeSession.stop()` bottoms out in `AgentSession.abort()`, which is
+ * `abortRetry(); agent.abort(); await waitForIdle()` -- and `waitForIdle()`
+ * has no timeout of its own. An agent that never reaches idle therefore
+ * wedges the HTTP request forever and leaves the run row `running` until a
+ * restart reconciles it; that was observed twice on this build (iteration 3,
+ * implementer H) before the queue-clearing fix removed the one trigger then
+ * known. The hazard is general, so the deadline is here rather than at the
+ * one trigger.
+ *
+ * Ten seconds because a Stop that works is not close to it -- every live Stop
+ * measured in this loop returned in well under a second, including one taken
+ * mid-`sleep 40` -- while a wedged one must not hold a connection open until
+ * the browser gives up on its own and leaves the reader with nothing at all.
+ */
+const STOP_TIMEOUT_MS = 10_000;
+
+/**
+ * `work`, or `onTimeout()` thrown if it has not settled within `ms`.
+ *
+ * `Promise.race` has already attached handlers to `work`, so a rejection that
+ * arrives after the deadline is handled and does not surface as an unhandled
+ * rejection; the loser is abandoned, not cancelled.
+ */
+async function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  onTimeout: () => Error,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(onTimeout());
+    }, ms);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+const TITLE_LIMIT = 60;
+// A prompt's first clause is rarely this short, and when it is, it is
+// something like "Hi." or "Ok." rather than a title. Below this a sentence
+// boundary is ignored and the truncator takes over.
+const TITLE_SENTENCE_FLOOR = 12;
+// Words that carry no meaning at the end of a truncated title. Dropping the
+// last one turns "Create a file called LOCAL-CHECKOUT-PROOF.txt containing
+// the…" into "…containing…", which says the same thing without the dangle.
+const TITLE_TRAILING_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "but",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "then",
+  "to",
+  "with",
+]);
+
+/**
+ * The thread title used when the model-based namer is unavailable.
+ *
+ * This used to strip every character that is not a letter or a digit, which
+ * is exactly the wrong class to remove from a developer's prompt: it turned
+ * `LOCAL-CHECKOUT-PROOF.txt` into `LOCAL CHECKOUT PROOF` (no longer a
+ * filename), and it silently deleted the `&&` from `sleep 40 && ls`, changing
+ * the meaning of the command the title names. The sidebar title is the only
+ * handle a thread has, so identifiers are the part worth keeping.
+ *
+ * Punctuation is now kept and the length is managed by truncation instead:
+ *
+ *  1. whitespace collapses to single spaces (a newline is a break, not a
+ *     character to delete);
+ *  2. if the first sentence or line ends inside the limit, that is the title
+ *     -- `Run the shell command: sleep 40 && ls. Reply with…` becomes
+ *     `Run the shell command: sleep 40 && ls`, a complete clause with its
+ *     operator intact;
+ *  3. otherwise it is cut at the last word boundary that fits, a dangling
+ *     stopword or separator is dropped, and an ellipsis marks the cut.
+ *
+ * A `.` inside a filename is not a sentence end: a terminator only counts
+ * when whitespace or the end of the prompt follows it, which is what keeps
+ * `PROOF.txt` whole.
+ *
+ * Characters with no glyph are removed before any of that. The slug this
+ * replaced deleted them as a side effect of deleting all punctuation; `\s`
+ * does not, so without this step a prompt of nothing but a zero-width space
+ * produced a one-character title that renders as an empty sidebar row, and a
+ * NUL pasted out of a log file was persisted into one -- the same class of
+ * value `12dfd65` had to fix in the file tree's row keys.
+ */
+export function fallbackTitle(prompt: string): string {
+  const text = collapse(prompt);
+  if (text === "") return "New coding task";
+  // A line break is a break, not a character to delete: a prompt whose first
+  // line is a summary followed by a list or a code block has already told us
+  // where its title ends.
+  const line = collapse(prompt.split(/[\r\n]/u, 1)[0] ?? "");
+  const source = line.length >= TITLE_SENTENCE_FLOOR ? line : text;
+  const sentence = firstSentence(source);
+  const value =
+    sentence ??
+    (source.length <= TITLE_LIMIT
+      ? trimTail(source)
+      : truncateOnWord(source, TITLE_LIMIT));
   if (value === "") return "New coding task";
-  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+  return `${capitaliseFirst(value)}${value.slice(1)}`;
+}
+
+/**
+ * Characters that occupy no space and draw nothing: C0/C1 controls, the
+ * zero-width formatting marks, surrogates, private use and unassigned code
+ * points. `\s` covers only the space-like ones (plus U+FEFF), so these
+ * survive `collapse` and reach the title.
+ *
+ * ZWJ and ZWNJ are deliberately exempt. They are invisible themselves but
+ * they change which glyphs their neighbours draw -- an emoji sequence, a
+ * Persian word form -- so removing them corrupts text rather than cleaning
+ * it. Everything else in `\p{C}` can only ever subtract from what the reader
+ * can see.
+ */
+const INVISIBLE = /[^\P{C}\u200c\u200d]+/gu;
+
+function collapse(text: string): string {
+  return text.replace(INVISIBLE, "").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * The first character upper-cased, unless upper-casing it makes it longer.
+ *
+ * `"ß".toUpperCase()` is `"SS"` and `"ﬁ".toUpperCase()` is `"FI"`, so the
+ * naive form could return 61 characters from a 60-character budget and
+ * `TITLE_LIMIT` was not actually a bound. It also rewrites the word: a title
+ * is a label for what the user typed, not a place to expand their ligatures.
+ */
+function capitaliseFirst(value: string): string {
+  const head = value[0] ?? "";
+  const upper = head.toUpperCase();
+  return upper.length === head.length ? upper : head;
+}
+
+/**
+ * The first sentence, or null when there is none that makes a usable title.
+ *
+ * A terminator only counts when whitespace or the end of the string follows
+ * it, which is what keeps `PROOF.txt` whole -- the `.` there is followed by a
+ * letter, so it is part of an identifier and not the end of anything.
+ *
+ * The terminator itself is dropped, EXCEPT a question mark. A full stop adds
+ * nothing to a label, but `Why does the build fail` and
+ * `Why does the build fail?` are not the same sidebar entry: the first reads
+ * as a statement of fact about the build, the second as the thing the user
+ * asked. One `?` is restored however many the prompt piled up, so `What?!!`
+ * titles as `What?` rather than shouting in the sidebar.
+ */
+function firstSentence(text: string): string | null {
+  const match = /[.!?]+(?=\s|$)/u.exec(text);
+  if (match === null) return null;
+  const terminator = match[0].includes("?") ? "?" : "";
+  const sentence = `${text.slice(0, match.index).trim()}${terminator}`;
+  return sentence.length < TITLE_SENTENCE_FLOOR || sentence.length > TITLE_LIMIT
+    ? null
+    : sentence;
+}
+
+/** `text` cut to `limit` characters on a word boundary, ellipsis included. */
+function truncateOnWord(text: string, limit: number): string {
+  if (text.length <= limit) return trimTail(text);
+  // One character of the budget belongs to the ellipsis.
+  const window = text.slice(0, limit - 1);
+  const lastSpace = window.lastIndexOf(" ");
+  // A single word longer than the whole limit has no boundary to cut on, so
+  // it is cut mid-word rather than thrown away.
+  const head = lastSpace === -1 ? window : window.slice(0, lastSpace);
+  const trimmed = dropTrailingStopword(trimTail(head));
+  return trimmed === "" ? "New coding task" : `${trimmed}…`;
+}
+
+/** Drops trailing separators that would sit awkwardly before an ellipsis. */
+function trimTail(text: string): string {
+  return text.replace(/[\s,;:.!?-]+$/u, "");
+}
+
+function dropTrailingStopword(text: string): string {
+  const space = text.lastIndexOf(" ");
+  if (space === -1) return text;
+  const last = text.slice(space + 1).toLowerCase();
+  return TITLE_TRAILING_STOPWORDS.has(last) ? text.slice(0, space) : text;
 }
 
 export class WorkspaceService {
@@ -528,26 +745,92 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * The single gate every project path passes through, whether the OS folder
+   * picker chose it or a person typed it. It is deliberately ONE function:
+   * the typed route is a second door into the same room, not a second room
+   * with its own weaker lock.
+   *
+   * The failures used to collapse into one `project_unavailable`, which was
+   * tolerable when the only caller was a picker (the OS does not hand back
+   * paths that do not exist) and is not tolerable now that a person can
+   * mistype. A typo and a permissions problem are different problems with
+   * different next steps, so they get different codes.
+   */
   private async canonicalProject(path: string): Promise<string> {
+    // A NUL byte truncates a path in every C API beneath this one, so the
+    // string would not mean what it appears to mean. Refused, not trimmed.
+    if (path.includes("\u0000")) throw new Error("project_path_invalid");
+    // Relative paths are refused rather than resolved: they would resolve
+    // against the SERVER's working directory, which is not a place the person
+    // typing has any reason to be thinking about, and the project they got
+    // would not be the one they meant.
+    if (!isAbsolute(path)) throw new Error("project_path_relative");
     let canonical: string;
     try {
       canonical = await realpath(path);
-    } catch {
-      throw new Error("project_unavailable");
+    } catch (cause) {
+      throw missingPathError(cause);
     }
     let info: Awaited<ReturnType<typeof stat>>;
     try {
       info = await stat(canonical);
-    } catch {
-      throw new Error("project_unavailable");
+    } catch (cause) {
+      throw missingPathError(cause);
     }
     if (!info.isDirectory()) throw new Error("project_not_directory");
     try {
       await access(canonical, constants.R_OK | constants.X_OK);
     } catch {
-      throw new Error("project_unavailable");
+      throw new Error("project_not_readable");
     }
     return canonical;
+  }
+
+  /**
+   * Registers a project from a path supplied by the person using the app,
+   * rather than by the native folder picker.
+   *
+   * Same shape as {@link browseProject}: serialized on the `"process"` lane,
+   * replayed from a receipt when the same idempotency key comes back, and
+   * validated by the same {@link canonicalProject}. The request hash carries
+   * the path, so re-sending the same key with a DIFFERENT path is a conflict
+   * rather than a silent no-op that returns the first project.
+   */
+  public async addProjectByPath(
+    path: string,
+    idempotencyKey: string,
+  ): Promise<Project> {
+    const operation = "add-project-path";
+    const hash = canonicalRequestHash(operation, { path });
+    return await this.serialized(
+      "process",
+      idempotencyKey,
+      operation,
+      hash,
+      ProjectSchema,
+      async () => {
+        const prior = this.store.readReceipt(
+          "process",
+          idempotencyKey,
+          operation,
+          hash,
+          ProjectIdSchema,
+        );
+        if (prior !== null)
+          return await this.projectDto(this.requireProject(prior));
+        const canonical = await this.canonicalProject(path);
+        const receipt = this.store.withReceipt(
+          "process",
+          idempotencyKey,
+          operation,
+          hash,
+          ProjectIdSchema,
+          () => this.store.registerProject(canonical).id,
+        );
+        return await this.projectDto(this.requireProject(receipt.response));
+      },
+    );
   }
 
   public async registerSelectedProject(path: string): Promise<Project> {
@@ -1401,7 +1684,19 @@ export class WorkspaceService {
         const thread = this.requireThread(projectId, threadId);
         const run = this.store.runningRunForThread(threadId);
         if (run?.project_id !== projectId) throw new Error("run_not_active");
-        await (await this.openRuntime(thread)).stop();
+        // A Stop that could not be confirmed is not a Stop that worked, and
+        // the run row is what tells the reader which. Settling it
+        // `interrupted` here would say "stopped by the user" about an agent
+        // that is, as far as anything here knows, still running -- so the run
+        // is left exactly as it is and the caller gets an error naming that.
+        // Nothing is lost by waiting for the truth: `agent.abort()` has
+        // already been delivered, and the prompt's own settlement handler
+        // settles the row the moment the agent does come to rest.
+        await withDeadline(
+          (await this.openRuntime(thread)).stop(),
+          STOP_TIMEOUT_MS,
+          () => new Error("stop_timed_out"),
+        );
         const settlesCapturedRun =
           this.store.runningRunForThread(threadId)?.id === run.id;
         const settled = this.store.withReceipt(

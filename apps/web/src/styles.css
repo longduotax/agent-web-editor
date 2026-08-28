@@ -10,31 +10,166 @@
   --hairline-2: #e2e2e4;
   --text: #1d1d1f;
   --text-2: #3a3a3e;
-  --muted: #8a8a8f;
+  /* Secondary text. Chosen against the DARKEST background it ever lands on --
+     the --active row fill (#ececee) -- not against the page: 4.76:1 there,
+     5.62:1 on white, so every muted string clears WCAG AA 4.5:1 wherever it
+     sits. The old #8a8a8f was 2.91:1 on a hovered/selected row. */
+  --muted: #67676d;
+  /* Small glyph affordances (the + and the ...), which are single 11-16px
+     characters rather than words and so need more contrast than body-sized
+     muted text to stay findable: 5.80:1 on --active, 6.84:1 on white. */
+  --glyph: #5a5a61;
+  /* Quiet text that is BODY COPY rather than chrome, and therefore has to
+     clear WCAG AA against the surface it sits on (J3). `--muted` is 3.44:1
+     on this page's white, which is fine for a label beside something else
+     and not fine for the words of a sentence: one real README renders 23
+     inert links inside running prose, and the panel's own notices are the
+     sentences it uses to tell the truth about a bounded view. 5.96:1 here,
+     6.15:1 in dark; `styles.test.ts` keeps it honest. */
+  --muted-body: #63636a;
+  --file-gutter-colour: #66666c;
+  /* The diff's own palette (WSP-06). Deliberately NOT aliases of `--green`
+     and `--red`: those are chosen against the page's white, and the diff
+     paints its text on a tinted wash of its own, which is the surface the
+     contrast has to clear. Every pair below is computed in
+     `styles.test.ts` — each foreground against its own background, and the
+     gutter colour against all three washes plus the plain code surface. */
+  --diff-add-fg: #186a35; /* 5.81:1 on its own background */
+  --diff-add-bg: #e2f4e7;
+  --diff-delete-fg: #a8271c; /* 5.90:1 */
+  --diff-delete-bg: #fbe6e4;
+  --diff-hunk-fg: #1a5fd0; /* 5.01:1 */
+  --diff-hunk-bg: #e6eefc;
+  --diff-gutter-colour: #66666c; /* 4.76:1 at worst, on the delete wash */
   --faint: #b3b3b8;
-  --green: #2f9e44;
+  --green: #1e7b34;
   --red: #d1453b;
-  --amber: #c07d16;
+  /* WARNING TEXT, and only warning text. It was #c07d16 -- the same value as
+     --run -- which is 3.39:1 on white and 3.13:1 on its own 8% tint: the
+     least legible text in light mode, and it is the local-checkout warning.
+     #8a5a0f measures 5.92:1 on --card, 5.30:1 on the 8% tint every warning
+     callout paints behind itself, 5.38:1 on --hover and 5.01:1 on --active --
+     so it clears AA on every background it lands on by margin, not by a
+     hundredth.
+
+     It is deliberately NOT shared with --run any more. --run is the colour of
+     a run in progress (a 6px pulsing dot, a spinner rim, a "Working" label);
+     darkening that to satisfy a text rule would dull the one moving signal in
+     the app to fix a sentence somewhere else. The two just happened to be the
+     same hex, which is how a status colour ended up carrying a warning.
+
+     That separation is what this token IS, in both themes -- but the two
+     values only DIVERGE in light. In dark they are both #d6a53a, which is a
+     measurement and not a shared definition: they are two independent
+     declarations that happen to agree, the way they once did in light, and
+     changing either moves only itself. Dark amber needs no darkening, so
+     there is nothing to buy by making them differ: 7.47:1 on --card, 6.52:1
+     on the 8% tint the warning callout paints behind itself, 7.13:1 on
+     --hover, 6.69:1 on --active. */
+  --amber: #8a5a0f;
   --accent: #2f6feb;
   --send-bg: #1d1d1f;
   --send-fg: #ffffff;
   --run: #c07d16;
+  /* The same colour SAID IN WORDS. --run is a signal colour tuned for a 6px
+     pulsing dot and a spinner rim, which only have to clear 3:1 as non-text
+     indicators; at 3.39:1 on white it is not a text colour, and the two
+     places that painted words with it -- the pane header's "Working" and the
+     composer's "Enter to steer this run" hint -- were the last two AA text
+     failures in light mode. They are also the only two that appear ONLY
+     while a run is in flight, which is why three rounds of contrast audits
+     on idle routes never saw them.
+
+     Same reasoning that split --amber off --run: darken the ink, leave the
+     signal alone. 5.92:1 on --card, 5.38:1 on --hover, 5.01:1 on --active.
+     Dark mode already clears AA at --run (7.47:1 on --card), so there it is
+     the same value and the token costs nothing. */
+  --run-ink: #8a5a0f;
   --wait: #2f6feb;
-  --done: #2f9e44;
+  --done: #1e7b34;
   --fail: #d1453b;
-  --focus-ring: rgba(47, 111, 235, 0.5);
+  /* --fail said in words, for the same reason as --run-ink, and it is the
+     bigger of the two: --fail is legible on white (4.54:1) but every place
+     the app paints failure TEXT it first paints a tint of --fail behind it,
+     which drags the ratio under AA -- the Stop button on its 18% tint is
+     3.55:1, the least legible control on screen, and every .error-notice is
+     4.07:1 on its 8% tint.
+
+     #ad3228 measured against the backgrounds these actually paint on:
+     6.43:1 on --card, 5.76:1 on the 8% tint, 5.32:1 on the 14% hover tint,
+     5.04:1 on the Stop button's 18% tint. Backgrounds, dots and borders keep
+     --fail: the red fill is a signal and dulling it would flatten the one
+     alarming colour in the design to fix a legibility problem in the ink. */
+  --fail-ink: #ad3228;
+  /* The sidebar's unread bullet. --accent is 3.87:1 on the --active row fill
+     it usually sits on -- fine for a 3:1 status indicator, which is why this
+     is not filed as a failure, but it is the same accent-blue-on-light that
+     keeps turning up in whole-page audits. A dedicated token darkens the one
+     glyph without moving --accent app-wide (which is the open question N3 is
+     parked on): 5.28:1 on --active, 6.23:1 on the sidebar, 5.67:1 on
+     --hover. */
+  --unread: #255bc4;
+  /* A settled run that did not succeed and did not fail: the user stopped
+     it, or the project went away. Deliberately NOT amber -- amber is --run,
+     the colour of a run still GOING -- and deliberately not green. --muted is
+     this design's "settled, unremarkable" grey and already clears AA (4.76:1
+     on the darkest row fill it lands on) in both themes, because it is
+     defined per theme and this only references it. */
+  --stop: var(--muted);
+  /* An archived thread. Same neutral family as --stop: archiving is not an
+     error, it is a thread put away. */
+  --archived: var(--muted);
+  /* Opaque, not 50% alpha: a half-transparent ring composites down to about
+     2.3:1 on white, under the 3:1 that a focus indicator needs to be seen. */
+  --focus-ring: var(--accent);
   --card-shadow: 0 1px 2px rgba(20, 20, 30, 0.05);
   --pop-shadow:
     0 10px 30px rgba(20, 25, 40, 0.12), 0 2px 8px rgba(20, 25, 40, 0.06);
+  /* The workspace panel's docked outer edge, and nothing else: the panel is
+     a different plane from the chat surface behind it, and on a white page a
+     hairline alone barely says so. Short and soft — strongest at the edge,
+     gone within a few pixels — so it separates the two surfaces without
+     turning into a drop shadow the rest of this design does not use. */
+  --dock-shadow: -2px 0 8px -2px rgba(20, 25, 40, 0.16);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
-/* One reading column for the whole surface (D-3). The transcript, the
-   composer and the new-chat card all size on this and nothing else; no
-   component may hardcode its own measure. */
+/* The surface's widths (D-3). TWO tokens, not one, and the distinction is
+   load-bearing: --surface-measure is the axis every surface sits on, and
+   --transcript-measure narrows the transcript's prose column inside it. Both
+   still live here -- no component may hardcode a measure of its own. The
+   split is deliberate: one measure could not serve a card of controls, a
+   composer, running prose and 80-column code at once, and the version that
+   tried made the new-chat toolbar wrap. */
 :root {
+  /* The surface axis (CWS-07): the width the composer and the new-chat card
+     size on, and the outer bound of the transcript. Unchanged at 48rem --
+     narrowing THIS is what pushed the new-chat toolbar's three selects toward
+     a second row, and prose readability is not a good enough reason to reflow
+     a card that is not prose. */
   --surface-measure: 48rem;
-  /* One height for the top-of-column header rows (inspector tabs and the
-     collapsed inspector rail). */
+  /* The transcript's own, tighter reading measure, nested INSIDE the surface
+     axis rather than competing with it (see .transcript-column). Prose and
+     code pull in opposite directions here and the two cannot both be
+     satisfied; this value resolves the conflict in favour of code, and the
+     numbers behind it are:
+
+       - An 80-column block must not scroll horizontally. `.markdown pre` sets
+         0.78rem (12.48px) ui-monospace, whose advance measures 7.5056px in
+         Chrome (0.6014em), so 80 columns is 600.5px; plus 2x0.8rem padding
+         and 2x1px border, the column must be at least 628.7px = 39.3rem.
+       - Prose wants the opposite. Measured across 48 real transcript
+         paragraphs, the median FULL line runs 80 characters at 38rem and 83
+         at 40rem -- so a <=80 measure needs <=38rem.
+
+     There is no width that does both. 40rem is the narrowest ROUND value that
+     clears the code floor with real slack (11.3px, ~1.5 columns, enough to
+     absorb the advance difference between SF Mono and the Menlo fallback);
+     39.5rem clears it by only 3.3px. Prose lands at 83 -- three characters
+     over target, and far better than the 112 it started at. Flip this one
+     token to 38rem to spend it the other way. */
+  --transcript-measure: 40rem;
+  /* One height for the top-of-column header rows (the panel's tab strip and
+     its collapsed rail). */
   --header-h: 3.8rem;
 }
 /* keep the repo's legacy alias names pointing at the new tokens so existing
@@ -56,6 +191,45 @@
   --term-cursor: var(--accent);
 }
 
+/* Syntax highlighting for the File tab (WSP-05: "derived from the active
+   theme's tokens"). The highlighter's theme names these variables instead of
+   carrying colours of its own, so a highlighted file re-maps on a theme
+   switch with no re-highlight, no listener, and no reload — the same
+   mechanism the terminal's tokens above rely on.
+
+   **They are their own colours rather than aliases of the status palette,
+   and that is the fix for J2.** Most of them used to be aliases —
+   `--code-string: var(--green)`, `--code-number: var(--amber)` — and those
+   status hues are chosen against the page's white, not against the
+   preview's `--hover` panel. Measured on that panel, six of nine light
+   tokens were below the 4.5:1 AA bar and the two carrying the most text
+   were the worst: in one real file, of 735 coloured spans, 178 were strings
+   and 202 comments, both at 3.13:1. The majority of coloured text in the
+   light theme was the failing part, which is why it read as washed out
+   rather than as structure.
+
+   The light values below are the same hues, darkened until each clears
+   4.5:1 on `--hover` with margin, and kept apart from each other so the
+   palette still says something: red, amber, green, teal, blue, purple, and
+   one grey — comments and punctuation share it, as they always have, and a
+   comment is told from an operator by being italic rather than by a tint
+   too small to see. The dark values are unchanged — every one of them already
+   passed — and are written as literals for the same reason the light ones
+   are. `apps/web/src/styles.test.ts` computes all of it. */
+:root {
+  --code-plain: #3a3a3e; /* 10.30:1 */
+  --code-comment: #63636a; /* 5.42:1, italic in the theme */
+  --code-punctuation: #63636a; /* 5.42:1 */
+  --code-string: #187038; /* 5.60:1 */
+  --code-number: #8a5510; /* 5.64:1 */
+  --code-constant: #b32d22; /* 5.76:1 */
+  --code-function: #1a5fd0; /* 5.32:1 */
+  --code-tag: #b32d22; /* 5.76:1 */
+  --code-attribute: #8a5510; /* 5.64:1 */
+  --code-keyword: #8a2fb0; /* 6.13:1 */
+  --code-type: #0b6a77; /* 5.72:1 */
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -70,20 +244,60 @@
     --text: #ececee;
     --text-2: #c3c5cb;
     --muted: #8b8d95;
+    --glyph: #9a9ca4;
+    --muted-body: #9a9ca4;
+    --file-gutter-colour: #8b8d95;
+    --diff-add-fg: #5cc97c; /* 6.84:1 on its own background */
+    --diff-add-bg: #16301f;
+    --diff-delete-fg: #ef7a72; /* 5.51:1 */
+    --diff-delete-bg: #3a1f20;
+    --diff-hunk-fg: #7cabff; /* 6.25:1 */
+    --diff-hunk-bg: #1b2a44;
+    --diff-gutter-colour: #9ea0a8; /* 5.45:1 at worst, on the add wash */
     --faint: #62646c;
     --green: #4ec06f;
     --red: #e0645c;
+    /* Same value as --run below, and independent of it: see the note on the
+       light --amber. Dark needs no darkened warning ink (6.52:1 on the tint
+       the callout paints), so the split that light needed buys nothing here. */
     --amber: #d6a53a;
     --accent: #6aa0ff;
     --send-bg: #ececee;
     --send-fg: #16171a;
     --run: #d6a53a;
+    /* Dark already clears AA at the signal colour (7.47:1 on --card), so the
+       ink is the signal. The token exists so the selectors do not have to
+       branch per theme. */
+    --run-ink: var(--run);
     --wait: #6aa0ff;
     --done: #4ec06f;
     --fail: #e0645c;
-    --focus-ring: rgba(106, 160, 255, 0.55);
+    /* Dark has the same tint problem as light and had never been measured
+       either: --fail is 3.91:1 on the Stop button's 18% tint here. Lightened
+       rather than darkened, because the ground is dark: 5.96:1 on --card,
+       5.41:1 on the 8% tint, 4.72:1 on the 18% tint. */
+    --fail-ink: #e77a72;
+    --unread: var(--accent);
+    --focus-ring: var(--accent);
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+    /* Dark needs its own value, not the light one: a shadow tuned for a
+       white page is invisible here. The panel's surface is already LIGHTER
+       than the page, so a black shadow deepens the gutter between them and
+       reads as the panel sitting above — the same direction of separation,
+       carried by the opposite colour. */
+    --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+    --code-plain: #c3c5cb; /* 9.32:1 */
+    --code-comment: #8b8d95; /* 4.86:1 */
+    --code-punctuation: #8b8d95; /* 4.86:1 */
+    --code-string: #4ec06f; /* 6.97:1 */
+    --code-number: #d6a53a; /* 7.13:1 */
+    --code-constant: #e0645c; /* 4.71:1 */
+    --code-function: #6aa0ff; /* 6.20:1 */
+    --code-tag: #e0645c; /* 4.71:1 */
+    --code-attribute: #d6a53a; /* 7.13:1 */
+    --code-keyword: #cba6f7; /* 7.92:1 */
+    --code-type: #4dc3d4; /* 7.72:1 */
   }
 }
 :root[data-theme="dark"] {
@@ -99,20 +313,46 @@
   --text: #ececee;
   --text-2: #c3c5cb;
   --muted: #8b8d95;
+  --glyph: #9a9ca4;
+  --muted-body: #9a9ca4;
+  --file-gutter-colour: #8b8d95;
+  --diff-add-fg: #5cc97c; /* 6.84:1 on its own background */
+  --diff-add-bg: #16301f;
+  --diff-delete-fg: #ef7a72; /* 5.51:1 */
+  --diff-delete-bg: #3a1f20;
+  --diff-hunk-fg: #7cabff; /* 6.25:1 */
+  --diff-hunk-bg: #1b2a44;
+  --diff-gutter-colour: #9ea0a8; /* 5.45:1 at worst, on the add wash */
   --faint: #62646c;
   --green: #4ec06f;
   --red: #e0645c;
+  /* Same value as --run below, and independent of it: see the light --amber. */
   --amber: #d6a53a;
   --accent: #6aa0ff;
   --send-bg: #ececee;
   --send-fg: #16171a;
   --run: #d6a53a;
+  --run-ink: var(--run);
   --wait: #6aa0ff;
   --done: #4ec06f;
   --fail: #e0645c;
-  --focus-ring: rgba(106, 160, 255, 0.55);
+  --fail-ink: #e77a72;
+  --unread: var(--accent);
+  --focus-ring: var(--accent);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --dock-shadow: -2px 0 10px -2px rgba(0, 0, 0, 0.55);
+  --code-plain: #c3c5cb; /* 9.32:1 */
+  --code-comment: #8b8d95; /* 4.86:1 */
+  --code-punctuation: #8b8d95; /* 4.86:1 */
+  --code-string: #4ec06f; /* 6.97:1 */
+  --code-number: #d6a53a; /* 7.13:1 */
+  --code-constant: #e0645c; /* 4.71:1 */
+  --code-function: #6aa0ff; /* 6.20:1 */
+  --code-tag: #e0645c; /* 4.71:1 */
+  --code-attribute: #d6a53a; /* 7.13:1 */
+  --code-keyword: #cba6f7; /* 7.92:1 */
+  --code-type: #4dc3d4; /* 7.72:1 */
 }
 body {
   min-width: 320px;
@@ -153,25 +393,36 @@ a:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
+/* `clip`, never `hidden`. The collapsed panel parks itself off-canvas with
+   `transform: translateX(100%)` on a 400px box, which leaves 400px of
+   scrollable overflow past the grid's right edge -- `visibility: hidden`
+   hides the panel but does not remove it from the scrollable region.
+   `overflow: hidden` clips that but still makes the shell a SCROLL
+   CONTAINER, so the browser's scroll-into-view on the first click inside a
+   pane drove scrollLeft to 400 and dragged the project sidebar off-screen
+   with no scrollbar to bring it back. `clip` paints identically and creates
+   no scroll container at all, so scrollLeft is permanently 0 and the panel's
+   slide-in transition still animates from off-canvas. `overflow-clip-margin`
+   is left at its initial 0px -- nothing outside the box may paint. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr);
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
+  overflow: clip;
   background: var(--surface-0);
 }
-.workspace.inspector-available {
+.workspace.panel-available {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 0;
   transition: grid-template-columns 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.workspace.inspector-railed {
+.workspace.panel-railed {
   grid-template-columns: minmax(220px, 17rem) minmax(360px, 1fr) 2.75rem;
 }
-.workspace.inspector-visible {
+.workspace.panel-visible {
   grid-template-columns:
     minmax(220px, 17rem) minmax(360px, 1fr)
-    var(--inspector-width, 400px);
+    var(--panel-width, 400px);
 }
 .mobile-toolbar {
   display: none;
@@ -245,6 +496,87 @@ a:focus-visible {
   color: var(--send-fg);
   background: var(--accent);
 }
+/* Explains the disabled "Opening…" button above it: the app is waiting on a
+   window it does not own and cannot raise. Quiet, not an alert -- nothing has
+   gone wrong yet. */
+.add-project-waiting {
+  margin: 0;
+  padding: 0 0.8rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+/* The typed-path fallback. Collapsed, it is one line of muted 11.5px text
+   under the primary button -- the sidebar's common case is unchanged and
+   Browse is still the only thing with weight on it. Everything below only
+   exists once the reader opens it. */
+.add-project-path {
+  margin-top: 0.45rem;
+}
+.add-project-path > summary {
+  width: fit-content;
+  padding: 0.15rem 0.2rem;
+  border-radius: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.add-project-path > summary:hover {
+  color: var(--text-2);
+}
+.add-project-path > summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.add-project-path form {
+  display: flex;
+  margin-top: 0.4rem;
+  gap: 0.35rem;
+}
+.add-project-path input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background: var(--page);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+.add-project-path input:focus-visible {
+  border-color: var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+/* Overrides `.add-project button`, which is the full-width accent primary.
+   Two routes to the same place must not both look like the main one. */
+.add-project-path button {
+  width: auto;
+  flex: none;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background: var(--surface-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-project-path button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.add-project-path-note {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.add-project-path .error-notice {
+  margin-top: 0.5rem;
+}
 .project-list {
   flex: 1;
   overflow: auto;
@@ -267,7 +599,7 @@ a:focus-visible {
   flex: none;
   border: 0;
   border-radius: 0.3rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   cursor: pointer;
 }
@@ -294,7 +626,7 @@ a:focus-visible {
   background: var(--surface-3);
 }
 .icon-button.danger:hover {
-  color: var(--red);
+  color: var(--fail-ink);
 }
 .project-link {
   display: grid;
@@ -310,9 +642,14 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* --unread, not --blue: the row this sits on is --active when the project is
+   selected, where --accent is 3.87:1. It clears 1.4.11's 3:1 as a status
+   indicator either way, so this is not a failure being closed -- it is the
+   accent-on-light problem N3 tracks, removed from the one place it can be
+   removed without moving --accent app-wide. */
 .unread-dot {
   margin: 0.2rem;
-  color: var(--blue);
+  color: var(--unread);
   font-size: 0.7rem;
 }
 .thread-list {
@@ -344,7 +681,7 @@ a:focus-visible {
   padding: 0.2rem 0.35rem;
   border: 0;
   border-radius: 0.35rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   font-size: 0.72rem;
   font-weight: 600;
@@ -440,7 +777,7 @@ a:focus-visible {
   line-height: 1;
   border: 0;
   border-radius: 0.3rem;
-  color: var(--muted);
+  color: var(--glyph);
   background: transparent;
   cursor: pointer;
 }
@@ -450,15 +787,68 @@ a:focus-visible {
   color: var(--text);
   background: var(--active);
 }
+/* One column, not three. The field used to share the row with Save and
+   Cancel, which took 115px of a 227px row and left the input at 95px -- about
+   twelve characters of a title that is routinely fifty. The buttons are worth
+   less than the text they were crowding, so they moved to a second line and
+   the field takes the whole width. */
 .thread-rename {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.3rem;
   padding: 0.3rem;
 }
+/* A wrapping textarea rather than a one-line input: at this width a long
+   title is fully visible across two or three short lines instead of scrolling
+   past a slot. `resize: none` because it sizes itself (useAutoGrow) and a
+   drag handle inside a sidebar row would fight the list. */
+.thread-rename textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  /* The outline is drawn as an inset shadow rather than a border ON PURPOSE.
+     useAutoGrow sets `height = scrollHeight`, which measures content plus
+     padding but not borders; against `box-sizing: border-box` a real 1px
+     border therefore eats 2px off the content box and clips the last line by
+     a sliver. The composer textareas never hit this because their border sits
+     on the wrapper. A shadow contributes nothing to the box, so the field
+     grows to exactly the height its text needs. */
+  border: 0;
+  border-radius: 0.35rem;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+  background: var(--card);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  resize: none;
+}
+.thread-rename textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.thread-rename-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+/* Enter and Escape both already worked and neither was written down
+   anywhere. The buttons stay for the pointer; this is for everyone else. */
+.thread-rename-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .thread-rename .error-notice {
-  grid-column: 1 / -1;
+  margin: 0;
 }
 .thread-context-menu {
   position: fixed;
@@ -470,7 +860,19 @@ a:focus-visible {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   background: var(--card);
-  box-shadow: 0 0.65rem 1.8rem #0008;
+  /* Was `#0008` -- 53% black, which on a near-white sidebar reads as a muddy
+     bruise rather than elevation. Share the app's popover token instead, so
+     this menu weighs the same as .panel-menu and .undo-toast rather than
+     carrying a hardcoded alpha of its own.
+
+     IN LIGHT MODE that is the fix the finding asked for: 12% at the spread,
+     6% at the contact edge. IN DARK MODE --pop-shadow is deliberately much
+     heavier (50% black) and this menu inherits that. It is not an oversight
+     and it is not "free": a shadow tuned for a white page is invisible on a
+     #131417 one, which is the same reason --dock-shadow above carries its own
+     dark value. 53% black was wrong under a near-white popover and is right
+     under a dark one. */
+  box-shadow: var(--pop-shadow);
 }
 .thread-context-menu button {
   border: 0;
@@ -481,13 +883,24 @@ a:focus-visible {
   text-align: left;
   cursor: pointer;
 }
-.thread-context-menu button:hover:not(:disabled),
+.thread-context-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+/* Focus needs a ring, not just the hover fill: --hover on --card is a 1.03:1
+   difference, invisible as the sole indicator of where the keyboard is. The
+   ring is inset so it cannot be clipped by the menu's own `overflow: hidden`. */
 .thread-context-menu button:focus-visible {
   background: var(--hover);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
-.thread-context-menu button:last-child:not(:disabled) {
-  color: var(--fail);
+/* Red is the app's only "you might not get this back" signal, so it is spent
+   only on actions that are actually irreversible -- NOT on Archive, which
+   stages an undo toast and leaves the thread one click away in the sidebar's
+   Archived section. Nothing in this menu claims it today; the class stays so
+   a genuinely destructive item can opt in by name rather than by position. */
+.thread-context-menu button.destructive:not(:disabled) {
+  color: var(--fail-ink);
 }
 .thread-context-menu button:disabled {
   color: var(--muted);
@@ -524,6 +937,12 @@ a:focus-visible {
 }
 .sdot.fail {
   background: var(--fail);
+}
+.sdot.stop {
+  background: var(--stop);
+}
+.sdot.archived {
+  background: var(--archived);
 }
 @media (prefers-reduced-motion: reduce) {
   .sdot.run {
@@ -579,6 +998,13 @@ a:focus-visible {
   min-height: 0;
   flex-direction: column;
 }
+/* Escape in a composer parks focus on the pane shell (paneFocus.ts). The ring
+   is inset because the pane is flush against its neighbour and an outset one
+   would be clipped by .tiling-surface's scroll box. */
+.pane:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
 .pane > .center {
   flex: 1;
   min-height: 0;
@@ -586,8 +1012,22 @@ a:focus-visible {
 /* The pane's ONE header: a title row plus an optional quiet detail line.
    Nothing below it restates the title, the run status or the trust note. */
 .pane-head {
+  /* A query container so the header responds to the PANE's width, not the
+     window's. At 1280px the same viewport holds a 964px pane or three 360px
+     ones, so a viewport media query cannot tell the two apart. Scoped to the
+     header rather than the whole pane: the smallest box that answers the
+     question.
+
+     `container-type: inline-size` implies `contain: layout`, which makes this
+     the containing block for any absolutely positioned descendant. There IS
+     one -- the trust note's `.sr-only` span -- and it is unaffected: it sets
+     no offsets, so it stays in its static position, and it is clipped to 1px
+     either way. Anything added inside this header that positions itself
+     against an ancestor will now resolve against the header. */
+  container-type: inline-size;
+  container-name: pane-head;
   display: flex;
-  /* Pinned, not content-derived: every pane header and the inspector's own
+  /* Pinned, not content-derived: every pane header and the panel's own
      top row share --header-h, so their bottom hairlines land on one line in
      a multi-pane layout at every width. A wrapping detail line used to make
      one header 34px taller than its neighbour. */
@@ -667,8 +1107,15 @@ a:focus-visible {
 .pane-head .status .sdot.fail {
   background: var(--fail);
 }
+.pane-head .status .sdot.stop {
+  background: var(--stop);
+}
+.pane-head .status .sdot.archived {
+  background: var(--archived);
+}
+/* The word "Working", not the dot beside it: --run-ink, not --run. */
 .pane-head .status.run {
-  color: var(--run);
+  color: var(--run-ink);
 }
 .pane-head .status.wait {
   color: var(--wait);
@@ -677,7 +1124,13 @@ a:focus-visible {
   color: var(--done);
 }
 .pane-head .status.fail {
-  color: var(--fail);
+  color: var(--fail-ink);
+}
+.pane-head .status.stop {
+  color: var(--stop);
+}
+.pane-head .status.archived {
+  color: var(--archived);
 }
 .pane-head .status-elapsed {
   color: var(--muted);
@@ -752,8 +1205,9 @@ a:focus-visible {
   color: var(--text);
   background: var(--hover);
 }
+/* Hover paints --hover behind it, where --fail is 4.13:1. */
 .pane-head .acts .icon-btn.danger:hover {
-  color: var(--fail);
+  color: var(--fail-ink);
 }
 .pane-head .ico {
   width: 0.875rem;
@@ -855,9 +1309,22 @@ a:focus-visible {
 .tiling-tiles > .tiling-split-child {
   flex: 1;
 }
+/* CWS-07's minimum usable pane width, enforced PER PANE.
+   `--pane-min-width` is set on .tiling-surface from MIN_PANE_WIDTH_PX so the
+   number has one source (TilingSurface.tsx).
+
+   It used to be enforced only as a total (a min-width of paneCount x 360 on
+   .tiling-tiles), which is the right floor but says nothing about how the
+   space is divided. With three panes at a 0.5 / 0.25 / 0.25 split and 1080px
+   of tiles, the flex distribution handed out 540 / 270 / 270 -- two panes 25%
+   BELOW the minimum the spec guarantees they never go under. A min-width on
+   the region makes the flex algorithm clamp each pane instead, and the
+   ancestors carry `min-width: auto` so that clamp propagates up the split
+   tree into the surface's own scroll width rather than overflowing a
+   split-child and painting over its neighbour. */
 .tiling-region {
   display: flex;
-  min-width: 0;
+  min-width: var(--pane-min-width, 22.5rem);
   min-height: 0;
   flex: 1;
 }
@@ -866,7 +1333,7 @@ a:focus-visible {
 }
 .tiling-split {
   display: flex;
-  min-width: 0;
+  min-width: auto;
   min-height: 0;
   flex: 1;
 }
@@ -878,7 +1345,7 @@ a:focus-visible {
 }
 .tiling-split-child {
   display: flex;
-  min-width: 0;
+  min-width: auto;
   min-height: 0;
 }
 .tiling-divider {
@@ -976,10 +1443,19 @@ a:focus-visible {
 }
 /* A block container, not a flex one: `text-overflow: ellipsis` only applies
    to a block container's own inline content, and this line must ellipsise
-   inside the single-row pane header rather than clip mid-word. */
+   inside the single-row pane header rather than clip mid-word.
+
+   `flex: none` because the note never shrinks. Both halves of the detail
+   line shrank proportionally by default, which ellipsised the WARNING as
+   readily as the branch name beside it -- at a 942px pane the full sentence
+   still lost its last 59px. A truncated identifier is recoverable (you
+   recognise a branch from its first characters); a truncated warning is
+   not. So the note takes the width it needs and .pane-meta absorbs the
+   difference. */
 .trust-note {
   display: block;
   min-width: 0;
+  flex: none;
   margin: 0;
   color: var(--muted);
 }
@@ -991,6 +1467,41 @@ a:focus-visible {
 .trust-note strong {
   color: var(--muted);
   font-weight: 650;
+}
+/* The trust note is the one line in this header that must never be read
+   half-way. At a 360px pane the full sentence (587px of text) was ellipsised
+   to "Pi tools run with your user permissions, without appl..." -- a security
+   notice cut off exactly before the part that matters. It gets a short form
+   instead: still a whole sentence, still true, with the full wording on the
+   header's title attribute and in the accessibility tree either way.
+
+   Short is the DEFAULT and the long form is the enhancement, so a browser
+   without container query support shows the complete short notice rather
+   than a truncated long one. 48rem is where the full 587px sentence fits
+   with enough left over for the workspace label to stay readable
+   (measured). */
+.trust-note-long {
+  display: none;
+}
+.trust-note-short {
+  display: inline;
+}
+@container pane-head (min-width: 48rem) {
+  .trust-note-long {
+    display: inline;
+  }
+  .trust-note-short {
+    display: none;
+  }
+}
+/* The project chip repeats what the sidebar already says, and at a narrow
+   pane it was costing ~110px that the thread title needed to stay readable
+   ("Reply with ex..."). The title is the only thing in this row that
+   identifies the pane, so the chip yields to it. */
+@container pane-head (max-width: 30rem) {
+  .pane-head .repo {
+    display: none;
+  }
 }
 .trust-dot {
   width: 5px;
@@ -1009,13 +1520,17 @@ a:focus-visible {
      centered reading column off the composer's axis. */
   scrollbar-gutter: stable both-edges;
 }
-/* The reading column. Shares --surface-measure with the composer and the
-   new-chat card so the conversation and the input it answers sit on one
-   axis; below that width it shrinks with the pane instead of clipping. */
+/* The reading column, capped by BOTH measures. --surface-measure is the axis
+   the composer and the new-chat card sit on, and the transcript may never
+   exceed it -- a reply wider than the input that asked for it is exactly the
+   misalignment CWS-07 exists to prevent. --transcript-measure then narrows it
+   further for prose. The transcript's measure is therefore nested inside the
+   shared axis, not competing with it: whichever is tighter wins, and below
+   either the column shrinks with the pane instead of clipping. */
 .transcript-column {
   width: 100%;
   min-width: 0;
-  max-width: var(--surface-measure);
+  max-width: min(var(--transcript-measure), var(--surface-measure));
   margin-inline: auto;
 }
 /* Load-bearing containment rule: NOTHING in the transcript may widen the
@@ -1051,30 +1566,88 @@ a:focus-visible {
 .transcript-column :is(details, summary, pre, table) {
   min-width: 0;
 }
-/* Wide tabular content scrolls in its own box rather than widening the column. */
-.markdown table {
-  display: block;
-  overflow-x: auto;
+/* Wide tabular content scrolls in its own box rather than widening the column.
+   The scroll container is a real wrapper element (see Markdown.tsx), not the
+   table itself: `display: block` on a <table> makes the element a scroll box
+   but leaves the anonymous table inside it shrink-to-fit against the SAME
+   width, so a wide table compressed its columns and wrapped every cell
+   instead of ever overflowing. A wrapper plus `width: max-content` on a table
+   that is still `display: table` is what actually produces the overflow, and
+   therefore the scrollbar -- the same arrangement `pre` already has.
+
+   This is D1's constraint working, not fighting it: the wrapper is bounded by
+   the transcript measure and the table scrolls inside it, so no table can
+   widen the reading column. */
+.markdown-table-scroll {
   max-width: 100%;
+  margin-bottom: 1.4em;
+  overflow-x: auto;
+}
+.markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.markdown-table-scroll > table {
+  width: max-content;
+  max-width: none;
+  /* The actual finding: the table parsed correctly and rendered as ragged
+     tab-separated text -- `border-collapse: separate`, `td` border `0px
+     none`, `th` background transparent -- with nothing tying a cell to its
+     column. Everything else in this renderer is styled; tables were the one
+     thing left bare. */
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.45;
+}
+.markdown :is(th, td) {
+  padding: 0.34rem 0.7rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+/* A heavier rule under the header than between rows, so the head reads as a
+   head rather than as the first row in bold. */
+.markdown th {
+  border-bottom: 2px solid var(--hairline-2);
+  color: var(--text);
+  background: var(--hover);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.markdown tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+/* The first and last cells sit flush with the reading column's left edge and
+   with the table's right edge; the padding is there to separate columns from
+   each other, not to inset the block from the text above it. */
+.markdown :is(th, td):first-child {
+  padding-left: 0;
+}
+.markdown :is(th, td):last-child {
+  padding-right: 0;
 }
 .u-row {
   display: flex;
   margin: 0 0 1.4rem;
   justify-content: flex-end;
 }
+/* Transcript body copy is 1rem, not 0.9rem. Pi's answers are the product and
+   14.4px is small for sustained prose; 16px also matches what the composer
+   already renders (it inherits the root size), so the turn the user types and
+   the turn they read are finally set in the same type. */
 .u-bubble {
   max-width: 80%;
   padding: 0.62rem 0.9rem;
   border-radius: 1.05rem;
   background: var(--user-pill);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.5;
 }
 .a-block {
   margin: 0 0 1.4rem;
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.6;
 }
 .worked-group {
@@ -1094,6 +1667,29 @@ a:focus-visible {
 }
 .worked:hover {
   color: var(--text-2);
+}
+/* The failure count, carried in the COLLAPSED summary. `.worked` is --muted
+   and stays that way; this one span takes the failure colour, so a run that
+   got nothing done can no longer be mistaken at a glance for one that did.
+
+   The separator is a pseudo-element so it can be --muted while the count
+   beside it is --fail-ink, which is a painting reason and the only one. It
+   used to claim an accessibility reason as well -- that a screen reader would
+   hear "2 steps, 41s, 2 failed" without the dot. That was wrong twice over:
+   Chrome puts generated content in the accessibility tree, and `runLabel`
+   already emits a literal `·` into "2 steps · 41s" two spans earlier, so
+   there was never a dot-free reading to protect. */
+.worked-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--fail-ink);
+  font-weight: 600;
+}
+.worked-failed::before {
+  content: "·";
+  color: var(--muted);
+  font-weight: 400;
 }
 .worked .chev {
   transition: transform 0.12s ease;
@@ -1117,6 +1713,15 @@ a:focus-visible {
   color: var(--text);
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+/* The UA default paragraph margin is 1em, which against a 1.6 line-height
+   leaves less air between two paragraphs than between two lines of the same
+   paragraph -- so paragraph boundaries barely register. 1.4em reads as a
+   break without loosening the block. Bottom-only, because
+   `.markdown > :first-child`/`:last-child` already zero the outer edges and a
+   single-direction margin cannot collapse ambiguously. */
+.markdown > :is(p, ul, ol, blockquote) {
+  margin-block: 0 1.4em;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -1189,8 +1794,16 @@ a:focus-visible {
   color: var(--done);
   font-weight: 700;
 }
+/* The "◌" is arguably a non-text indicator at 3:1, and it measured 3.39:1 --
+   so this could have been left alone. It is not, because of the company it
+   keeps: the same column paints ✓ in --done (5.90:1) and ✗ in --red (4.54:1),
+   and the RUNNING mark being the one below AA is an inconsistency, not a
+   design decision. Motion is carried by the rotation, not by the brightness,
+   so darkening costs nothing here.
+   The two marks that genuinely are signals rather than glyphs -- the pane
+   header's 6px pulsing dot and .status-spinner's border arc -- keep --run. */
 .activity-running .activity-state {
-  color: var(--run);
+  color: var(--run-ink);
 }
 .activity-running .activity-state > span {
   animation: spin 1.2s linear infinite;
@@ -1288,7 +1901,7 @@ a:focus-visible {
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
 .diagnostic.error {
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 /* A failed run's reason, sat between the transcript and the composer on the
@@ -1308,9 +1921,15 @@ a:focus-visible {
   gap: 0.45rem;
   align-items: baseline;
   margin: 0 auto;
-  color: var(--fail);
+  color: var(--fail-ink);
   font-size: 0.78rem;
   overflow-wrap: anywhere;
+}
+/* A stopped run is not a failure and must not be dressed as one. Same shape,
+   same position -- so "this run did not simply finish" is read in one place
+   either way -- in the neutral tone instead of red. */
+.run-failure.stopped .run-failure-body {
+  color: var(--stop);
 }
 .run-failure .sdot {
   width: 0.5rem;
@@ -1318,6 +1937,9 @@ a:focus-visible {
   flex: none;
   border-radius: 50%;
   background: var(--fail);
+}
+.run-failure .sdot.stop {
+  background: var(--stop);
 }
 /* The composer reserves EXACTLY the same scrollbar gutter as the transcript
    (NEW-R3-2). `.transcript` is a scroll container with
@@ -1332,12 +1954,135 @@ a:focus-visible {
    flex: none and sizes to its content) and no scrollbar is ever painted, so
    the only effect is the reserved gutter. Verified in Chrome: an
    `overflow: hidden` box with `stable both-edges` reserves 2×sbw. */
+/* The live diagnostic. Sits at the foot of the transcript column, under the
+   running activity group, so a reader watching a stalled run does not have to
+   look anywhere new to learn WHY it is stalled. `.diagnostic.error` was dead
+   code until this had a producer -- the only transcript-level diagnostic the
+   server mints is a compaction notice at level `info`. */
+.diagnostic.live {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+.diagnostic.live::before {
+  content: "";
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  border-radius: 50%;
+  background: currentcolor;
+  transform: translateY(-0.1rem);
+  animation: pane-status-pulse 1.6s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .diagnostic.live::before {
+    animation: none;
+  }
+}
+
+/* The way back to the newest content once the reader has scrolled away from
+   it. IN NORMAL FLOW between the transcript and the composer -- an overlay
+   would cover the last line of the answer, which is the line the reader
+   scrolled away from in the first place. Same padding and reserved gutter as
+   the composer so it lands on the shared surface axis. */
+.jump-latest {
+  overflow: hidden;
+  flex: none;
+  padding: 0.35rem 1.25rem 0;
+  scrollbar-gutter: stable both-edges;
+}
+.jump-latest-btn {
+  display: block;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--card-shadow);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.jump-latest-btn:hover {
+  background: var(--hover);
+}
+.jump-latest-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* What stands where the composer stands when the thread is archived. It
+   occupies the composer's box exactly, so the pane does not reflow when a
+   thread is archived or restored -- and, more to the point, there is no
+   text field left to type into. */
+.archived-notice {
+  overflow: hidden;
+  flex: none;
+  padding: 0.5rem 1.25rem 1rem;
+  background: var(--page);
+  scrollbar-gutter: stable both-edges;
+}
+.archived-notice-body {
+  display: flex;
+  max-width: var(--surface-measure);
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-inline: auto;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.85rem;
+  background: var(--card);
+}
+.archived-notice-text {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.85rem;
+}
+.archived-notice-restore {
+  flex: none;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.5rem;
+  background: var(--page);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.archived-notice-restore:hover:not(:disabled) {
+  background: var(--hover);
+}
+.archived-notice-restore:disabled {
+  color: var(--muted);
+  cursor: progress;
+}
+.archived-notice-restore:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .composer {
   overflow: hidden;
   flex: none;
   padding: 0.5rem 1.25rem 1rem;
   background: var(--page);
   scrollbar-gutter: stable both-edges;
+}
+/* Steering mode, said before the keystroke rather than after it. The only
+   signal used to be the submit button's aria-label, which a sighted user
+   reading the box never sees; the placeholder and hint line now say it too,
+   and this ring makes the mode legible at a glance across a four-pane
+   layout. */
+.composer.steering .composer-input {
+  border-color: color-mix(in srgb, var(--run) 55%, var(--hairline-2));
+}
+/* The hint sentence. The ring above stays --run: it is a border, not text. */
+.composer.steering .composer-actions > span:first-child {
+  color: var(--run-ink);
 }
 .composer-input {
   width: 100%;
@@ -1352,9 +2097,14 @@ a:focus-visible {
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
+/* The composer keeps a soft glow rather than a hard outline -- it is a box the
+   user is inside, not a control they landed on -- but at the same 2px weight
+   as every other focus indicator, and with a border that goes fully accent
+   rather than 45% of the way there. At 1px/25% it was easy to miss which pane
+   the keyboard was in when two panes are open. */
 .composer-input:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline-2));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .composer-input textarea {
   display: block;
@@ -1391,9 +2141,13 @@ a:focus-visible {
   background: var(--accent);
   cursor: pointer;
 }
+/* The one control a reader reaches for under time pressure, and it was the
+   least legible thing on screen: --fail on an 18% tint of itself is 3.55:1.
+   The tint stays (it is what makes the button read as the interrupt) and the
+   ink darkens: 5.04:1 on that exact background. */
 .composer-actions .stop {
   border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 18%, var(--card));
 }
 .composer-actions .send {
@@ -1416,7 +2170,16 @@ a:focus-visible {
   background: var(--hover);
   cursor: not-allowed;
 }
-.inspector {
+/* The panel is elevated above the chat surface it is docked against: its
+   leading edge carries a soft shadow as well as the hairline. Scoped to this
+   one edge on purpose — the tab-group dividers inside the panel keep the
+   hairline-only treatment CWS-01 asks for, and so does the chat surface. A
+   box-shadow is never hit-tested, so the resize separator that lives on this
+   same edge keeps every pixel of its target, and its own hover/focus colour
+   paints over the shadow because it is a child of this element. When the
+   panel is railed it is `opacity: 0`, so the rail carries no orphaned
+   shadow. */
+.panel {
   position: relative;
   display: flex;
   min-width: 0;
@@ -1424,9 +2187,10 @@ a:focus-visible {
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface-1);
+  box-shadow: var(--dock-shadow);
   z-index: 20;
 }
-.inspector[aria-hidden="true"] {
+.panel[aria-hidden="true"] {
   pointer-events: none;
 }
 .panel-right-icon {
@@ -1438,7 +2202,7 @@ a:focus-visible {
   stroke-linejoin: round;
   stroke-width: 1.15;
 }
-.inspector-resizer {
+.panel-resizer {
   position: absolute;
   z-index: 2;
   top: 0;
@@ -1448,7 +2212,7 @@ a:focus-visible {
   cursor: col-resize;
   touch-action: none;
 }
-.inspector-resizer::after {
+.panel-resizer::after {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -1457,42 +2221,204 @@ a:focus-visible {
   background: transparent;
   content: "";
 }
-.inspector-resizer:hover::after,
-.inspector-resizer:focus-visible::after,
-.inspector-resizer.resizing::after {
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer.resizing::after {
   background: var(--blue);
 }
-.inspector-resizer:focus-visible {
+.panel-resizer:focus-visible {
   outline: none;
 }
-.inspector-tabs {
+.panel-tabstrip {
   display: flex;
   height: var(--header-h);
   align-items: end;
   border-bottom: 1px solid var(--border);
 }
-.inspector-tab-options {
+/* The strip scrolls rather than squeezing tabs into unreadable slivers, and
+   the active tab is scrolled back into view whenever it changes, so overflow
+   can never hide the tab the user is looking at (WSP-09).
+   Positioned so it is the offset parent of its own tabs: a drag measures
+   each tab's `offsetLeft` inside this box, which — unlike a client
+   rectangle — does not move when the strip scrolls under the pointer. */
+.panel-tab-options {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
   align-items: end;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.inspector-tab-options button {
-  min-width: 0;
-  flex: 1;
-  padding: 0.8rem 0.2rem;
+.panel-tab {
+  display: flex;
+  max-width: 12rem;
+  /* A floor, so the close affordance's hit area (below) can never reach the
+     middle of a tab. A one-character file name would otherwise make a 36px
+     tab whose centre is inside its own close control, and clicking a tab to
+     switch to it would close it instead.
+
+     It was 3.5rem, claiming "~3px of clearance at the narrowest tab the
+     strip can produce". The arithmetic was wrong — the hit area reaches
+     26.6px in from the right edge, so a 56px tab clears its own centre by
+     1.4px — and the error was invisible until a terminal tab began titling
+     itself from the directory it is in (WSP-07): clicking the middle of a
+     tab named `src` closed it (M1). 5rem clears by 13px, and the e2e case
+     now MEASURES the clearance rather than trusting this comment. */
+  min-width: 5rem;
+  /* Never shrinks: the strip scrolls instead. */
+  flex: 0 0 auto;
+  /* A touch that pans horizontally scrolls the strip — the only way a touch
+     device reaches a tab an overflowing strip cannot show. A touch that
+     moves vertically belongs to the drag (WSP-03), which is the direction
+     every cross-group drop lies in anyway. */
+  touch-action: pan-x;
+  align-items: center;
+  gap: 0.3rem;
+  /* Asymmetric: the extra 0.15rem on the right is hit area for the close
+     affordance, which extends into exactly this padding and no further. */
+  padding: 0.8rem 0.55rem 0.8rem 0.4rem;
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
   background: transparent;
-  text-transform: capitalize;
   cursor: pointer;
+  font-size: 0.78rem;
 }
-.inspector-tab-options button[aria-selected="true"] {
+.panel-tab.active {
   border-bottom-color: var(--blue);
   color: var(--text);
 }
-.inspector-close {
+.panel-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Names the execution scope a tab reads when it is not the focused chat
+   pane's own (WSP-02). */
+.panel-tab-chip {
+  max-width: 7rem;
+  flex: none;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.7rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+}
+/* At rest this affordance is not merely invisible, it is not there to be
+   hit: `opacity: 0` removes an element from view but not from hit testing,
+   and a touch device never hovers — so the right ~1rem of every inactive tab
+   was an invisible close button, and a tap meant to switch tabs closed one
+   instead (D3). */
+.panel-tab-close {
+  position: relative;
+  /* Pinned to the tab's right edge rather than left wherever the title
+     happens to end (M1). The tab is a flex row with a `min-width`, so a
+     short title used to leave the spare width as empty space on the RIGHT
+     and park the close glyph — hit area and all — across the tab's own
+     middle: clicking the middle of a tab named `src` closed it. Everything
+     that reasoned about "how far in from the right edge the hit area
+     reaches" was reasoning about a glyph that was not at the right edge. */
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  visibility: hidden;
+  pointer-events: none;
+  font-size: 0.9rem;
+}
+/* The glyph is 9 x 16px, against 30 x 30 for the strip's own close button
+   (G6). Its behaviour was never the problem — it is inert while the tab is
+   inactive, it arms no drag, and a plain click closes the tab — it was just
+   too small to hit. So the HIT AREA grows and nothing else does: a
+   pseudo-element rather than padding, so the glyph keeps its size, the tab
+   keeps its height. It reaches exactly as far right as the tab's own
+   padding and no further, because a close control overhanging the next tab
+   would close the wrong one. It inherits `visibility` and `pointer-events`
+   from the span, so an inactive tab's right edge is still not a hidden close
+   button (D3). The tab's `min-width` above is what keeps it out of a tab's
+   MIDDLE — a bound that was one pixel of arithmetic away from false until
+   M1, and that the e2e case now measures rather than assumes. Measured
+   after: 25 x 30. */
+.panel-tab-close::after {
+  position: absolute;
+  inset: -0.45rem -0.55rem;
+  content: "";
+}
+.panel-tab.active .panel-tab-close {
+  visibility: visible;
+  pointer-events: auto;
+}
+/* Reveal-on-hover is for pointers that can hover. On a touch device this
+   rule never applies, so the affordance stays out of reach and the active
+   tab's control above is the pointer route to closing a tab. */
+@media (hover: hover) {
+  .panel-tab:hover .panel-tab-close {
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+.panel-close-tab,
+.panel-new-tab-button {
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: none;
+  margin: 0 0 0.45rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.panel-close-tab:hover,
+.panel-new-tab-button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.panel-new-tab {
+  position: relative;
+  flex: none;
+}
+.panel-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  min-width: 12rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  box-shadow: var(--pop-shadow);
+}
+.panel-menu button {
+  display: block;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.8rem;
+}
+.panel-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.panel-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.panel-menu-note {
+  margin: 0.3rem 0.5rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.panel-close {
   width: 2rem;
   height: 2rem;
   flex: none;
@@ -1505,14 +2431,14 @@ a:focus-visible {
   cursor: pointer;
   font-size: 1.1rem;
 }
-.inspector-close:hover {
+.panel-close:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 /* A docked rail rather than a button floating over the transcript: it owns
    its own grid column, and its top segment shares the pane header's height
    so the two hairlines land on one line. */
-.inspector-rail {
+.panel-rail {
   display: flex;
   grid-area: 1 / 3;
   flex-direction: column;
@@ -1521,14 +2447,14 @@ a:focus-visible {
   background: var(--surface-1);
   z-index: 20;
 }
-.inspector-rail-head {
+.panel-rail-head {
   display: grid;
   height: var(--header-h);
   flex: none;
   place-items: center;
   border-bottom: 1px solid var(--hairline);
 }
-.inspector-reopen {
+.panel-reopen {
   display: grid;
   width: 1.85rem;
   height: 1.85rem;
@@ -1540,14 +2466,14 @@ a:focus-visible {
   background: transparent;
   cursor: pointer;
 }
-.inspector-reopen:hover {
+.panel-reopen:hover {
   color: var(--text);
   background: var(--surface-3);
 }
 @media (min-width: 901px) {
-  .workspace.inspector-available .inspector {
+  .workspace.panel-available .panel {
     grid-area: 1 / 3;
-    width: var(--inspector-width, 400px);
+    width: var(--panel-width, 400px);
     justify-self: end;
     opacity: 0;
     visibility: hidden;
@@ -1557,7 +2483,7 @@ a:focus-visible {
       opacity 140ms ease,
       visibility 0s linear 180ms;
   }
-  .workspace.inspector-visible .inspector {
+  .workspace.panel-visible .panel {
     opacity: 1;
     visibility: visible;
     transform: translateX(0);
@@ -1567,10 +2493,257 @@ a:focus-visible {
       visibility 0s;
   }
 }
-.inspector-content {
+/* One tab group: its strip, and the bodies of the tabs it has mounted.
+   Positioned, because its drop targets (WSP-03) are drawn over it. */
+.panel-group {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
   flex: 1;
+  flex-direction: column;
+}
+.panel-bodies {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+/* Each tab body lives in a host node of its own that the panel moves between
+   groups, so the body survives a split (see PanelBodies.tsx). The host must
+   not become a box: `display: contents` leaves the tabpanel inside it a flex
+   item of .panel-bodies, exactly as it was when the group rendered it. */
+.panel-tabpanel-host {
+  display: contents;
+}
+.panel-tabpanel {
+  flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+/* A hidden tab body stays mounted — that is what keeps its scroll position
+   and its data — so it must contribute no layout at all. */
+.panel-tabpanel[hidden] {
+  display: none;
+}
+/* A chord that could not do what it names says so here, and in the live
+   region this element is.
+   Out of flow, deliberately (F3). As an ordinary flex item of this column it
+   took its own height out of every group below it the moment it had
+   something to say: one refusal measured 1383px -> 1357px -> 1383px of group
+   height, each step resizing the running shell (rows 73, then 75 five
+   seconds later). Telling the user that nothing happened must not be the
+   thing that happens. It stays in the live region and stays visible; it just
+   cannot own any layout. `pointer-events: none` because it now covers
+   content — a terminal's last line — that the user may want to click. */
+.panel-announcement {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted-body);
+  background: var(--surface-2);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.panel-announcement:empty {
+  display: none;
+}
+/* The tree's viewport (F6). A group has a minimum size in PIXELS, not just
+   a fraction of whatever it is given, so at narrow widths the tree can be
+   larger than the panel — and then the panel scrolls, exactly as the chat
+   surface scrolls rather than shrinking a pane below MIN_PANE_WIDTH_PX. A
+   group squeezed to 139px is not a small group, it is an unusable one: the
+   terminal in it negotiated 16 columns. */
+.panel-tree-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+/* Sized by the tree's own minimum, which the view sets inline. No
+   `min-width: 0` here: that is precisely what this element must not have. */
+.panel-tree-tiles {
+  display: flex;
+  flex: 1;
+}
+/* The panel's own tiling tree (WSP-01), with the chat surface's divider
+   affordance: a hairline at rest that turns blue when it is grabbed. */
+.panel-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+.panel-split-row {
+  flex-direction: row;
+}
+.panel-split-column {
+  flex-direction: column;
+}
+.panel-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.panel-divider {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  touch-action: none;
+}
+.panel-split-row > .panel-divider {
+  width: 10px;
+  margin: 0 -5px;
+  cursor: col-resize;
+}
+.panel-split-column > .panel-divider {
+  height: 10px;
+  margin: -5px 0;
+  cursor: row-resize;
+}
+.panel-divider::after {
+  position: absolute;
+  background: var(--hairline-2);
+  content: "";
+}
+.panel-split-row > .panel-divider::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+.panel-split-column > .panel-divider::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.panel-divider:hover::after,
+.panel-divider:focus-visible::after,
+.panel-divider.resizing::after {
+  background: var(--blue);
+}
+.panel-divider:focus-visible {
+  outline: none;
+}
+/* Dragging a tab (WSP-03).
+   Every one of these elements exists only while a drag is in progress, and
+   none of them is hit-tested: the pointer is captured by the tab it started
+   on, and the target is resolved from measurements taken at pick-up
+   (tabDrag.ts). They are what the user sees, not what the drag asks. */
+.panel-tab.dragging {
+  opacity: 0.45;
+}
+.panel-drop-zones {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+/* Every band carries a faint outline for as long as the drag lasts (G7).
+   Before this the five targets were fully transparent until the pointer was
+   inside one, so the only way to learn where they were was to sweep the
+   pointer around and watch for a highlight. It is deliberately quiet — a
+   hairline in the same token the panel's own seams use, not a wash of
+   colour — because the surrounding surface is calm and five glowing
+   rectangles over a running terminal would not be. */
+.panel-drop-edge,
+.panel-drop-centre {
+  position: absolute;
+  border: 1px dashed var(--hairline-2);
+  border-radius: 0.3rem;
+}
+.panel-drop-top,
+.panel-drop-bottom {
+  right: 0;
+  left: 0;
+}
+.panel-drop-top {
+  top: 0;
+}
+.panel-drop-bottom {
+  bottom: 0;
+}
+.panel-drop-left {
+  left: 0;
+}
+.panel-drop-right {
+  right: 0;
+}
+/* Individually highlighted as the pointer enters it, which WSP-03 requires:
+   the user must be able to tell which of five targets a release would use. */
+.panel-drop-edge.active,
+.panel-drop-centre.active {
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+/* A target the drop would REFUSE looks nothing like one that would work
+   (G4). It is still highlighted — the user is pointing at it and deserves an
+   answer — but in the muted token rather than the accent, with a solid
+   border rather than the dashed at-rest one, and the live region says the
+   reason at the same moment. Both colours are tokens, so this reads in
+   either theme. */
+.panel-drop-edge.refused,
+.panel-drop-centre.refused,
+.panel-drop-caret.refused {
+  border-color: var(--muted);
+  border-style: solid;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.panel-drop-caret.refused {
+  background: var(--muted);
+}
+/* The insertion point inside a strip. Absolutely positioned inside the
+   strip's own scroller, so it scrolls with the tabs it sits between. */
+.panel-drop-caret {
+  position: absolute;
+  z-index: 1;
+  top: 0.35rem;
+  bottom: 0.35rem;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  pointer-events: none;
+}
+/* A label under the pointer, never a clone of the tab's body: cloning one
+   would mount a second terminal. Moved by transform alone, which is
+   composited, so following the pointer costs no layout (WSP-09).
+   Rendered into the document body rather than into `.panel`, and that is
+   what makes `position: fixed` mean the viewport here (G2): `.panel` has a
+   non-`none` transform from its slide-in rule, which makes it the containing
+   block for every fixed descendant, and the panel's left edge was then added
+   to every position — measured at 1138px, so the ghost was off screen at
+   every pointer position the panel can be dragged over. See
+   WorkspacePanel.tsx. */
+.panel-drag-ghost {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
+  max-width: 12rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: var(--surface-2);
+  box-shadow: var(--dock-shadow);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  pointer-events: none;
 }
 .scope-note,
 .terminal-warning {
@@ -1579,6 +2752,25 @@ a:focus-visible {
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.7rem;
+}
+/* The Files tab is a column, like the file preview and the diff (F2): only
+   the listing grows, so the listing is the one box that scrolls and its
+   scrollbars are at the edges of the panel rather than at the bottom of a
+   list far below the visible area. */
+.files-tab {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.files-tab > * {
+  flex: none;
+}
+.files-tab > .file-tree,
+.files-tab > .file-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
 }
 .file-search {
   margin: 0.6rem;
@@ -1613,6 +2805,107 @@ a:focus-visible {
 .file-list button.active {
   background: var(--surface-3);
 }
+/* The file tree (WSP-05 v2). Rows are `treeitem`s rather than buttons: a
+   tree owns its own rows, and a real button inside one would be a nested
+   interactive control — the same rule the tab strip follows. */
+.file-tree,
+.file-tree-group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.file-tree {
+  padding: 0.35rem;
+}
+/* A row is as wide as its own content and never narrower than the tree, so
+   a deep name is painted in full and reached by scrolling sideways, while a
+   shallow row's hover and focus still span the whole width (H3).
+
+   The alternative was to cap or compress the indent past some depth. That
+   was rejected: the indent is the only thing on screen that says how deep a
+   row is, and flattening it exactly where the tree is deepest trades one
+   unreadable thing for another. A smaller unit only moves the width at which
+   the same failure happens. Scrolling keeps both the depth and the name,
+   which is what the editor this tab is modelled on does. */
+.file-tree-row {
+  width: max-content;
+  min-width: 100%;
+  border-radius: 0.3rem;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.file-tree-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+}
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree-twisty {
+  width: 0.7rem;
+  flex: none;
+  color: var(--muted);
+  text-align: center;
+}
+.file-tree-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.file-tree-row > .file-tree-line:hover {
+  background: var(--surface-3);
+  border-radius: 0.3rem;
+}
+/* Not a row the user chooses: a loading, empty, capped, or failed listing.
+   It is a sentence rather than a path, so it wraps inside the tree instead
+   of making the whole tree scroll sideways to be read. */
+.file-tree-state {
+  width: auto;
+  color: var(--muted);
+  cursor: default;
+}
+.file-tree-state .file-tree-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.file-ignored {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 0.6rem 0.4rem;
+}
+.file-ignored label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.file-ignored .panel-state {
+  padding: 0;
+  font-size: 0.72rem;
+}
+/* The change-kind chip (WSP-06, K2).
+   It carries the kind as a LETTER so the kind is not in the colour alone —
+   and a letter nobody can read carries it no better than the colour does.
+   These were the status palette mixed 20% into the card, which put every
+   chip below the WCAG AA bar in the light theme and two of them in dark:
+   `?` 2.76:1, `D`/`U` 3.44:1, `M`/`R`/`C` 3.51:1 light; `D`/`U` 3.79:1
+   dark. The letter is `aria-hidden` and each row also carries its kind as a
+   word, so nothing was lost to a screen reader — this is legibility for
+   sighted readers.
+   They now take the DIFF's own pairs, which are chosen against the wash
+   they are painted on and measured in `styles.test.ts`: 5.01–5.90:1 light
+   and 5.51–6.84:1 dark. A modified file's chip and the diff it opens are
+   one palette, and there is one set of numbers to keep honest rather than
+   two. Resolved tokens rather than `color-mix()` for the same reason the
+   diff's are: a mixed colour is one the stylesheet's own test could not
+   read, which is how these went unmeasured through a whole milestone. */
 .change-kind {
   display: inline-grid;
   width: 1.15rem;
@@ -1620,49 +2913,309 @@ a:focus-visible {
   flex: none;
   place-items: center;
   border-radius: 0.2rem;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 20%, var(--card));
+  color: var(--diff-hunk-fg);
+  background: var(--diff-hunk-bg);
   font-size: 0.64rem;
 }
 .change-kind.deleted,
 .change-kind.conflicted {
-  color: var(--fail);
-  background: color-mix(in srgb, var(--fail) 20%, var(--card));
+  color: var(--diff-delete-fg);
+  background: var(--diff-delete-bg);
 }
 .change-kind.added,
 .change-kind.untracked {
-  color: var(--done);
-  background: color-mix(in srgb, var(--done) 20%, var(--card));
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
 }
+/* F2. The scrolling box has to END on screen.
+   Both bodies used to be ordinary flow content inside the tab body's own
+   scroller, so the `pre` grew to its full content height — measured at
+   2534px, with its bottom edge at y=2634 against a visible bottom of
+   y=1017 — and the horizontal scrollbar it genuinely had was ~1600px below
+   anything the user could see. The content was reachable only by a
+   shift-wheel or trackpad gesture, with no affordance at all, which is what
+   was reported as "clipped, with no horizontal scroll" (WSP-05's "remains
+   readable"). Bounding the body to the tab's own height puts the scrollbar
+   back where a pointer can find it, and keeps the header pinned above it. */
 .diff-view,
 .file-preview {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
   border-top: 1px solid var(--border);
 }
-/* Diff colouring from the shared theme tokens, so it resolves correctly in
-   light and dark. The `+`/`-` prefixes stay in the text: colour is never the
-   only carrier of the distinction. */
-.diff-text {
-  padding-inline: 0;
+/* Only the scrolling region grows; every notice keeps its own height. */
+.diff-view > *,
+.file-preview > * {
+  flex: none;
 }
-.diff-line {
-  display: block;
-  padding-inline: 0.8rem;
+/* Whichever of the two the tab is showing, it is the ONE thing that grows
+   and the one thing that scrolls, bounded to the tab's own height. That is
+   what keeps a long line's scrollbar on screen instead of a thousand pixels
+   below it (F2), and it is also the element `PanelBodies` records the offset
+   of, so a switch or a drag comes back to the same place (G1). */
+.file-preview > pre,
+.file-preview > .file-markdown,
+.diff-view > .diff-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.file-preview > .file-markdown {
+  padding: 0.9rem;
+  font-size: 0.86rem;
+}
+/* Every `pre` in the diff scrolls with the one box around it, so the staged
+   and unstaged panes cannot slide out of alignment with each other and the
+   horizontal scrollbar stays where a pointer can find it (F2). */
+.diff-body pre {
+  width: max-content;
+  min-width: 100%;
+  overflow: visible;
+}
+/* Soft wrap (K5, WSP-05 version 3). Width is the main thing that would send
+   a reader back to `git diff`: at the panel's 400px default a diff line
+   shows roughly 40 characters once the pinned column has taken its own, and
+   about 25 at the 280px floor, where a terminal at 120 columns needs no
+   scrolling at all. K1 made scrolled reading correct; this makes it
+   unnecessary.
+   Wrapped, the `pre` stops being max-content — otherwise it would size to
+   the longest unwrapped line and the wrapping would buy nothing — and the
+   text is bounded to the width left over beside the pinned column. */
+.diff-body pre.wrap {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+}
+/* One labelled half of the diff (WSP-06), and the hunks under it. */
+.diff-view h4 {
+  margin: 0.7rem 0.7rem 0.4rem;
+}
+.diff-section {
+  padding-bottom: 0.5rem;
+}
+/* A rename, a new or deleted file, a mode change: Git's own lines, kept as
+   Git wrote them rather than translated into a claim about them. */
+.diff-notes {
+  margin: 0 0.7rem 0.5rem;
+  padding-left: 1.1rem;
+  color: var(--muted-body);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+.diff-hunk-heading {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+/* The hunk's own disclosure. A real button, because it is one: it carries
+   `aria-expanded`, takes the keyboard, and names itself from the header text
+   it displays. */
+.diff-hunk-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--diff-hunk-bg);
+  color: var(--diff-hunk-fg);
+  font:
+    0.72rem/1.7 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-align: left;
+  cursor: pointer;
+}
+/* K3. The disclosure's own drawing, and the section heading, are NOT patch
+   content: a selection dragged across two hunks used to copy the twisty, a
+   `+15 -0` tally and the bare word `Unstaged` into the middle of the diff,
+   and a patch with those lines in it does not apply. The `@@` header beside
+   them stays selectable, because `git apply` needs it. Bounded-view notices
+   go the same way for the same reason — they are the panel explaining
+   itself, not lines Git wrote. So does K4's `.sr-only` separator, which is
+   the same defect a second time: text added for the name computation is not
+   text a copy should carry, and it landed in a cross-hunk copy as a bare
+   `,` line the moment it was added. */
+.diff-hunk-mark,
+.diff-hunk-tally,
+.diff-hunk-toggle .sr-only,
+.diff-section h4,
+.diff-section > .panel-state {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.diff-hunk-mark {
+  flex: none;
+}
+.diff-hunk-header {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-hunk-tally {
+  flex: none;
+}
+/* The lines themselves.
+   `.diff-raw` keeps its horizontal padding; `.diff-lines` spends its own on
+   the first pinned cell instead, because a padding on the `pre` scrolls away
+   with the content and would leave the pinned column jumping left by that
+   padding the moment the body was scrolled — measured at 12.8px, and
+   perfectly visible. The rows are therefore full-bleed and the inset lives
+   inside the old-side gutter, which is pinned and therefore does not move.
+
+   Both selectors name `.diff-view` because `.markdown pre, .activity pre,
+   .diff-view pre, .file-preview pre` above sets `padding: 0.8rem`, and a
+   lone `.diff-lines` loses to it on specificity however far down the file it
+   sits. The 0.3rem/0.7rem written here before K1 never applied at all. */
+.diff-view .diff-raw {
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 0;
+}
+.diff-view .diff-lines {
+  padding: 0.3rem 0;
+  border: 0;
+  border-radius: 0;
+  /* The pinned column, cell by cell (K1). Named here rather than repeated,
+     because each cell's `left` is the sum of the widths before it and the
+     wrapped-text rule below needs the total. Every one of them is derived
+     from `--diff-gutter`, which `DiffTab` sets from the largest number the
+     diff actually paints. */
+  --diff-old-cell: calc(var(--diff-gutter, 4ch) + 1ch + 0.7rem);
+  --diff-new-cell: calc(var(--diff-gutter, 4ch) + 1ch);
+  --diff-prefix-cell: 1.5ch;
+  --diff-column: calc(
+    var(--diff-old-cell) + var(--diff-new-cell) + var(--diff-prefix-cell)
+  );
+}
+/* Diff colouring, from tokens with measured contrast rather than from the
+   status palette: those hues are chosen against the page's white, not
+   against the code surface, which is how six of nine syntax tokens came to
+   fail AA (J2). `styles.test.ts` computes every pair below. The `+`/`-`
+   prefix characters stay in the text either way: colour is never the only
+   carrier of the distinction (WSP-06). */
+.diff-lines .diff-line {
+  /* What the pinned cells paint themselves with. A custom property because
+     it has to reach a `::before` two elements down, which `background:
+     inherit` cannot do; it is redeclared by each kind below. */
+  --diff-line-bg: var(--hover);
 }
 .diff-add {
-  color: var(--green);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
+  --diff-line-bg: var(--diff-add-bg);
 }
-.diff-remove {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+.diff-delete {
+  color: var(--diff-delete-fg);
+  background: var(--diff-delete-bg);
+  --diff-line-bg: var(--diff-delete-bg);
 }
-.diff-hunk {
-  color: var(--accent);
-  font-weight: 600;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.diff-note {
+  color: var(--muted-body);
 }
-.diff-meta {
-  color: var(--muted);
+/* The two number gutters (WSP-06), by the mechanism the File tab's single
+   one uses (J11): generated content drawn from an attribute, which a
+   selection cannot reach and `textContent` does not contain, so copying a
+   diff yields the diff and not a column of numbers. Two gutters need two
+   pseudo-elements, so the old side is drawn on the line and the new side on
+   the element wrapping its text. The width comes from the largest number
+   actually painted, which `DiffTab` sets as an inline custom property.
+
+   K1: all three of them are PINNED. WSP-06 says the add/remove distinction
+   is never carried by colour alone, and these were ordinary in-flow content,
+   so a horizontal scroll carried them off the left edge and left only the
+   wash — which measures 1.04:1 between add and delete in light and 1.06:1 in
+   dark, i.e. nothing. Measured at the 280px floor on a real Python diff, the
+   body had 498px of scroll range and the `+` sat at x=50: 12% of the range
+   hid the whole distinction for the other 88%. `position: sticky` inside
+   `.diff-body` keeps them on screen at any offset, and each carries the
+   line's own background so the scrolled code passes UNDER them rather than
+   through them. */
+.diff-lines .diff-line::before {
+  content: attr(data-old) "\200b";
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-old-cell);
+  padding: 0 1ch 0 0.7rem;
+  background: var(--diff-line-bg);
+  color: var(--diff-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.diff-lines .diff-line-body::before {
+  content: attr(data-new) "\200b";
+  position: sticky;
+  left: var(--diff-old-cell);
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-new-cell);
+  padding-right: 1ch;
+  background: var(--diff-line-bg);
+  color: var(--diff-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The `+`, `-`, space or `\` the line begins with — patch content, so it is
+   a real character in a box and NOT generated content: a copy has to carry
+   it, and the numbers beside it must never be carried. `inline-block` for
+   the width, which is what makes the column line up when a prefix is a
+   space. */
+.diff-lines .diff-line-prefix {
+  position: sticky;
+  left: calc(var(--diff-old-cell) + var(--diff-new-cell));
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-block;
+  width: var(--diff-prefix-cell);
+  padding-right: 0.5ch;
+  background: var(--diff-line-bg);
+}
+/* A wrapped line's continuation rows (K5).
+   The code becomes an inline-block as wide as what is left beside the
+   pinned column, so it wraps INSIDE that box and every continuation row
+   begins under the code rather than at the panel's left edge. That is the
+   indent; the rule down its left edge is the marker, and between them a
+   continuation is never mistakable for a new line — a continuation row has
+   an empty gutter and starts to the right of the rule, a new line has its
+   numbers and its prefix and starts to the left of it. The line's own
+   newline character still ends the outer line, so the gutter numbers the
+   LOGICAL line once however many rows it takes.
+   `anywhere` because a minified line has no spaces to break at, and
+   "wrapped" has to mean no horizontal scrolling for that line too. */
+.diff-lines.wrap .diff-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--diff-column));
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+/* The header's counts (WSP-06). Words rather than glyphs, so the sentence a
+   screen reader hears is the sentence on screen. */
+.diff-counts {
+  display: flex;
+  gap: 0.5rem;
+  flex: none;
+}
+.diff-count-add {
+  color: var(--diff-add-fg);
+}
+.diff-count-delete {
+  color: var(--diff-delete-fg);
 }
 .diff-view > header,
 .file-preview > header {
@@ -1676,30 +3229,212 @@ a:focus-visible {
   background: var(--surface-2);
   font-size: 0.75rem;
 }
-.file-preview > header span {
-  flex: 1;
+/* The header is allowed to become two or three short rows rather than one
+   tall one. At the panel's 280px floor its three action buttons are wider
+   than the header itself, so something has to give; wrapping gives, and
+   every control stays visible and inside the tab body's own width. */
+.diff-view > header,
+.file-preview > header {
+  flex-wrap: wrap;
+}
+/* The path (J1).
+   `text-overflow: ellipsis` was here without `white-space: nowrap`, which
+   makes it inert: the computed white-space stayed `normal`, the span wrapped
+   instead of ellipsising, and at 280px it rendered one character per line in
+   a 10px column while the header grew to 107px. The flex basis is small
+   enough that the path shares a line with the buttons at ordinary widths and
+   claims a line of its own when it cannot. */
+.diff-view > header .file-path,
+.file-preview > header .file-path {
+  display: flex;
+  min-width: 0;
+  /* The basis decides when the header WRAPS, not how much the path finally
+     gets — `flex-grow: 1` gives it everything left over either way. It was
+     6rem, which is under a file name's own width, so a third action button
+     (K5's wrap toggle) fitted beside the path at 400px and squeezed the name
+     to 118px of the 136px it needs. 12rem is past any name this header is
+     asked to keep whole, so the actions take a line of their own before the
+     name is clipped. */
+  flex: 1 1 12rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Which end of the path survives. The directories carry a shrink factor
+   large enough that they absorb effectively all of the squeeze, so
+   `docs/product-specs/workspace-panel.md` becomes `…/workspace-panel.md`
+   rather than `docs/product-spec…` — the tail is the half that names the
+   file. */
+.diff-view > header .file-path-dir,
+.file-preview > header .file-path-dir {
+  min-width: 0;
+  flex: 0 999 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.file-preview button {
+.diff-view > header .file-path-name,
+.file-preview > header .file-path-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The actions travel together: they wrap as a block below the path rather
+   than one button at a time around it. */
+.file-preview > header .file-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+/* The actions travel together in the diff's header too. */
+.diff-view > header .diff-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+/* The header's own controls only. A previewed document's in-repository links
+   are buttons too, and they are prose, not chrome. */
+.diff-view > header button,
+.file-preview > header button {
+  flex: none;
   border: 1px solid var(--border);
   border-radius: 0.25rem;
   background: var(--surface-3);
+  white-space: nowrap;
 }
-.diff-view h4 {
-  margin: 0.7rem;
+/* A link inside a previewed markdown file (WSP-05). Four kinds, and they
+   are told apart on purpose: one opens another File tab, one moves inside
+   the document being displayed, one leaves for a real browser tab and says
+   so, and one goes nowhere and is not offered as a link at all. */
+.file-markdown :is(.md-file-link, .md-fragment-link, .md-external-link) {
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
+.file-markdown .md-external-mark {
+  margin-left: 0.15em;
+  font-size: 0.85em;
+}
+.file-markdown .md-inert-link {
+  color: var(--muted-body);
+  text-decoration: underline dotted;
+}
+.file-markdown .md-image-missing {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.3rem;
+  color: var(--muted-body);
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+/* The file's own text and the diff's, which fill the tab. A fenced code
+   block INSIDE a previewed markdown file is not this — it is a box in a
+   document — so this names the direct child rather than every `pre`. */
 .diff-view pre,
-.file-preview pre {
+.file-preview > pre {
   margin: 0;
   border: 0;
   border-radius: 0;
   white-space: pre;
 }
+/* Highlighted tokens carry only a colour and a weight; the monospace metrics
+   are the `pre`'s, so a coloured token can never sit differently from the
+   plain text beside it. */
+.file-preview > pre .file-token {
+  font: inherit;
+}
+/* Soft wrap in the source view (K5, WSP-05 version 3), by the same
+   mechanism as the diff's. The `pre` wraps, and the line's text is bounded
+   to what is left beside the gutter so its continuation rows begin under the
+   code and not under the number. The gutter therefore numbers the LOGICAL
+   line once, however many visual rows it takes, and the rule down the code's
+   left edge is what tells a continuation row from a new line. */
+.file-preview > pre.wrap {
+  white-space: pre-wrap;
+}
+.file-preview > pre.wrap .file-line-text {
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: calc(100% - var(--file-gutter, 4ch) - 2ch);
+  padding-left: 0.5ch;
+  border-left: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+/* A view control that is on or off, rather than one that does something.
+   The state is on `aria-pressed`; this is the same state drawn for the eye,
+   and the border is a second carrier so it is not the fill alone. */
+.diff-view > header button[aria-pressed="true"],
+.file-preview > header button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--active);
+}
+/* The line-number gutter (J11, WSP-05 version 3).
+   Generated content, and that is the whole mechanism: a selection cannot
+   reach `::before`, and `textContent` does not contain it, so the numbers
+   cannot be copied out with the code. A number rendered as a text node
+   would be. The width comes from the line count, which `FileTab` sets as an
+   inline custom property, so a twelve-line file does not pay four
+   characters of indent.
+   Inline-block rather than a column of its own: the lines are inline
+   elements carrying real newline characters, and a parallel gutter column
+   would have to re-derive their heights to stay aligned. */
+.file-preview > pre .file-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: var(--file-gutter, 4ch);
+  margin-right: 1.5ch;
+  color: var(--file-gutter-colour);
+  text-align: right;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* A read that produced no file: an explicit, labelled state with a way out
+   (WSP-10), rather than the raw refusal the boundary answered with. */
+.panel-refusal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.panel-refusal p {
+  margin: 0;
+}
+.panel-refusal button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-2);
+  background: var(--surface-3);
+  font-size: 0.75rem;
+}
+/* The terminal is a fixed-size viewport that scrolls its own buffer, so it
+   must never grow the box it is given (D13). xterm keeps a stale, oversized
+   scrollbar element inside `.xterm-scrollable-element` after the terminal
+   shrinks — measured at 570px tall inside a 210px terminal — and with
+   `overflow: visible` that leak reached the tab body, made the panel body
+   scrollable, and on a machine with space-consuming scrollbars fed straight
+   back into the fit addon's ResizeObserver. Containing it here is the
+   boundary we own. */
 .terminal-panel {
   display: flex;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 .terminal-toolbar {
   display: flex;
@@ -1712,6 +3447,30 @@ a:focus-visible {
 .terminal-toolbar span {
   flex: 1;
   color: var(--muted);
+}
+/* Where the terminal is (WSP-07). Monospace because it is a path, and
+   bounded because the toolbar's controls must stay reachable: a deep
+   directory ellipsises instead of pushing Restart off the end. */
+.terminal-toolbar .terminal-cwd {
+  flex: 2;
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The one word that stops a start directory reading as a live one. */
+.terminal-toolbar .terminal-cwd-note {
+  font-family: inherit;
+  font-style: italic;
+}
+/* A refused command or an unreadable frame: said here, where it can be
+   cleared, rather than written into the scrollback where it cannot (F1). */
+.terminal-toolbar .terminal-notice {
+  flex: 2;
+  overflow: hidden;
+  color: var(--fail);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .terminal-toolbar button {
   border: 1px solid var(--border);
@@ -1730,15 +3489,35 @@ a:focus-visible {
   background: var(--term-bg);
 }
 .terminal-surface {
+  min-width: 0;
+  /* `min-height: 12rem` lived here and acted as a SHRINK FLOOR: this is a
+     `flex: 1` child of a column flex container, so its automatic minimum is
+     on the block axis. In a horizontally split panel — a normal state, not
+     an edge case — the group is shorter than that and the terminal spilled
+     out of its own tab body. The panel enforces its own minimum group size,
+     which is what that 12rem was reaching for. */
+  min-height: 0;
   flex: 1;
-  min-height: 12rem;
   padding: 0.4rem;
   background: var(--page);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+/* The box the fit addon measures, and the one thing it must be is unpadded
+   (F4). `getComputedStyle().height` on a border-box element is its border
+   box, so any padding here would be handed to the terminal as space to
+   paint rows in and then clipped away — up to 12.8px of the last row.
+   The padding stays on `.terminal-surface`, outside the measurement. */
+.terminal-canvas {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
 }
 .panel-state {
   margin: 0;
   padding: 0.7rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .empty,
@@ -1747,7 +3526,7 @@ a:focus-visible {
   padding: 0.7rem;
   border: 1px dashed var(--border);
   border-radius: 0.4rem;
-  color: var(--muted);
+  color: var(--muted-body);
   font-size: 0.78rem;
 }
 .error-notice {
@@ -1756,7 +3535,7 @@ a:focus-visible {
   gap: 0.6rem;
   border-style: solid;
   border-color: color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
-  color: var(--fail);
+  color: var(--fail-ink);
   background: color-mix(in srgb, var(--fail) 8%, var(--card));
 }
 .error-notice-message {
@@ -1764,7 +3543,8 @@ a:focus-visible {
   flex: 1;
   overflow-wrap: anywhere;
 }
-/* Inherits --fail, so it is legible in both themes without a second colour. */
+/* Inherits --fail-ink from .error-notice, so it is legible in both themes
+   without a second colour. */
 .error-notice-link {
   font-weight: 600;
   text-underline-offset: 0.15em;
@@ -1774,7 +3554,7 @@ a:focus-visible {
   padding: 0.25rem 0.6rem;
   border: 1px solid color-mix(in srgb, var(--fail) 45%, var(--hairline-2));
   border-radius: 0.35rem;
-  color: var(--fail);
+  color: var(--fail-ink);
   background: transparent;
   font-size: 0.76rem;
   font-weight: 600;
@@ -1782,6 +3562,34 @@ a:focus-visible {
 }
 .error-notice-retry:hover {
   background: color-mix(in srgb, var(--fail) 14%, var(--card));
+}
+/* Same size as the Retry button's hit area, without its weight: dismissing is
+   the lesser action even on the notices that offer nothing else. 1.55rem, not
+   1.4rem: 1.4rem laid out at 22.4px, under the 24x24 CSS px floor WCAG 2.2
+   2.5.8 sets for a pointer target, and there is no inline exception to fall
+   back on -- the ✕ is not in a sentence and has no larger equivalent. */
+.error-notice-dismiss {
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3rem;
+  color: var(--fail-ink);
+  background: transparent;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.error-notice-dismiss:hover {
+  background: color-mix(in srgb, var(--fail) 14%, var(--card));
+}
+.error-notice-dismiss:focus-visible,
+.error-notice-retry:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .conversation-empty {
   display: grid;
@@ -1849,6 +3657,30 @@ a:focus-visible {
 .settings-option-note {
   color: var(--muted);
   font-size: 0.78rem;
+}
+/* Sixteen of the nineteen shortcuts are pane or panel management, and the
+   three keys every user needs were the LAST rows of one flat nineteen-row
+   table. The list is grouped by the surface that owns the chord, Composer
+   first, so the common keys are the ones you land on. The subheadings match
+   .add-project-title -- the app already has one micro-label style and this
+   does not invent a second. */
+.shortcut-group + .shortcut-group,
+.settings-section h2 + .shortcut-group {
+  margin-top: 1.35rem;
+}
+.shortcut-group-heading {
+  display: block;
+  margin: 0 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.shortcut-group-note {
+  margin: 0 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 .shortcut-list {
   display: grid;
@@ -1965,7 +3797,7 @@ a:focus-visible {
     height: calc(100dvh - 2.6rem);
   }
   .sidebar,
-  .inspector {
+  .panel {
     position: fixed;
     z-index: 50;
     top: 0;
@@ -1979,16 +3811,16 @@ a:focus-visible {
     left: 0;
     transform: translateX(-105%);
   }
-  .inspector {
+  .panel {
     right: 0;
     transform: translateX(105%);
   }
-  .inspector-resizer,
-  .inspector-rail {
+  .panel-resizer,
+  .panel-rail {
     display: none;
   }
   .sidebar-open .sidebar,
-  .inspector-open .inspector {
+  .panel-open .panel {
     transform: translateX(0);
   }
   .drawer-backdrop {
@@ -2011,14 +3843,100 @@ a:focus-visible {
   white-space: nowrap;
   border: 0;
 }
+/* `justify-content: flex-end` used to hold the card at the bottom of an
+   otherwise empty pane. Now that there is content above the card, flex-end
+   would clip the TOP of any overflow (the classic flex-end scroll bug), so
+   the spare space is claimed by an auto margin on the first child instead:
+   identical when everything fits, scrollable from the top when it does not.
+   Everything stays bottom-anchored -- the starter block explains the card
+   directly below it and reads wrong floating at the far end of the pane. */
 .new-chat {
   align-items: stretch;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  overflow-y: auto;
   padding: 1.5rem 1.25rem 1rem;
+}
+.new-chat > :first-child {
+  margin-top: auto;
+}
+.new-chat-intro {
+  display: flex;
+  width: 100%;
+  max-width: var(--surface-measure);
+  flex: none;
+  flex-direction: column;
+  gap: 1.4rem;
+  margin-inline: auto;
+  padding-bottom: 1.5rem;
+}
+/* Same micro-label as .add-project-title: one style for section labels. */
+.new-chat-block-title {
+  display: block;
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.new-chat-examples {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.new-chat-example {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.6rem;
+  color: var(--text-2);
+  background: var(--card);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+.new-chat-example:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.new-chat-example:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.new-chat-block-note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+/* Term over description rather than two columns: "Include local changes" is
+   long enough that a term column would either wrap badly or eat a third of a
+   360px pane. */
+.new-chat-choices {
+  margin: 0;
+}
+.new-chat-choices dt {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.new-chat-choices dd {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.new-chat-choices dd:last-child {
+  margin-bottom: 0;
 }
 .new-chat-card {
   width: 100%;
   max-width: var(--surface-measure);
+  flex: none;
   margin-inline: auto;
   overflow: hidden;
   border: 1px solid var(--hairline-2);
@@ -2042,10 +3960,16 @@ a:focus-visible {
   font-size: 0.82rem;
   cursor: pointer;
 }
-.new-chat-toolbar select:hover:not(:disabled),
+.new-chat-toolbar select:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+/* These three selects are the most consequential control in the app (worktree,
+   start mode, base branch) and they had `outline: none` with a hover fill as
+   their only focus state -- indistinguishable from a passing mouse. */
 .new-chat-toolbar select:focus-visible {
   background: var(--surface-hover);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .new-chat-toolbar select:disabled {
   color: var(--muted);
@@ -2070,8 +3994,29 @@ a:focus-visible {
   color: var(--muted);
   font-size: 0.76rem;
 }
+/* A callout, not a caption. This is the app's most consequential warning --
+   the one irreversible choice on the screen -- and it was 12.2px of amber
+   text with `background: rgba(0,0,0,0)` and `border: 0px none`, so it carried
+   no more visual weight than the "Starts from committed master" hint it sits
+   in place of. The tint and the left rule are what say "read this"; the
+   contrast fix (see --amber) is what makes it readable once you do.
+
+   Slightly larger than a plain note as well: 0.8rem, because it is the one
+   line here that a user must not skim. */
 .new-chat-note.warning {
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--amber);
+  border-radius: 0.25rem;
   color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, var(--card));
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.new-chat-note.warning strong {
+  font-weight: 650;
+}
+.new-chat-note.warning p {
+  margin: 0;
 }
 @media (max-width: 480px) {
   .transcript,

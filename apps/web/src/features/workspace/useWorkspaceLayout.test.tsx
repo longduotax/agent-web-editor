@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId } from "@pi-web/contracts";
 
 import { tiledPaneIds } from "./layoutTree.js";
+import type { WorkspaceLayout } from "./layoutTree.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 
 afterEach(() => {
@@ -107,6 +108,40 @@ describe("useWorkspaceLayout", () => {
     if (originalPaneId !== null)
       expect(result.current.layout.panes[originalPaneId]).toBeUndefined();
     expect(tiledPaneIds(result.current.layout)).toContain(newPaneId);
+  });
+
+  // Closing is the one layout change that can be followed by a navigation in
+  // the same handler (the route must stop naming a pane that no longer
+  // exists), and that navigation unmounts this hook before its persist effect
+  // flushes. Measured in the browser before the fix: the emptied layout was
+  // never written, so the view that mounted next re-read the pane that had
+  // just been closed and put it straight back on screen.
+  it("reports the layout the close produced and persists it without waiting for an effect", () => {
+    const store = stubStorage();
+    const { result } = renderHook(() => useWorkspaceLayout(PROJECT_ID));
+    const onlyPaneId = result.current.layout.focusedPaneId;
+    if (onlyPaneId === null) throw new Error("expected a seeded pane");
+
+    let reported: WorkspaceLayout | undefined;
+    let persistedInsideHandler: unknown;
+    act(() => {
+      reported = result.current.close(onlyPaneId);
+      // Read INSIDE act(), before it flushes effects — otherwise the persist
+      // effect would write it anyway and this would pass against a close that
+      // relies on the effect, which is the arrangement that lost the write.
+      persistedInsideHandler = JSON.parse(
+        store.get(`pi-workspace:layout:${PROJECT_ID}`) ?? "null",
+      );
+    });
+
+    expect(persistedInsideHandler).toMatchObject({
+      root: null,
+      focusedPaneId: null,
+    });
+    // The caller is told what the close produced rather than re-deriving it.
+    expect(reported).toEqual(result.current.layout);
+    expect(reported?.root).toBeNull();
+    expect(reported?.focusedPaneId).toBeNull();
   });
 
   it("newPane() on an empty layout (after closing the only pane) creates one focused tiled pane", () => {

@@ -11,7 +11,15 @@ const typeCheckedConfigs = [
 ].map((config) => ({ ...config, files: typeScriptFiles }));
 
 export default defineConfig(
-  globalIgnores(["**/dist/**", "**/coverage/**", "**/node_modules/**"]),
+  // `.claude/` is git-ignored tooling scratch space (agent worktrees and
+  // session state), not repository source. Without it here, `eslint .`
+  // reports errors in files no one committed and no one can fix.
+  globalIgnores([
+    "**/dist/**",
+    "**/coverage/**",
+    "**/node_modules/**",
+    ".claude/**",
+  ]),
   eslint.configs.recommended,
   ...typeCheckedConfigs,
   {

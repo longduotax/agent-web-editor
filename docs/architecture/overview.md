@@ -16,7 +16,7 @@ The browser receives only parsed DTOs and opaque application identifiers.
 
 | Area                      | Responsibility                                                                          | Technology                                       |
 | ------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `apps/web/`               | Route-owned workspace UI, parsed API clients, Markdown, inspector, and terminal         | React, React Router, TanStack Query, xterm, Vite |
+| `apps/web/`               | Route-owned workspace UI, parsed API clients, Markdown, workspace panel, and terminal   | React, React Router, TanStack Query, xterm, Vite |
 | `apps/server/`            | Request policy, metadata, APIs, live events, project coordination, files, Git, and PTYs | Fastify, Drizzle, SQLite, WebSocket, node-pty    |
 | `packages/contracts/`     | Executable wire schemas and inferred DTO types                                          | Zod                                              |
 | `packages/agent-runtime/` | SDK-neutral persistent-session and run interfaces                                       | TypeScript                                       |
@@ -98,8 +98,8 @@ preflight acceptance precedes atomic run/receipt creation. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads
 of the same project to run concurrently. Shared sessions use the registered working directory; isolated sessions use
-their own worktree. Each thread's inspector and terminal resolve the same root
-as its Pi session. Project removal first
+their own worktree. A panel tab and a terminal resolve the same root as the Pi
+session of the thread the tab was opened against. Project removal first
 fences new prompt acceptance, then interrupts or cancels already-started
 running and preflight work before soft-removing its metadata.
 
@@ -120,7 +120,7 @@ Origin-permitted WebSocket subscribers. Browser queries invalidate and replace
 the bounded latest snapshot after events or replay gaps; browser stream state is
 never durable truth.
 
-## Inspector and terminal boundaries
+## File, Git, and terminal boundaries
 
 Thread-view file APIs accept project/thread IDs and strict workspace-relative
 paths. Existing targets
@@ -135,7 +135,8 @@ reviewed staged/unstaged/untracked snapshot without mutating the source checkout
 Clean creation never transfers source changes.
 
 `ProjectTerminalManager` lazily owns one node-pty process per active execution
-scope and a bounded replay buffer. Shared threads map to the project scope;
+scope and a bounded replay buffer. (Several terminals per scope is WSP-07 and
+is not implemented yet.) Shared threads map to the project scope;
 isolated threads map to their worktree scope. The separate terminal WebSocket parses all attach,
 input, resize, restart, and terminate frames. PTYs are process-local and are
 disposed at shutdown.
@@ -157,15 +158,26 @@ above the first prompt. Worktree and clean-start are the safe defaults;
 local-change transfer and direct checkout use are explicit. The workspace
 renders a nested project and thread sidebar, a bounded Markdown transcript with
 an explicit Load earlier action and a five-page/500-row window, direct
-active-run steering and stop controls, direct-execution disclosure,
-Files/Changes/Terminal inspector, and
-responsive drawers. The desktop inspector uses a reduced-motion-aware slide to
-close and reopen and can be resized with a pointer or keyboard; a versioned local
-preference restores its visibility, selected tab, and width. Thread rows expose a hover/focus Archive icon and an
+active-run steering and stop controls, direct-execution disclosure, the
+**workspace panel**, and responsive drawers.
+
+The workspace panel replaces the fixed `Changes | Files | Terminal` inspector
+(the term "inspector" is retired). It is a docked column holding a binary
+tiling tree of **tab groups**, each with its own tab strip; a tab is a durable
+view carrying the `(project, thread, execution scope)` context it was opened
+against, so focusing a different chat pane never retargets, reorders, or
+closes one. Each tab body is mounted once per TAB rather than per group and is
+moved between groups, so a split — or the promotion that follows a group
+closing — keeps a running terminal's process and every scroll position. The
+panel uses a reduced-motion-aware slide to close and reopen, is resizable with
+a pointer or keyboard, and collapses to a docked rail. Its outer docked edge
+is the one place in the surface that carries elevation rather than a hairline.
+Thread rows expose a hover/focus Archive icon and an
 accessible right-click/keyboard Rename and Archive menu. Run and unread signals
 sit beside the thread title with icon-only visible presentation and accessible
-labels. Local storage is limited to unsent per-thread drafts and parsed,
-device-local inspector layout preferences.
+labels. Local storage is limited to unsent per-thread drafts and the parsed,
+device-local panel record: its width, its tree, every group's tab list and
+active tab, and each tab's own restorable state.
 
 Every HTTP response and WebSocket frame is parsed with contracts. Raw Markdown
 HTML and images are disabled; terminal escape handling is confined to xterm.

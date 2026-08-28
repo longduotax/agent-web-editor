@@ -13,6 +13,7 @@ belong here.
 | [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
+| [Workspace panel](workspace-panel.md)                             | None            | 2                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
 | [Agent backends](agent-backends.md)                               | None            | 3                | Approved | In progress    | [Codex tool-call replay](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)               |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
@@ -49,6 +50,42 @@ separate later-phase capabilities. Product approval is pending; implementation
 is in progress under the linked plan and the proposal becomes Current only after
 the user approves it and the behavior is verified.
 
+Workspace panel is an Approved proposal for version 1, approved by the user on
+2026-08-22 from the design as presented in session rather than from a reading of
+the document itself. It replaces the right-hand inspector with a docked panel of tab
+groups in their own binary tiling tree, holding durable tabs — Changes, Diff,
+Files, File, Terminal, and Browser — that each carry the
+`(project, thread, execution scope)` they were opened against and keep it when
+chat focus moves. It also specifies several terminals per execution scope with a
+stated limit and a remembered working directory, an embedded browser tab that
+fails with an explicit named state rather than a blank frame, a device-local
+panel record that migrates the shipped inspector preference, and per-tab
+responsiveness and keyboard/accessibility contracts. It supersedes **CWS-06** of
+[Codex-style workspace surface](codex-workspace-surface.md) in full; that spec's
+other requirements are unaffected. Implementation is in progress under the
+linked plan and the proposal becomes Current only after the behavior is
+implemented and verified.
+
+Workspace panel version 2 is an Approved proposal, approved by the user on
+2026-08-23 from the behaviour as described in session rather than from a reading
+of the document; as for version 1, a discrepancy between the document and that
+discussion resolves in favour of the discussion and returns the proposal to
+Draft. It is bounded to WSP-05: after a 2026-08-22 hands-on pass at a real
+repository found the Files tab flooded by `node_modules` and presented as a flat
+list of root-relative paths, version 2 requires a navigable tree with persisted
+expansion, ignore rules honoured by default in both the listing and the search
+with an explicit opt-in to reveal ignored files, flat results while a search is
+active, and accessible names on every row and every tab. Version 1 stays
+approved and in progress; version 2 reopens nothing else, and the read-only
+non-goal is unchanged — a tree adds navigation, never editing. The same pass
+reported four defects against version 1; two of them — panel tabs and file rows
+said to expose no accessible name — were probed against the live DOM and closed
+as false positives from the inspection tool, which renders name-from-content
+roles as blank. The two that stand are one close control rather than one per tab
+(a design decision to confirm) and clipped file content. None needs a contract
+change; all four, closed and open, are recorded in that specification's Findings
+section and tracked in the plan's milestones 3 and 5.
+
 Codex-style workspace surface is a Draft proposal for version 1 that restyles
 the tiling surface to a calm, near-borderless Codex desktop aesthetic; adds
 complete light and dark themes (System default, live OS follow, before-paint
@@ -58,9 +95,11 @@ surfaces a four-way pane-header and sidebar run status
 (working / needs-approval / done / failed); reduces pane actions to Split and a
 non-destructive Close; and removes the tiling surface's
 collapse-to-dock pane tier entirely, migrating any persisted docked panes back
-into the tiling tree. Product approval is pending; implementation is in
-progress under the linked plan and the proposal becomes Current only after the
-user approves it and the behavior is verified.
+into the tiling tree. Its CWS-06 inspector requirement is superseded in full by
+[Workspace panel](workspace-panel.md) (see that spec and the CWS Superseded
+requirements section); every other CWS requirement stands. Product approval is
+pending; implementation is in progress under the linked plan and the proposal
+becomes Current only after the user approves it and the behavior is verified.
 
 Agent backends carries three proposals. Version 1 — approved by the user on
 2026-08-22 together with its plan version 1, and implemented but not yet

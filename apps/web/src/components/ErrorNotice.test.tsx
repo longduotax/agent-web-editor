@@ -87,4 +87,48 @@ describe("ErrorNotice", () => {
       "An unexpected error occurred.",
     );
   });
+
+  // G10. A failed "Browse…" left a red role="alert" block wedged into the
+  // primary navigation with no dismiss and no Retry. It survived navigation;
+  // only a reload or a successful Browse cleared it.
+  it("offers a dismiss when the caller has one to give", async () => {
+    const user = userEvent.setup();
+    const onDismiss = vi.fn();
+    render(
+      <ErrorNotice
+        error={new Error("The folder browser could not be opened.")}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Dismiss this message" }),
+    );
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no dismiss when the caller gives none", () => {
+    render(<ErrorNotice error={new Error("boom")} />);
+
+    expect(
+      screen.queryByRole("button", { name: "Dismiss this message" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // The origin-refusal branch renders its own markup and used to be the one
+  // path where a new affordance could silently go missing.
+  it("dismisses an origin refusal too", () => {
+    render(
+      <ErrorNotice
+        error={
+          new ApiClientError(403, "forbidden_host", "Request host not allowed.")
+        }
+        onDismiss={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Dismiss this message" }),
+    ).toBeVisible();
+  });
 });

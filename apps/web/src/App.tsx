@@ -1,9 +1,10 @@
 import {
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -15,7 +16,6 @@ import {
 import {
   ProjectIdSchema,
   ThreadIdSchema,
-  type Project,
   type ProjectId,
   type ThreadId,
 } from "@pi-web/contracts";
@@ -30,14 +30,11 @@ import {
 
 import {
   archiveThread,
+  addProjectByPath,
   browseProject,
   discoverSessions,
   getArchivedThreads,
-  getDiff,
-  getFile,
-  getFiles,
   getSnapshot,
-  getStatus,
   getWorkspace,
   importThread,
   removeProject,
@@ -45,14 +42,17 @@ import {
   setExpanded,
   unarchiveThread,
 } from "./api/client.js";
-import { summarizeChanges } from "./components/changesSummary.js";
-import { classifyDiff } from "./components/diffLines.js";
-import { useDebouncedValue } from "./components/useDebouncedValue.js";
 import { ErrorNotice } from "./components/ErrorNotice.js";
+import { ThreadRenameForm } from "./components/ThreadRenameForm.js";
 import { Loading } from "./components/Loading.js";
 import { Status } from "./components/Status.js";
-import { TerminalView } from "./features/TerminalView.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
+import { PanelRightIcon } from "./features/panel/PanelRightIcon.js";
+import { PANEL_DEFAULT_WIDTH } from "./features/panel/panelModel.js";
+import { clampPanelWidth } from "./features/panel/panelGeometry.js";
+import { threadTabContext } from "./features/panel/tabContext.js";
+import { usePanelState } from "./features/panel/usePanelState.js";
+import { WorkspacePanel } from "./features/panel/WorkspacePanel.js";
 import { UndoToast } from "./features/workspace/UndoToast.js";
 import { WorkspaceView } from "./features/workspace/WorkspaceView.js";
 import {
@@ -60,15 +60,6 @@ import {
   PANE_STATUS_LABEL,
   PANE_STATUS_TOKEN,
 } from "./features/workspace/runStatus.js";
-import {
-  INSPECTOR_MAX_WIDTH,
-  INSPECTOR_MIN_WIDTH,
-  INSPECTOR_TABS,
-  readInspectorPreferences,
-  writeInspectorPreferences,
-  type InspectorPreferences,
-  type InspectorTab,
-} from "./inspectorPreferences.js";
 
 export { Composer } from "./features/workspace/ThreadPane.js";
 
@@ -80,6 +71,30 @@ interface PendingArchive {
   projectId: ProjectId;
   threadId: ThreadId;
   title: string;
+}
+
+// How close the thread context menu may come to the edge of the window.
+const VIEWPORT_INSET = 8;
+
+// Keeps an already-rendered menu inside the window, using the size the browser
+// actually laid it out at. An earlier version carried `.thread-context-menu`'s
+// min-width and item metrics as JS constants; those are the stylesheet's to
+// change, and a copy of them here is a copy that drifts. Measuring costs one
+// layout read in an effect that already runs on open.
+function clampToViewport(
+  anchor: { left: number; top: number },
+  size: { width: number; height: number },
+) {
+  return {
+    left: Math.max(
+      VIEWPORT_INSET,
+      Math.min(anchor.left, window.innerWidth - size.width - VIEWPORT_INSET),
+    ),
+    top: Math.max(
+      VIEWPORT_INSET,
+      Math.min(anchor.top, window.innerHeight - size.height - VIEWPORT_INSET),
+    ),
+  };
 }
 
 function Sidebar({
@@ -102,6 +117,45 @@ function Sidebar({
         await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     },
   });
+  // The path fallback's own state. Kept beside `browse` rather than inside a
+  // child component so both routes invalidate the same query and so the
+  // disclosure can close itself on success.
+  // The disclosure is left UNCONTROLLED and closed through the DOM node.
+  // Driving `open` from React state means React owns a value the browser also
+  // writes (a click on the summary), and the two desynchronise the moment one
+  // of them moves without the other -- which is exactly what happens in an
+  // environment that does not fire `toggle`. `<details>` already remembers
+  // its own state; the only thing this needs is to shut it once.
+  const pathFormRef = useRef<HTMLDetailsElement>(null);
+  const [pathDraft, setPathDraft] = useState("");
+  const addByPath = useMutation({
+    mutationFn: addProjectByPath,
+    onSuccess: async () => {
+      // Clear and collapse: the project's row appearing in the list below is
+      // the confirmation, and a field still holding the path that worked
+      // invites a second submit that would only report "already registered".
+      setPathDraft("");
+      if (pathFormRef.current !== null) pathFormRef.current.open = false;
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+  // A failed browse used to survive every navigation and clear only on a
+  // reload or a successful browse -- a red block in the primary navigation,
+  // for an action the user had already abandoned, reading as "something is
+  // broken with my project". Moving anywhere in the workspace is enough to
+  // say they have moved on. Read through a ref so this effect depends on the
+  // ROUTE only: putting the mutation's own error in the dependency list would
+  // fire the moment the error arrived and clear the notice before it painted.
+  const browseRef = useRef(browse);
+  useEffect(() => {
+    browseRef.current = browse;
+  });
+  useEffect(() => {
+    const current = browseRef.current;
+    // Never while the dialog is still open: resetting a pending mutation
+    // re-arms the Browse button behind a chooser that is still on screen.
+    if (!current.isPending && current.error !== null) current.reset();
+  }, [selectedProjectId, selectedThreadId]);
   const [discoveringProjectId, setDiscoveringProjectId] = useState<
     ProjectId | undefined
   >(undefined);
@@ -179,6 +233,22 @@ function Sidebar({
   // request could reject — so that failure surfaced nowhere at all. Each
   // entry now owns its own toast, its own 6s timer and its own named error.
   const [pendingArchives, setPendingArchives] = useState<PendingArchive[]>([]);
+  // Threads whose archive request is IN FLIGHT, kept hidden for exactly as
+  // long as it takes the listing to agree.
+  //
+  // `pendingArchives` stops hiding a row the instant the request is SENT,
+  // because the toast's dismissal both un-stages the archive and fires the
+  // mutation in one handler. But the authoritative listing does not drop the
+  // thread until the request has returned AND the invalidated ["workspace"]
+  // query has refetched. In that gap the row -- gone from the sidebar for the
+  // whole six-second undo window, its toast already faded -- came BACK, and
+  // left again 85ms later when the fresh listing landed. That flicker, and
+  // the reflow of every row beneath it, is the reported glitch.
+  //
+  // Hiding for the whole flight means the row leaves once, when the reader
+  // asked for it, and returns only if the archive actually fails -- which is
+  // what the named error notice beside it is there to explain.
+  const [archivingThreadIds, setArchivingThreadIds] = useState<ThreadId[]>([]);
   const [archiveFailures, setArchiveFailures] = useState<
     { thread: PendingArchive; error: unknown }[]
   >([]);
@@ -190,6 +260,14 @@ function Sidebar({
   const archive = useMutation({
     mutationFn: async ({ projectId, threadId }: PendingArchive) =>
       await archiveThread(projectId, threadId),
+    // One choke point for both routes into this mutation -- the toast timing
+    // out, and Retry on a failed archive's notice -- so neither can forget to
+    // hide the row it is about to remove.
+    onMutate: ({ threadId }) => {
+      setArchivingThreadIds((current) =>
+        current.includes(threadId) ? current : [...current, threadId],
+      );
+    },
     onSuccess: async (_result, variables) => {
       setThreadMenu(null);
       forgetArchiveFailure(variables.threadId);
@@ -200,8 +278,32 @@ function Sidebar({
         // apparently vanished from both lists at once.
         queryClient.invalidateQueries({ queryKey: ["archived-threads"] }),
       ]);
-      if (selectedThreadId === variables.threadId)
-        void navigate(`/projects/${variables.projectId}`);
+      // NO NAVIGATION. The focused pane keeps the thread it was showing and
+      // swaps its composer for "This thread is archived. Restore it to keep
+      // working." -- which is exactly what an unfocused pane has always done.
+      //
+      // Archiving used to send the app to `/projects/:id`, whose redirect to
+      // `lastOpenedThreadId ?? threads[0]` put an ARBITRARY OTHER THREAD
+      // under the reader's eyes with nothing said about it. The fix for that
+      // was to navigate to `/new` instead, which carries no thread id and so
+      // does not re-point the pane. But `/new` is not inert either: it is an
+      // INSTRUCTION to open an empty composer, so WorkspaceView answered it
+      // by splitting a second pane in and moving keyboard focus into its
+      // textarea -- six seconds after a click that asked for neither.
+      //
+      // That split is what re-tiled the surface, and re-tiling re-parents the
+      // existing pane's element, which React cannot preserve across a change
+      // of parent. The pane therefore REMOUNTED, losing the latched
+      // "this thread was once listed" that is the whole basis of its archived
+      // inference, and rendered the thread it had just correctly marked
+      // Archived as live again -- its title, a green "Done", a working
+      // composer -- until the refetched snapshot 404'd 35ms later.
+      //
+      // Staying put satisfies the original requirement more directly than
+      // either destination: nothing re-points the pane because nothing
+      // navigates, the URL goes on naming the thread the reader archived (so
+      // a reload returns to it, with Restore in reach), and the pane reaches
+      // the notice by simply re-rendering.
     },
     // Recorded per thread rather than read off the mutation, which only ever
     // holds the most recent call's error and is the exact hole NEW-R3-1 fell
@@ -213,6 +315,17 @@ function Sidebar({
         ),
         { thread: variables, error },
       ]);
+    },
+    // react-query AWAITS onSuccess before running this, so on the success
+    // path the row is only allowed back once the refetched listing has
+    // already dropped it -- and it therefore never comes back at all. On the
+    // failure path nothing dropped it, so it reappears beside its error.
+    // That ordering is the whole fix; a plain onSuccess would un-hide the row
+    // before the invalidation it just awaited had reached the cache.
+    onSettled: (_result, _error, variables) => {
+      setArchivingThreadIds((current) =>
+        current.filter((id) => id !== variables.threadId),
+      );
     },
   });
   const unarchive = useMutation({
@@ -248,6 +361,41 @@ function Sidebar({
       ]);
     },
   });
+  // One `rename` mutation is shared by every row in every project, so its
+  // error outlives the form that produced it: a failed rename of thread A,
+  // Cancel, then Rename on thread B rendered A's red block under B's field.
+  // Nothing ever called `reset()`, so the notice was also the one error in
+  // the app with no way out -- in the commit whose organising idea (G10) is
+  // that a red block needs an exit. Every route into and out of a rename form
+  // goes through these two, so the error can only ever belong to the form on
+  // screen.
+  const beginRename = (target: {
+    projectId: ProjectId;
+    threadId: ThreadId;
+    title: string;
+  }) => {
+    rename.reset();
+    setRenamingThread(target);
+  };
+  const endRename = () => {
+    rename.reset();
+    setRenamingThread(null);
+  };
+
+  // The menu opens off the right edge of the row that asked for it, level with
+  // that row's top, so it never covers the thread below. That anchor can fall
+  // outside the window near an edge, so it is corrected here — before paint,
+  // and against the size the browser actually laid the menu out at rather than
+  // against a copy of its CSS. Converges after one pass: the corrected anchor
+  // clamps to itself.
+  useLayoutEffect(() => {
+    const menu = threadMenuRef.current;
+    if (threadMenu === null || menu === null) return;
+    const { width, height } = menu.getBoundingClientRect();
+    const clamped = clampToViewport(threadMenu, { width, height });
+    if (clamped.left !== threadMenu.left || clamped.top !== threadMenu.top)
+      setThreadMenu({ ...threadMenu, ...clamped });
+  }, [threadMenu]);
 
   useEffect(() => {
     if (threadMenu === null) return;
@@ -322,8 +470,90 @@ function Sidebar({
         >
           {browse.isPending ? "Opening…" : "Browse…"}
         </button>
+        {/* The second route in, and the reason it exists: the button above
+            hands off to a native OS folder chooser, which is the better way
+            when it works and was the ONLY way. That dialog opens as a
+            separate window; it can land behind the browser or on another
+            desktop, and when it fails outright the app could say so and
+            offer nothing else. Adding a project is the first thing anyone
+            does and it had no second path.
+
+            Folded into a closed <details> so the common case is unchanged:
+            one uppercase label and one primary button, exactly as before.
+            The fallback is one word away for the reader who needs it and
+            invisible to the reader who does not. */}
+        <details className="add-project-path" ref={pathFormRef}>
+          <summary>Or enter a path</summary>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const path = pathDraft.trim();
+              if (path === "" || addByPath.isPending) return;
+              addByPath.mutate(path);
+            }}
+          >
+            <input
+              type="text"
+              value={pathDraft}
+              // Not a `required` field with browser validation: the submit
+              // button is disabled until there is something to send, which
+              // says the same thing without a popup.
+              aria-label="Project directory path"
+              placeholder="/absolute/project/path"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              onChange={(event) => {
+                setPathDraft(event.target.value);
+                addByPath.reset();
+              }}
+            />
+            <button
+              type="submit"
+              disabled={pathDraft.trim() === "" || addByPath.isPending}
+            >
+              {addByPath.isPending ? "Adding…" : "Add"}
+            </button>
+          </form>
+          {/* Said before it is asked, because the new-chat pane already
+              handles a non-repository directory and a reader who does not
+              know that will assume this field wants a repository. */}
+          <p className="add-project-path-note">
+            The full path to the directory. It does not have to be a Git
+            repository.
+          </p>
+          {addByPath.error !== null && (
+            <ErrorNotice
+              error={addByPath.error}
+              onDismiss={() => {
+                addByPath.reset();
+              }}
+            />
+          )}
+        </details>
       </div>
-      {browse.error !== null && <ErrorNotice error={browse.error} />}
+      {/* The folder chooser is a separate OS window, which on macOS can open
+          behind the browser or on another Space. All the sidebar used to say
+          was a disabled button reading "Opening…" forever, so the app looked
+          hung when in fact it was waiting on a dialog the user could not see.
+          Saying where the dialog went is the whole fix: there is no cancel to
+          offer -- the app cannot close someone else's window, and re-arming
+          the button would only open a second dialog behind the first. */}
+      {browse.isPending && (
+        <p className="add-project-waiting" role="status">
+          A folder chooser is open in a separate window. It may be behind this
+          one, or on another desktop.
+        </p>
+      )}
+      {browse.error !== null && (
+        <ErrorNotice
+          error={browse.error}
+          onDismiss={() => {
+            browse.reset();
+          }}
+        />
+      )}
       {/* One notice per failed archive, naming its thread: with several
           archives in flight an unlabelled message cannot say which one
           failed, and the row silently reappearing explains nothing. */}
@@ -337,7 +567,14 @@ function Sidebar({
           }}
         />
       ))}
-      {unarchive.error !== null && <ErrorNotice error={unarchive.error} />}
+      {unarchive.error !== null && (
+        <ErrorNotice
+          error={unarchive.error}
+          onDismiss={() => {
+            unarchive.reset();
+          }}
+        />
+      )}
       <div className="project-list">
         {workspace.isPending && <p className="muted">Loading projects…</p>}
         {workspace.data?.projects.length === 0 && (
@@ -351,7 +588,8 @@ function Sidebar({
               thread.projectId === project.id &&
               !pendingArchives.some(
                 (pending) => pending.threadId === thread.id,
-              ),
+              ) &&
+              !archivingThreadIds.includes(thread.id),
           );
           return (
             <section
@@ -382,7 +620,7 @@ function Sidebar({
                 {project.unreadCount > 0 && (
                   <span
                     className="unread-dot"
-                    aria-label={`${String(project.unreadCount)} unread completions`}
+                    aria-label={`${String(project.unreadCount)} unread completion${project.unreadCount === 1 ? "" : "s"}`}
                   >
                     ●
                   </span>
@@ -513,14 +751,22 @@ function Sidebar({
                             event.preventDefault();
                             const bounds =
                               event.currentTarget.getBoundingClientRect();
-                            openMenu(bounds.right, bounds.bottom);
+                            openMenu(bounds.right + 6, bounds.top);
                           }}
                         >
                           {editing ? (
-                            <form
-                              className="thread-rename"
-                              onSubmit={(event) => {
-                                event.preventDefault();
+                            <ThreadRenameForm
+                              value={renamingThread.title}
+                              label={`Rename ${thread.title}`}
+                              pending={rename.isPending}
+                              error={rename.error}
+                              onChange={(title) => {
+                                setRenamingThread({
+                                  ...renamingThread,
+                                  title,
+                                });
+                              }}
+                              onSubmit={() => {
                                 const title = renamingThread.title.trim();
                                 if (title !== "")
                                   rename.mutate({
@@ -529,43 +775,11 @@ function Sidebar({
                                     title,
                                   });
                               }}
-                            >
-                              <input
-                                aria-label={`Rename ${thread.title}`}
-                                autoFocus
-                                maxLength={200}
-                                value={renamingThread.title}
-                                onFocus={(event) => {
-                                  event.currentTarget.select();
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key !== "Escape") return;
-                                  event.stopPropagation();
-                                  setRenamingThread(null);
-                                }}
-                                onChange={(event) => {
-                                  setRenamingThread({
-                                    ...renamingThread,
-                                    title: event.target.value,
-                                  });
-                                }}
-                              />
-                              <button type="submit" disabled={rename.isPending}>
-                                Save
-                              </button>
-                              <button
-                                type="button"
-                                disabled={rename.isPending}
-                                onClick={() => {
-                                  setRenamingThread(null);
-                                }}
-                              >
-                                Cancel
-                              </button>
-                              {rename.error !== null && (
-                                <ErrorNotice error={rename.error} />
-                              )}
-                            </form>
+                              onCancel={endRename}
+                              onDismissError={() => {
+                                rename.reset();
+                              }}
+                            />
                           ) : (
                             <>
                               <Link
@@ -575,7 +789,22 @@ function Sidebar({
                                   setThreadMenu(null);
                                 }}
                               >
-                                <span className="thread-title">
+                                {/* A title is the only text on this row the
+                                    app did not write, and it may be RTL. In
+                                    an LTR paragraph the server's trailing
+                                    `…` is a neutral run at the end of the
+                                    line, so the bidi algorithm hands it the
+                                    paragraph direction and draws it to the
+                                    RIGHT of a Hebrew or Arabic title --
+                                    detached from the end of the text it
+                                    truncates, where it reads as if it came
+                                    first. `dir="auto"` gives the title its
+                                    own base direction, taken from its first
+                                    strong character, so the ellipsis stays
+                                    at the logical end. It also stops an RTL
+                                    title reordering the status glyph beside
+                                    it. A no-op for every LTR title. */}
+                                <span className="thread-title" dir="auto">
                                   {thread.title}
                                 </span>
                                 {(() => {
@@ -621,7 +850,7 @@ function Sidebar({
                                   event.stopPropagation();
                                   const bounds =
                                     event.currentTarget.getBoundingClientRect();
-                                  openMenu(bounds.left, bounds.bottom);
+                                  openMenu(bounds.right + 6, bounds.top);
                                 }}
                               >
                                 <span aria-hidden="true">…</span>
@@ -716,7 +945,7 @@ function Sidebar({
             type="button"
             role="menuitem"
             onClick={() => {
-              setRenamingThread({
+              beginRename({
                 projectId: threadMenu.projectId,
                 threadId: threadMenu.threadId,
                 title: threadMenu.title,
@@ -790,428 +1019,14 @@ function Sidebar({
   );
 }
 
-// How many file rows the Files tab paints at once. The unsearched listing on
-// a real repository is ~20,000 entries; rendering them all is what made the
-// inspector slow to open and to scroll (NEW-R3-4).
-const FILE_LIST_RENDER_LIMIT = 200;
-
-const DESKTOP_SIDEBAR_WIDTH = 272;
-const MIN_THREAD_WIDTH = 360;
-const INSPECTOR_RESIZE_STEP = 24;
-
-function PanelRightIcon() {
-  return (
-    <svg className="panel-right-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2" />
-      <path d="M9.25 2.75v10.5" />
-    </svg>
-  );
-}
-
-function inspectorMaxWidth(viewportWidth: number): number {
-  return Math.min(
-    INSPECTOR_MAX_WIDTH,
-    Math.max(
-      INSPECTOR_MIN_WIDTH,
-      viewportWidth - DESKTOP_SIDEBAR_WIDTH - MIN_THREAD_WIDTH,
-    ),
-  );
-}
-
-// Added / removed / hunk-header lines are coloured from theme tokens. The
-// `+`/`-` prefix characters stay in the text, so the distinction is never
-// carried by colour alone.
-function DiffText({ text }: { text: string }) {
-  return (
-    <pre className="diff-text">
-      {classifyDiff(text).map((line, index) => (
-        <span
-          className={`diff-line diff-${line.kind}`}
-          key={`${String(index)}:${line.text}`}
-        >
-          {line.text}
-          {"\n"}
-        </span>
-      ))}
-    </pre>
-  );
-}
-
-function Inspector({
-  project,
-  threadId,
-  tab,
-  width,
-  onTabChange,
-  onWidthChange,
-  onClose,
-  open,
-}: {
-  project: Project;
-  threadId: ThreadId;
-  tab: InspectorTab;
-  width: number;
-  onTabChange: (tab: InspectorTab) => void;
-  onWidthChange: (width: number) => void;
-  onClose: () => void;
-  open: boolean;
-}) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [resizing, setResizing] = useState(false);
-  const resizingPointer = useRef<number | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const maxWidth = inspectorMaxWidth(viewportWidth);
-  const effectiveWidth = Math.min(
-    maxWidth,
-    Math.max(INSPECTOR_MIN_WIDTH, width),
-  );
-  useEffect(() => {
-    setSelectedPath(null);
-    setSearch("");
-  }, [threadId]);
-  useEffect(() => {
-    const resized = () => {
-      setViewportWidth(window.innerWidth);
-    };
-    window.addEventListener("resize", resized);
-    return () => {
-      window.removeEventListener("resize", resized);
-    };
-  }, []);
-  const resizeFromClientX = (clientX: number) => {
-    onWidthChange(
-      Math.min(
-        maxWidth,
-        Math.max(INSPECTOR_MIN_WIDTH, Math.round(window.innerWidth - clientX)),
-      ),
-    );
-  };
-  const finishResize = (element: HTMLDivElement, pointerId: number) => {
-    resizingPointer.current = null;
-    if (
-      typeof element.hasPointerCapture === "function" &&
-      typeof element.releasePointerCapture === "function" &&
-      element.hasPointerCapture(pointerId)
-    )
-      element.releasePointerCapture(pointerId);
-    setResizing(false);
-  };
-  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    let nextWidth: number | undefined;
-    if (event.key === "ArrowLeft")
-      nextWidth = effectiveWidth + INSPECTOR_RESIZE_STEP;
-    if (event.key === "ArrowRight")
-      nextWidth = effectiveWidth - INSPECTOR_RESIZE_STEP;
-    if (event.key === "Home") nextWidth = INSPECTOR_MIN_WIDTH;
-    if (event.key === "End") nextWidth = maxWidth;
-    if (nextWidth === undefined) return;
-    event.preventDefault();
-    onWidthChange(Math.min(maxWidth, Math.max(INSPECTOR_MIN_WIDTH, nextWidth)));
-  };
-  const status = useQuery({
-    queryKey: ["git", project.id, threadId],
-    queryFn: () => getStatus(project.id, threadId),
-    enabled: tab === "changes",
-  });
-  // Debounced + keepPreviousData: a full recursive listing takes hundreds of
-  // milliseconds to seconds on a real repository, so a query per keystroke
-  // both hammered the server and blanked the panel to "Listing files…"
-  // between every character.
-  const debouncedSearch = useDebouncedValue(search);
-  const files = useQuery({
-    queryKey: ["files", project.id, threadId, debouncedSearch],
-    queryFn: () => getFiles(project.id, threadId, debouncedSearch),
-    enabled: tab === "files",
-    placeholderData: keepPreviousData,
-  });
-  const preview = useQuery({
-    queryKey: ["file", project.id, threadId, selectedPath],
-    queryFn: () => getFile(project.id, threadId, selectedPath ?? ""),
-    enabled: tab === "files" && selectedPath !== null,
-  });
-  const diff = useQuery({
-    queryKey: ["diff", project.id, threadId, selectedPath],
-    queryFn: () => getDiff(project.id, threadId, selectedPath ?? ""),
-    enabled: tab === "changes" && selectedPath !== null,
-  });
-  return (
-    <aside
-      className="inspector"
-      aria-label="Project inspector"
-      aria-hidden={!open}
-      inert={!open}
-    >
-      <div
-        className={`inspector-resizer ${resizing ? "resizing" : ""}`}
-        role="separator"
-        aria-label="Resize inspector panel"
-        aria-orientation="vertical"
-        aria-valuemin={INSPECTOR_MIN_WIDTH}
-        aria-valuemax={maxWidth}
-        aria-valuenow={effectiveWidth}
-        tabIndex={0}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          resizingPointer.current = event.pointerId;
-          if (typeof event.currentTarget.setPointerCapture === "function")
-            event.currentTarget.setPointerCapture(event.pointerId);
-          setResizing(true);
-        }}
-        onPointerMove={(event) => {
-          if (resizingPointer.current === event.pointerId)
-            resizeFromClientX(event.clientX);
-        }}
-        onPointerUp={(event) => {
-          finishResize(event.currentTarget, event.pointerId);
-        }}
-        onPointerCancel={(event) => {
-          finishResize(event.currentTarget, event.pointerId);
-        }}
-        onKeyDown={resizeWithKeyboard}
-      />
-      <div className="inspector-tabs">
-        <div className="inspector-tab-options" role="tablist">
-          {INSPECTOR_TABS.map((name) => (
-            <button
-              id={`inspector-tab-${name}`}
-              role="tab"
-              aria-controls="inspector-content"
-              aria-selected={tab === name}
-              key={name}
-              onClick={() => {
-                onTabChange(name);
-                setSelectedPath(null);
-              }}
-            >
-              {name[0]?.toUpperCase()}
-              {name.slice(1)}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="inspector-close"
-          aria-label="Close inspector panel"
-          title="Close inspector"
-          onClick={onClose}
-        >
-          <PanelRightIcon />
-        </button>
-      </div>
-      <div
-        id="inspector-content"
-        className="inspector-content"
-        role="tabpanel"
-        aria-labelledby={`inspector-tab-${tab}`}
-      >
-        {tab === "changes" && (
-          <>
-            <p className="scope-note">
-              Current thread workspace
-              {status.data?.available === true &&
-                status.data.files.length > 0 &&
-                ` · ${summarizeChanges(status.data.files)}`}
-            </p>
-            {status.isPending && (
-              <p className="panel-state" aria-live="polite">
-                Reading the worktree…
-              </p>
-            )}
-            {status.data?.available === false && (
-              <div className="empty">{status.data.message}</div>
-            )}
-            {status.data?.available === true &&
-              status.data.files.length === 0 && (
-                <div className="empty">No changes in this worktree.</div>
-              )}
-            <ul className="file-list">
-              {status.data?.files.map((file) => (
-                <li key={file.path}>
-                  <button
-                    onClick={() => {
-                      setSelectedPath(file.path);
-                    }}
-                    className={selectedPath === file.path ? "active" : ""}
-                  >
-                    <span className={`change-kind ${file.kind}`}>
-                      {file.kind[0]?.toUpperCase()}
-                    </span>
-                    <span>{file.path}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {(status.data?.files.length ?? 0) > 0 && selectedPath === null && (
-              <p className="panel-state">Select a file to view its diff.</p>
-            )}
-            {diff.isPending && selectedPath !== null && (
-              <p className="panel-state" aria-live="polite">
-                Loading diff…
-              </p>
-            )}
-            {diff.data !== undefined && (
-              <div className="diff-view">
-                <header>
-                  {diff.data.path}
-                  {diff.data.truncated && " · truncated"}
-                </header>
-                {diff.data.staged !== "" && (
-                  <>
-                    <h4>Staged</h4>
-                    <DiffText text={diff.data.staged} />
-                  </>
-                )}
-                {diff.data.unstaged !== "" && (
-                  <>
-                    <h4>Unstaged</h4>
-                    <DiffText text={diff.data.unstaged} />
-                  </>
-                )}
-              </div>
-            )}
-            {status.error !== null && (
-              <ErrorNotice
-                error={status.error}
-                onRetry={() => {
-                  void status.refetch();
-                }}
-              />
-            )}
-            {diff.error !== null && (
-              <ErrorNotice
-                error={diff.error}
-                onRetry={() => {
-                  void diff.refetch();
-                }}
-              />
-            )}
-          </>
-        )}
-        {tab === "files" && (
-          <>
-            <input
-              className="file-search"
-              aria-label="Search project files"
-              placeholder="Search files…"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-              }}
-            />
-            {files.isPending && (
-              <p className="panel-state" aria-live="polite">
-                Listing files…
-              </p>
-            )}
-            {files.data?.entries.length === 0 && (
-              <div className="empty">
-                {/* Named for the query the RESULT belongs to, not the
-                    keystroke in flight. */}
-                {debouncedSearch === ""
-                  ? "No files in this workspace."
-                  : `No files match "${debouncedSearch}".`}
-              </div>
-            )}
-            {/* Rendered rows are capped (NEW-R3-4). The server returns the
-                whole recursive listing -- 20,000 entries on this repo, node_
-                modules included -- and painting all of them as real DOM made
-                the first paint and every subsequent scroll of the inspector
-                visibly slow. The cap is a render budget, not a filter: the
-                count below always names the true total and points at search,
-                which narrows the result on the server. */}
-            <ul className="file-list">
-              {files.data?.entries
-                .slice(0, FILE_LIST_RENDER_LIMIT)
-                .map((file) => (
-                  <li key={file.path}>
-                    <button
-                      disabled={file.kind !== "file" && file.kind !== "symlink"}
-                      onClick={() => {
-                        setSelectedPath(file.path);
-                      }}
-                    >
-                      <span aria-hidden="true">
-                        {file.kind === "directory" ? "▸" : "·"}
-                      </span>
-                      <span>{file.path}</span>
-                    </button>
-                  </li>
-                ))}
-            </ul>
-            {(files.data?.entries.length ?? 0) > FILE_LIST_RENDER_LIMIT && (
-              <p className="panel-state" aria-live="polite">
-                {`Showing the first ${String(FILE_LIST_RENDER_LIMIT)} of ${String(files.data?.entries.length ?? 0)} files. Search to narrow the list.`}
-              </p>
-            )}
-            {(files.data?.entries.length ?? 0) > 0 && selectedPath === null && (
-              <p className="panel-state">Select a file to preview it.</p>
-            )}
-            {preview.data !== undefined && (
-              <div className="file-preview">
-                <header>
-                  <span>{preview.data.path}</span>
-                  <button
-                    onClick={() =>
-                      void navigator.clipboard.writeText(preview.data.path)
-                    }
-                  >
-                    Copy path
-                  </button>
-                  <button
-                    disabled={preview.data.binary}
-                    onClick={() =>
-                      void navigator.clipboard.writeText(preview.data.content)
-                    }
-                  >
-                    Copy
-                  </button>
-                </header>
-                {preview.data.binary ? (
-                  <p>Binary file preview is unavailable.</p>
-                ) : (
-                  <pre>{preview.data.content}</pre>
-                )}
-              </div>
-            )}
-            {files.error !== null && (
-              <ErrorNotice
-                error={files.error}
-                onRetry={() => {
-                  void files.refetch();
-                }}
-              />
-            )}
-            {preview.error !== null && (
-              <ErrorNotice
-                error={preview.error}
-                onRetry={() => {
-                  void preview.refetch();
-                }}
-              />
-            )}
-          </>
-        )}
-        {tab === "terminal" && (
-          <TerminalView projectId={project.id} threadId={threadId} />
-        )}
-      </div>
-    </aside>
-  );
-}
-
 /**
- * The project's tiling surface plus the ONE workspace inspector docked right
- * of it (CWS-06).
+ * The project's tiling surface plus the ONE workspace panel docked right of
+ * it (WSP-01).
  *
- * The inspector follows the **focused pane**, never the URL. A route can
- * address at most one thread, but the surface can hold several panes at once
- * (and, on `/new`, none that own a thread yet); deriving the inspector from
- * `useParams().threadId` meant it showed a thread the user was not looking
- * at, or disappeared entirely while a perfectly inspectable pane was
- * focused. `WorkspaceView` reports whichever thread its focused pane owns —
- * `null` for a threadless pane or an empty surface — and that is the single
- * source of truth for what the inspector shows.
+ * The panel's tabs are durable and carry their own context (WSP-02), so
+ * unlike the fixed strip it replaces, it does not follow the focused pane.
+ * Focus is still an input, but only in two places: it decides which thread
+ * the `+` menu opens tabs *for*, and whether a tab shows its worktree chip.
  */
 function ProjectWorkspace({
   projectId,
@@ -1220,77 +1035,68 @@ function ProjectWorkspace({
   projectId: ProjectId;
   routeThreadId?: ThreadId | undefined;
 }) {
-  const [inspectorPreferences, setInspectorPreferences] =
-    useState<InspectorPreferences>(readInspectorPreferences);
-  useEffect(() => {
-    writeInspectorPreferences(inspectorPreferences);
-  }, [inspectorPreferences]);
-  // Seeded from the route so the first paint already has the right workspace
-  // when the surface opens on the addressed thread; from then on the focused
-  // pane drives it.
+  const panel = usePanelState();
+  // Seeded from the route so the first paint already knows which thread new
+  // tabs would belong to; from then on the focused pane drives it.
   const [focusedThreadId, setFocusedThreadId] = useState<ThreadId | null>(
     routeThreadId ?? null,
   );
-  const updateInspectorPreferences = (
-    update: Partial<Omit<InspectorPreferences, "version">>,
-  ) => {
-    setInspectorPreferences((current) => ({ ...current, ...update }));
-  };
-  // Kept only for the Inspector, which needs the project record and to know
-  // whether a snapshot is available; ThreadPane owns its own copy of this
-  // query (and the live-update subscription that keeps it fresh) so it stays
-  // self-contained. keepPreviousData means moving focus between two thread
-  // panes swaps the inspector's contents instead of tearing the whole column
-  // down and rebuilding it.
+  // The focused thread's execution scope, which is all the panel needs from
+  // the chat surface. ThreadPane owns its own copy of this query (and the
+  // live subscription that keeps it fresh); this one exists to name a
+  // worktree, which changes only when the focused thread does.
   const snapshot = useQuery({
     queryKey: ["snapshot", projectId, focusedThreadId],
     queryFn: async () => {
       if (focusedThreadId === null)
-        throw new Error("No focused thread to inspect.");
+        throw new Error("No focused thread to open tabs against.");
       return await getSnapshot(projectId, focusedThreadId);
     },
     enabled: focusedThreadId !== null,
     placeholderData: keepPreviousData,
+    // Restored after the port to the panel dropped it silently (D6). It is
+    // usually redundant — ThreadPane holds the same key with the same
+    // interval and the live subscription — but only while the focused
+    // thread still has a pane mounted, and this query is what names the
+    // worktree on a tab's chip. A chip is a claim about which worktree a tab
+    // reads; it should not be able to go stale because a pane closed.
     refetchInterval: 15_000,
   });
-  const inspectable = focusedThreadId !== null && snapshot.data !== undefined;
+  const focusedContext = useMemo(() => {
+    const data = snapshot.data;
+    if (data === undefined || focusedThreadId === null) return null;
+    // keepPreviousData hands back the previously focused thread's snapshot
+    // while the next one loads. Building a context from that would label a
+    // tab with a worktree it does not read.
+    if (data.thread.id !== focusedThreadId) return null;
+    return threadTabContext(data.project, data.thread);
+  }, [snapshot.data, focusedThreadId]);
+
+  // D-1: a tab restored by the v1 inspector migration has no context of its
+  // own. It adopts the focused pane's thread once, and is fixed from then on
+  // like every other tab (WSP-02).
+  const { bindPendingContexts } = panel.actions;
+  useEffect(() => {
+    if (focusedContext === null) return;
+    bindPendingContexts(focusedContext);
+  }, [focusedContext, bindPendingContexts]);
+
   return (
     <WorkspaceLayout
       selectedProjectId={projectId}
       // The sidebar highlights whatever the user is looking at, which is the
       // focused pane's thread — the route only seeds it.
       selectedThreadId={focusedThreadId ?? routeThreadId}
-      inspectorAvailable={inspectable}
-      inspectorOpen={inspectorPreferences.open}
-      inspectorWidth={inspectorPreferences.width}
-      onOpenInspector={() => {
-        updateInspectorPreferences({ open: true });
+      panelOpen={panel.state.open}
+      panelWidth={panel.state.width}
+      onOpenPanel={() => {
+        panel.actions.setOpen(true);
       }}
-      onCloseInspector={() => {
-        updateInspectorPreferences({ open: false });
+      onClosePanel={() => {
+        panel.actions.setOpen(false);
       }}
-      inspector={
-        inspectable ? (
-          <Inspector
-            // Remount on a thread change so the tab's selected file, search
-            // box and in-flight queries never leak across panes.
-            key={focusedThreadId}
-            project={snapshot.data.project}
-            threadId={focusedThreadId}
-            tab={inspectorPreferences.activeTab}
-            width={inspectorPreferences.width}
-            onTabChange={(activeTab) => {
-              updateInspectorPreferences({ activeTab });
-            }}
-            onWidthChange={(width) => {
-              updateInspectorPreferences({ width });
-            }}
-            onClose={() => {
-              updateInspectorPreferences({ open: false });
-            }}
-            open={inspectorPreferences.open}
-          />
-        ) : undefined
+      panel={
+        <WorkspacePanel controller={panel} focusedContext={focusedContext} />
       }
     >
       <WorkspaceView
@@ -1301,18 +1107,43 @@ function ProjectWorkspace({
   );
 }
 
-function NewChatRoute() {
+/**
+ * `/projects/:id/new` and `/projects/:id/threads/:threadId` for ONE component,
+ * because they are one surface under two entry instructions.
+ *
+ * They used to be two route components, and React reconciles by ELEMENT TYPE:
+ * two types at the same position is an unmount and a mount, not an update. So
+ * every crossing between those paths tore the whole workspace down and built
+ * it again -- every pane's DOM replaced, every query refetched from cold, and
+ * every piece of pane-local state reset. Measured in the running app: one
+ * archive re-issued the workspace listing, the focused thread's snapshot and
+ * the new-chat preflight, and replaced the pane element twice.
+ *
+ * The state that reset is the point. `ThreadPane` infers "archived" from the
+ * thread's absence from the listing, LATCHED on having seen it there, so that
+ * a brand-new thread cannot flash "Archived" before the listing catches up.
+ * A remount puts that latch back to false. Archiving the focused thread
+ * navigates across exactly this boundary, so the pane that had correctly said
+ * "Archived" came back up saying the thread was live -- its title, a green
+ * "Done", a working composer -- and stayed wrong for the 126ms until its
+ * refetched snapshot returned 404. That is the second half of the reported
+ * glitch, and it is the precise defect c9709f8 was written to remove.
+ *
+ * One component for both paths, so React updates the surface in place. The
+ * thread id simply becomes absent on `/new`, which is what it means there.
+ * Crossings WITHIN `/threads/:threadId` already behaved: same type, so the
+ * surface was already preserved across a change of thread.
+ */
+function ProjectWorkspaceRoute() {
   const params = useParams();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   if (!projectResult.success) return <NotFound />;
-  return <ProjectWorkspace projectId={projectResult.data} />;
-}
-
-function ThreadRoute() {
-  const params = useParams();
-  const projectResult = ProjectIdSchema.safeParse(params.projectId);
+  // `/new` has no thread id at all; on the thread path an unparseable one is
+  // not this route.
+  if (params.threadId === undefined)
+    return <ProjectWorkspace projectId={projectResult.data} />;
   const threadResult = ThreadIdSchema.safeParse(params.threadId);
-  if (!projectResult.success || !threadResult.success) return <NotFound />;
+  if (!threadResult.success) return <NotFound />;
   return (
     <ProjectWorkspace
       projectId={projectResult.data}
@@ -1359,29 +1190,29 @@ function WorkspaceLayout({
   selectedProjectId,
   selectedThreadId,
   children,
-  inspector,
-  inspectorAvailable = false,
-  inspectorOpen = false,
-  inspectorWidth = 400,
-  onOpenInspector,
-  onCloseInspector,
+  panel,
+  panelOpen = false,
+  panelWidth = PANEL_DEFAULT_WIDTH,
+  onOpenPanel,
+  onClosePanel,
 }: {
   selectedProjectId?: ProjectId | undefined;
   selectedThreadId?: ThreadId | undefined;
   children?: ReactNode;
-  inspector?: ReactNode;
-  inspectorAvailable?: boolean;
-  inspectorOpen?: boolean;
-  inspectorWidth?: number;
-  onOpenInspector?: () => void;
-  onCloseInspector?: () => void;
+  // The whole docked column, rail included. Absent on the routes that have
+  // no project to show one for.
+  panel?: ReactNode;
+  panelOpen?: boolean;
+  panelWidth?: number;
+  onOpenPanel?: () => void;
+  onClosePanel?: () => void;
 }) {
-  const [drawer, setDrawer] = useState<"sidebar" | "inspector" | null>(null);
+  const [drawer, setDrawer] = useState<"sidebar" | "panel" | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const effectiveInspectorWidth = Math.min(
-    inspectorMaxWidth(viewportWidth),
-    Math.max(INSPECTOR_MIN_WIDTH, inspectorWidth),
-  );
+  // A width recorded on a wide monitor is read on a narrow one, so the
+  // stored value is clamped against this viewport before it lays anything
+  // out — the panel must never squash the chat surface out of the window.
+  const effectivePanelWidth = clampPanelWidth(panelWidth, viewportWidth);
   useEffect(() => {
     const resized = () => {
       setViewportWidth(window.innerWidth);
@@ -1392,26 +1223,27 @@ function WorkspaceLayout({
     };
   }, []);
   useEffect(() => {
-    if (!inspectorOpen && drawer === "inspector") setDrawer(null);
-  }, [drawer, inspectorOpen]);
+    if (!panelOpen && drawer === "panel") setDrawer(null);
+  }, [drawer, panelOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || drawer === null) return;
-      if (drawer === "inspector") onCloseInspector?.();
+      if (drawer === "panel") onClosePanel?.();
       setDrawer(null);
     };
     window.addEventListener("keydown", close);
     return () => {
       window.removeEventListener("keydown", close);
     };
-  }, [drawer, onCloseInspector]);
-  const inspectorVisible = inspectorOpen && inspector !== undefined;
+  }, [drawer, onClosePanel]);
+  const panelAvailable = panel !== undefined;
+  const panelVisible = panelOpen && panelAvailable;
   return (
     <div
-      className={`workspace ${inspector !== undefined ? "inspector-available" : ""} ${inspectorVisible ? "inspector-visible" : ""} ${inspectorAvailable && !inspectorVisible ? "inspector-railed" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "inspector" ? "inspector-open" : ""}`}
+      className={`workspace ${panelAvailable ? "panel-available" : ""} ${panelVisible ? "panel-visible" : ""} ${panelAvailable && !panelVisible ? "panel-railed" : ""} ${drawer === "sidebar" ? "sidebar-open" : ""} ${drawer === "panel" ? "panel-open" : ""}`}
       style={
         {
-          "--inspector-width": `${String(effectiveInspectorWidth)}px`,
+          "--panel-width": `${String(effectivePanelWidth)}px`,
         } as CSSProperties
       }
     >
@@ -1433,25 +1265,23 @@ function WorkspaceLayout({
         >
           ☰ Projects
         </button>
-        {inspectorAvailable && (
+        {panelAvailable && (
           <button
             onClick={() => {
-              if (drawer === "inspector") {
-                onCloseInspector?.();
+              if (drawer === "panel") {
+                onClosePanel?.();
                 setDrawer(null);
                 return;
               }
-              onOpenInspector?.();
-              setDrawer("inspector");
+              onOpenPanel?.();
+              setDrawer("panel");
             }}
-            aria-expanded={drawer === "inspector"}
+            aria-expanded={drawer === "panel"}
             aria-label={
-              drawer === "inspector"
-                ? "Close inspector drawer"
-                : "Open inspector drawer"
+              drawer === "panel" ? "Close panel drawer" : "Open panel drawer"
             }
           >
-            Inspector <PanelRightIcon />
+            Panel <PanelRightIcon />
           </button>
         )}
       </div>
@@ -1460,28 +1290,13 @@ function WorkspaceLayout({
         selectedThreadId={selectedThreadId}
       />
       {children}
-      {inspector}
-      {inspectorAvailable && !inspectorVisible && (
-        <div className="inspector-rail">
-          <div className="inspector-rail-head">
-            <button
-              type="button"
-              className="inspector-reopen"
-              aria-label="Open inspector panel"
-              title="Open inspector"
-              onClick={onOpenInspector}
-            >
-              <PanelRightIcon />
-            </button>
-          </div>
-        </div>
-      )}
+      {panel}
       {drawer !== null && (
         <button
           className="drawer-backdrop"
           aria-label="Close drawer"
           onClick={() => {
-            if (drawer === "inspector") onCloseInspector?.();
+            if (drawer === "panel") onClosePanel?.();
             setDrawer(null);
           }}
         />
@@ -1529,10 +1344,13 @@ export function App() {
     <Routes>
       <Route path="/" element={<EmptyRoot />} />
       <Route path="/projects/:projectId" element={<ProjectRoute />} />
-      <Route path="/projects/:projectId/new" element={<NewChatRoute />} />
+      <Route
+        path="/projects/:projectId/new"
+        element={<ProjectWorkspaceRoute />}
+      />
       <Route
         path="/projects/:projectId/threads/:threadId"
-        element={<ThreadRoute />}
+        element={<ProjectWorkspaceRoute />}
       />
       <Route path="/settings" element={<SettingsRoute />} />
       <Route path="*" element={<NotFound />} />

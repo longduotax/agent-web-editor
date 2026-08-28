@@ -1,7 +1,12 @@
+import type { JSX, ReactNode } from "react";
+
 import {
+  asPanelCommand,
   detectPlatform,
   shortcutKeys,
   WORKSPACE_KEYBINDINGS,
+  type KeyBinding,
+  type Platform,
 } from "../workspace/keybindings.js";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -22,6 +27,72 @@ const THEME_OPTIONS: readonly { value: ThemeChoice; label: string }[] = [
 ];
 
 const BACKEND_LABEL: Record<string, string> = { pi: "Pi", codex: "Codex" };
+
+/**
+ * The composer's keys, which are not in WORKSPACE_KEYBINDINGS because they are
+ * handled by the textarea itself rather than by the window-level chord
+ * resolver. They are listed FIRST: these three are the only shortcuts every
+ * user needs, and they used to sit below sixteen rows of pane and panel
+ * management where nobody would scroll to find them.
+ */
+const COMPOSER_SHORTCUTS: readonly {
+  label: string;
+  keys: readonly string[];
+}[] = [
+  { label: "Send a message", keys: ["Enter"] },
+  { label: "New line in a message", keys: ["⇧", "Enter"] },
+  { label: "Leave the composer, keeping the draft", keys: ["Esc"] },
+];
+
+function ShortcutRow({
+  label,
+  keys,
+}: {
+  label: string;
+  keys: readonly string[];
+}): JSX.Element {
+  return (
+    <div className="shortcut-row">
+      <dt>{label}</dt>
+      <dd>
+        {keys.map((keyLabel) => (
+          <kbd key={keyLabel}>{keyLabel}</kbd>
+        ))}
+      </dd>
+    </div>
+  );
+}
+
+function ShortcutGroup({
+  heading,
+  note,
+  children,
+}: {
+  heading: string;
+  note?: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div className="shortcut-group">
+      <h3 className="shortcut-group-heading">{heading}</h3>
+      {note !== undefined && <p className="shortcut-group-note">{note}</p>}
+      <dl className="shortcut-list">{children}</dl>
+    </div>
+  );
+}
+
+function bindingRows(
+  bindings: readonly KeyBinding[],
+  platform: Platform,
+): JSX.Element[] {
+  return bindings.map((binding) => (
+    <ShortcutRow
+      key={binding.label}
+      label={binding.label}
+      keys={shortcutKeys(binding, platform)}
+    />
+  ));
+}
 
 export function SettingsPage() {
   const theme = useTheme();
@@ -47,6 +118,15 @@ export function SettingsPage() {
   // Rendered from the same table resolveCommand dispatches from, so the list
   // cannot drift from the bindings and an inert chord cannot be advertised.
   const platform = detectPlatform(navigator);
+  // Which surface owns a chord decides which subheading it belongs under, and
+  // that is derived from the command rather than restated as a second field —
+  // a category the table did not have could go stale against the dispatcher.
+  const paneBindings = WORKSPACE_KEYBINDINGS.filter(
+    (binding) => asPanelCommand(binding.command) === null,
+  );
+  const panelBindings = WORKSPACE_KEYBINDINGS.filter(
+    (binding) => asPanelCommand(binding.command) !== null,
+  );
 
   return (
     <main className="center settings-page">
@@ -129,35 +209,27 @@ export function SettingsPage() {
           aria-labelledby="settings-shortcuts-heading"
         >
           <h2 id="settings-shortcuts-heading">Keyboard shortcuts</h2>
-          <p className="settings-section-description">
-            Pane shortcuts work anywhere in the workspace, except while you are
-            typing in a composer.
-          </p>
-          <dl className="shortcut-list">
-            {WORKSPACE_KEYBINDINGS.map((binding) => (
-              <div className="shortcut-row" key={binding.label}>
-                <dt>{binding.label}</dt>
-                <dd>
-                  {shortcutKeys(binding, platform).map((keyLabel) => (
-                    <kbd key={keyLabel}>{keyLabel}</kbd>
-                  ))}
-                </dd>
-              </div>
+          <ShortcutGroup
+            heading="Composer"
+            note="These work while you are typing a message."
+          >
+            {COMPOSER_SHORTCUTS.map((shortcut) => (
+              <ShortcutRow
+                key={shortcut.label}
+                label={shortcut.label}
+                keys={shortcut.keys}
+              />
             ))}
-            <div className="shortcut-row">
-              <dt>Send a message</dt>
-              <dd>
-                <kbd>Enter</kbd>
-              </dd>
-            </div>
-            <div className="shortcut-row">
-              <dt>New line in a message</dt>
-              <dd>
-                <kbd>⇧</kbd>
-                <kbd>Enter</kbd>
-              </dd>
-            </div>
-          </dl>
+          </ShortcutGroup>
+          <ShortcutGroup
+            heading="Panes"
+            note="Everything below works anywhere in the workspace except while you are typing in a composer. Press Esc to leave the composer first."
+          >
+            {bindingRows(paneBindings, platform)}
+          </ShortcutGroup>
+          <ShortcutGroup heading="Workspace panel">
+            {bindingRows(panelBindings, platform)}
+          </ShortcutGroup>
         </section>
       </div>
     </main>

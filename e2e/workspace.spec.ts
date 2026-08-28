@@ -133,7 +133,12 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
 }) => {
   await page.goto(launchUrl);
   await expect(page.getByText("No projects yet")).toBeVisible();
-  await expect(page.getByPlaceholder("/absolute/project/path")).toHaveCount(0);
+  // The path field EXISTS now (NEW-5 -- the chooser was the only way in and
+  // it has no fallback when it misbehaves), but it stays folded away: the
+  // sidebar's default state is still one label and one primary button.
+  await expect(
+    page.getByRole("textbox", { name: "Project directory path" }),
+  ).toBeHidden();
   await page.getByRole("button", { name: "Browse…" }).click();
   const projectName = basename(projectPath);
   const projectLink = page.getByRole("link", { name: new RegExp(projectName) });
@@ -146,9 +151,19 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   await browse.click();
-  await expect(page.getByRole("alert")).toHaveText(
+  const browseFailure = page.getByRole("alert");
+  await expect(browseFailure).toContainText(
     "The folder browser could not be opened.",
   );
+  // G10: the notice used to have no way out. It is not tied to a retryable
+  // mutation, so it carries a dismiss, and navigating away clears it too.
+  await expect(
+    browseFailure.getByRole("button", { name: "Dismiss this message" }),
+  ).toBeVisible();
+  await browseFailure
+    .getByRole("button", { name: "Dismiss this message" })
+    .click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 
   await projectLink.hover();
   await page
@@ -158,43 +173,68 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await page
     .getByRole("combobox", { name: "Execution location" })
     .selectOption("shared");
+  // G7: the note used to say only that Pi would SEE the existing files. This
+  // mode's defining property is that it WRITES to the user's own directory,
+  // and it is the one irreversible choice on this screen.
+  await expect(
+    page.getByText("Pi writes to your project directory"),
+  ).toBeVisible();
+  // The base branch control does not apply here, and it used to sit greyed
+  // out still displaying a branch, which reads as "it will use that one".
+  await expect(
+    page.getByRole("combobox", { name: "Base branch" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "Base branch" }),
+    // "Already on <branch>" where there is one, and this where there is not.
+    // Either way it states a fact about the checkout rather than offering a
+    // base branch it will not use.
+  ).toContainText(/Already on |Whatever is checked out/);
   await page
     .getByRole("textbox", { name: "First message" })
     .fill("Inspect this project");
   await page.getByRole("button", { name: "Create chat and send" }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+\/threads\/[0-9a-f-]+$/);
-  await expect(
-    page.getByText(/Pi tools run with your user permissions/),
-  ).toBeVisible();
+  // The pane shows a width-appropriate form of this and keeps the whole
+  // sentence in the accessibility tree, so assert the complete wording rather
+  // than whichever abbreviation the current width happens to select.
+  const trustNotice =
+    "Direct execution: Pi tools run with your user permissions, without application approval or an OS sandbox.";
+  await expect(page.getByText(trustNotice, { exact: true })).toHaveCount(1);
   await page.reload();
-  await expect(
-    page.getByText(/Pi tools run with your user permissions/),
-  ).toBeVisible();
+  await expect(page.getByText(trustNotice, { exact: true })).toHaveCount(1);
 
-  const inspector = page.getByRole("complementary", {
-    name: "Project inspector",
+  const panel = page.getByRole("complementary", {
+    name: "Workspace panel",
   });
-  await expect(inspector).toHaveCount(0);
-  await page.getByRole("button", { name: "Open inspector panel" }).click();
-  await expect(inspector).toBeVisible();
-  await page.getByRole("tab", { name: "Files" }).click();
-  await page.getByRole("button", { name: "Close inspector panel" }).click();
-  await expect(inspector).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open workspace panel" }).click();
+  await expect(panel).toBeVisible();
+  // A second durable tab, opened for the focused pane's thread (WSP-02).
+  await page.getByRole("button", { name: "New panel tab" }).click();
+  await page.getByRole("menuitem", { name: "Files" }).click();
+  await expect(
+    page.getByRole("tab", { name: "Files", selected: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close workspace panel" }).click();
+  await expect(panel).toHaveCount(0);
   await page.reload();
-  await expect(inspector).toHaveCount(0);
-  await page.getByRole("button", { name: "Open inspector panel" }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open workspace panel" }).click();
+  // Both tabs came back, still with the same one selected (WSP-04).
+  await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(
     page.getByRole("tab", { name: "Files", selected: true }),
   ).toBeVisible();
 
   const separator = page.getByRole("separator", {
-    name: "Resize inspector panel",
+    name: "Resize workspace panel",
   });
   await page.waitForTimeout(250);
-  const beforeResize = await inspector.boundingBox();
+  const beforeResize = await panel.boundingBox();
   const separatorBox = await separator.boundingBox();
   if (beforeResize === null || separatorBox === null)
-    throw new Error("Inspector resize controls were not laid out");
+    throw new Error("Panel resize controls were not laid out");
   await page.mouse.move(
     separatorBox.x + separatorBox.width / 2,
     separatorBox.y + 20,
@@ -202,10 +242,63 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await page.mouse.down();
   await page.mouse.move(separatorBox.x - 160, separatorBox.y + 20);
   await page.mouse.up();
-  const afterResize = await inspector.boundingBox();
+  const afterResize = await panel.boundingBox();
   expect(afterResize?.width).toBeGreaterThan(beforeResize.width + 100);
   await page.reload();
-  await expect(inspector).toBeVisible();
-  const restored = await inspector.boundingBox();
+  await expect(panel).toBeVisible();
+  const restored = await panel.boundingBox();
   expect(restored?.width).toBeCloseTo(afterResize?.width ?? 0, 0);
+});
+
+// NEW-5. The single worst thing left in the product: the ONLY way to add a
+// project was a native OS folder dialog. It opens as a separate window that
+// can land behind the browser or on another desktop; when it fails the app
+// says so and, until now, offered nothing else -- and adding a project is the
+// first thing every reader must do.
+//
+// This drives the fallback the way a person would: open the disclosure, type
+// a path, submit. The picker is untouched and still primary; the test above
+// still exercises it.
+test("adds a project by typing its path when the folder chooser cannot be used", async ({
+  page,
+}) => {
+  const typedPath = join(root, "typed-project");
+  await mkdir(typedPath, { recursive: true });
+
+  await page.goto(launchUrl);
+  const field = page.getByRole("textbox", { name: "Project directory path" });
+  await expect(field).toBeHidden();
+  await page.getByText("Or enter a path").click();
+  await expect(field).toBeVisible();
+
+  const add = page.getByRole("button", { name: "Add" });
+  // Nothing to send yet, so nothing to press.
+  await expect(add).toBeDisabled();
+
+  // A path that is not there says so, in those words, rather than failing
+  // generically -- a typo is the likeliest failure of a typed field.
+  await field.fill(join(typedPath, "no-such-directory"));
+  await add.click();
+  const notice = page.getByRole("alert");
+  await expect(notice).toContainText("There is nothing at that path.");
+
+  // A relative path is refused rather than resolved against whatever
+  // directory the server happens to be running in.
+  await field.fill("relative/path");
+  await add.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Enter the full path to the directory",
+  );
+
+  // And the real one lands: the row appears and the disclosure folds away.
+  await field.fill(typedPath);
+  await add.click();
+  await expect(
+    page.getByRole("link", { name: new RegExp(basename(typedPath)) }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(field).toBeHidden();
+
+  // The picker is still there and still primary.
+  await expect(page.getByRole("button", { name: "Browse…" })).toBeVisible();
 });

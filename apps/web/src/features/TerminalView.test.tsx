@@ -9,32 +9,50 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProjectIdSchema, ThreadIdSchema } from "@pi-web/contracts";
+import {
+  ProjectIdSchema,
+  TerminalClientFrameSchema,
+  TerminalIdSchema,
+  ThreadIdSchema,
+} from "@pi-web/contracts";
 
 interface TerminalOptions {
   theme?: { background?: string; foreground?: string; cursor?: string };
 }
 
 const terminals = vi.hoisted(() => ({
-  instances: [] as { lines: string[]; options: TerminalOptions }[],
+  instances: [] as {
+    lines: string[];
+    options: TerminalOptions;
+    cols: number;
+    rows: number;
+    cleared: number;
+  }[],
+  // What the fit addon will propose the next time it is asked. The real one
+  // reads the container; the point of this seam is that it can propose a
+  // size the contract refuses, which is the whole of F1.
+  proposed: { columns: 100, rows: 30 },
 }));
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     public options: TerminalOptions;
     public lines: string[] = [];
+    public cols = 100;
+    public rows = 30;
+    public cleared = 0;
     public constructor(options: TerminalOptions) {
       this.options = options;
       terminals.instances.push(this);
     }
     public clear(): void {
-      return undefined;
+      this.cleared += 1;
     }
     public dispose(): void {
       return undefined;
     }
-    public loadAddon(): void {
-      return undefined;
+    public loadAddon(addon: { activate(terminal: unknown): void }): void {
+      addon.activate(this);
     }
     public onData(): { dispose(): void } {
       return { dispose: () => undefined };
@@ -48,15 +66,19 @@ vi.mock("@xterm/xterm", () => ({
     public writeln(value: string): void {
       this.lines.push(value);
     }
-    public readonly cols = 100;
-    public readonly rows = 30;
   },
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
+    public activate(terminal: { cols: number; rows: number }): void {
+      this.terminal = terminal;
+    }
+    private terminal: { cols: number; rows: number } | null = null;
     public fit(): void {
-      return undefined;
+      if (this.terminal === null) return;
+      this.terminal.cols = terminals.proposed.columns;
+      this.terminal.rows = terminals.proposed.rows;
     }
   },
 }));
@@ -65,7 +87,9 @@ import { TerminalView } from "./TerminalView.js";
 
 const projectId = ProjectIdSchema.parse("10000000-0000-4000-8000-000000000001");
 const threadId = ThreadIdSchema.parse("30000000-0000-4000-8000-000000000001");
-const terminalId = "20000000-0000-4000-8000-000000000001" as const;
+const terminalId = TerminalIdSchema.parse(
+  "20000000-0000-4000-8000-000000000001",
+);
 
 class MockWebSocket extends EventTarget {
   public static readonly OPEN = 1;
@@ -99,9 +123,14 @@ class MockWebSocket extends EventTarget {
   }
 }
 
+/** Every live ResizeObserver callback, so a test can drive a container resize. */
+const resizeCallbacks: (() => void)[] = [];
+
 afterEach(() => {
   MockWebSocket.instances.splice(0);
   terminals.instances.splice(0);
+  terminals.proposed = { columns: 100, rows: 30 };
+  resizeCallbacks.splice(0);
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.style.removeProperty("--term-bg");
   document.documentElement.style.removeProperty("--term-fg");
@@ -122,6 +151,9 @@ function stubEnvironment() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
+      public constructor(callback: () => void) {
+        resizeCallbacks.push(callback);
+      }
       public disconnect(): void {
         return undefined;
       }
@@ -130,6 +162,22 @@ function stubEnvironment() {
       }
     },
   );
+}
+
+/** The container changed size: what the fit addon reacts to. */
+function containerResized() {
+  for (const callback of resizeCallbacks) callback();
+}
+
+/** The last frame of a type the view sent, or undefined. */
+function lastSent(
+  socket: MockWebSocket,
+  type: string,
+): Record<string, unknown> | undefined {
+  const frames = socket.sent
+    .map((frame) => JSON.parse(frame) as Record<string, unknown>)
+    .filter((frame) => frame.type === type);
+  return frames[frames.length - 1];
 }
 
 function setThemeTokens(background: string, foreground: string) {
@@ -167,6 +215,136 @@ describe("TerminalView", () => {
     expect(terminals.instances).toHaveLength(1); // re-themed, not recreated
   });
 
+  // F1. Shrinking a group to its floor made the fit addon propose `rows: 1`;
+  // the contract bounds rows at 2, so the server refused the frame and wrote
+  // "Terminal command was rejected." into the user's shell. The contract is
+  // the authority and the client obeys it BEFORE sending.
+  it("clamps a proposed size into the contract's bounds rather than sending a frame the server must reject", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+
+    // What the fit addon proposes for a group shrunk to MIN_FRACTION.
+    terminals.proposed = { columns: 191, rows: 1 };
+    act(() => {
+      containerResized();
+    });
+
+    const resize = lastSent(socket, "resize");
+    expect(resize).toMatchObject({ columns: 191, rows: 2 });
+    // And the frame that is sent is one the contract accepts.
+    expect(() => TerminalClientFrameSchema.parse(resize)).not.toThrow();
+
+    // The ceiling, from the other side.
+    terminals.proposed = { columns: 4000, rows: 4000 };
+    act(() => {
+      containerResized();
+    });
+    expect(lastSent(socket, "resize")).toMatchObject({
+      columns: 500,
+      rows: 200,
+    });
+  });
+
+  // F1. A rejected command used to be written into the scrollback — where it
+  // is indistinguishable from program output and survives there — and to
+  // latch the toolbar at "Terminal error" for the rest of the session.
+  it("surfaces a rejected command in the toolbar, never in the buffer, and clears it on the next successful exchange", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    const terminal = terminals.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    if (terminal === undefined) throw new Error("Terminal was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+    expect(screen.getByText("Terminal running")).toBeInTheDocument();
+
+    act(() => {
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message: "Terminal command was rejected.",
+      });
+    });
+
+    // Said where a message belongs, in the words the server used.
+    expect(
+      screen.getByText("Terminal command was rejected."),
+    ).toBeInTheDocument();
+    // Not in the scrollback, where it would outlive the problem.
+    expect(terminal.lines).toEqual([]);
+    // And the shell is still running, so the toolbar still says so.
+    expect(screen.getByText("Terminal running")).toBeInTheDocument();
+
+    act(() => {
+      socket.message({ version: 1, type: "output", projectId, data: "$ " });
+    });
+
+    expect(
+      screen.queryByText("Terminal command was rejected."),
+    ).not.toBeInTheDocument();
+  });
+
+  // A fatal error is a different thing from a refused command: the socket is
+  // gone and nothing will clear it.
+  it("latches a disconnect, which no later frame can clear", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.close();
+    });
+    expect(screen.getByText("Terminal disconnected")).toBeInTheDocument();
+  });
+
+  // A restart replaces the process, and the server says so by sending a
+  // `ready` with a new terminal id. It sends no `reset`, which was the only
+  // frame that cleared the view — so the dead shell's screen stayed on
+  // display and restarting looked like it had done nothing.
+  it("clears the dead shell's screen when a restart brings a new terminal", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    const terminal = terminals.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    if (terminal === undefined) throw new Error("Terminal was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+    // Re-attaching to the SAME terminal keeps its screen: that is the
+    // reload-with-replay path, where clearing would throw the replay away.
+    act(() => {
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+    });
+    expect(terminal.cleared).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    act(() => {
+      socket.message({
+        version: 1,
+        type: "ready",
+        projectId,
+        terminalId: "20000000-0000-4000-8000-000000000002",
+      });
+    });
+
+    expect(terminal.cleared).toBe(1);
+    expect(screen.getByText("Terminal running")).toBeInTheDocument();
+  });
+
   it("recovers from termination by attaching a fresh terminal", () => {
     stubEnvironment();
     render(<TerminalView projectId={projectId} threadId={threadId} />);
@@ -199,9 +377,297 @@ describe("TerminalView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
     expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
       version: 1,
-      type: "attach",
+      type: "create",
       projectId,
       threadId,
     });
+  });
+
+  // WSP-07: a reload re-attaches the tab to its still-running process rather
+  // than orphaning it or starting a second shell. Which of the two happens
+  // is decided by whether the tab has an id to claim.
+  it("claims the terminal it recorded, and creates one only when it has none", () => {
+    stubEnvironment();
+    const { unmount } = render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        terminalId={terminalId}
+        cwd="apps/web"
+      />,
+    );
+    const reattached = MockWebSocket.instances[0];
+    if (reattached === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      reattached.open();
+    });
+    expect(JSON.parse(reattached.sent[0] ?? "{}")).toEqual({
+      version: 1,
+      type: "attach",
+      projectId,
+      threadId,
+      terminalId,
+    });
+    unmount();
+
+    render(
+      <TerminalView projectId={projectId} threadId={threadId} cwd="apps/web" />,
+    );
+    const created = MockWebSocket.instances[1];
+    if (created === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      created.open();
+    });
+    // A create carries the directory the tab recorded, which is what makes
+    // the terminal come back where it was left.
+    expect(JSON.parse(created.sent[0] ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "apps/web",
+    });
+  });
+
+  // The tab's own record of where it is: reported outwards so it survives a
+  // reload, and shown so the user can see it.
+  it("shows and reports the directory the server observes", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        onTerminalId={onTerminalId}
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "apps/web",
+      });
+    });
+
+    expect(onTerminalId).toHaveBeenCalledWith(terminalId);
+    expect(onCwd).toHaveBeenCalledWith("apps/web");
+    expect(screen.getByText("apps/web")).toBeInTheDocument();
+    expect(screen.getByText(/Working directory/)).toBeInTheDocument();
+  });
+
+  // WSP-07: "where the platform cannot observe a running shell's working
+  // directory, the tab shows the directory it was started in and does not
+  // present it as the live one".
+  it("labels an unobservable directory as the one it started in", () => {
+    stubEnvironment();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        cwd="apps/web"
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: null,
+      });
+    });
+
+    expect(screen.getByText(/start directory/)).toBeInTheDocument();
+    expect(screen.getByText("apps/web")).toBeInTheDocument();
+    // Nothing is recorded from an observation that did not happen: the tab
+    // keeps the directory it already had.
+    expect(onCwd).not.toHaveBeenCalled();
+  });
+
+  // The execution root is a real directory and needs a name a user can read.
+  it("names the execution root rather than showing an empty directory", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "",
+      });
+    });
+    expect(screen.getByText("workspace root")).toBeInTheDocument();
+  });
+
+  // WSP-07: a process that is genuinely gone is reported as gone, with an
+  // explicit restart action — and the stale id is dropped, so the restart
+  // creates a shell rather than claiming the dead one again.
+  it("reports a process that is gone, and starts another rather than claiming it", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        terminalId={terminalId}
+        cwd="apps/web"
+        onTerminalId={onTerminalId}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message: "That terminal is no longer running.",
+        code: "terminal_gone",
+      });
+    });
+
+    expect(screen.getByText("Terminal is gone")).toBeInTheDocument();
+    expect(
+      screen.getByText("That terminal is no longer running."),
+    ).toBeInTheDocument();
+    expect(onTerminalId).toHaveBeenCalledWith(null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+      cwd: "apps/web",
+    });
+  });
+
+  // WSP-07: reaching the per-scope limit is "reported as a clear message
+  // rather than a silent failure".
+  it("states the per-scope limit rather than failing silently", () => {
+    stubEnvironment();
+    render(<TerminalView projectId={projectId} threadId={threadId} />);
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message:
+          "Up to 8 terminals can run in one worktree. Close one to open another.",
+        code: "terminal_limit_reached",
+      });
+    });
+
+    expect(
+      screen.getByText(/Up to 8 terminals can run in one worktree/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No terminal is running")).toBeInTheDocument();
+  });
+
+  // A recorded directory that no longer exists must not wedge the tab: it is
+  // forgotten, so the next start goes to the execution root.
+  it("forgets a directory the workspace refused", () => {
+    stubEnvironment();
+    const onCwd = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        cwd="apps/gone"
+        onCwd={onCwd}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({
+        version: 1,
+        type: "error",
+        projectId,
+        message: "That directory is not available in this worktree.",
+        code: "terminal_cwd_invalid",
+      });
+    });
+
+    expect(onCwd).toHaveBeenCalledWith("");
+    fireEvent.click(screen.getByRole("button", { name: "Start terminal" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "create",
+      projectId,
+      threadId,
+    });
+  });
+
+  // WSP-07: a restart starts the replacement in the tab's recorded
+  // directory, and the tab adopts the new id from the `ready` frame.
+  it("restarts into the directory it last observed, under the new id", () => {
+    stubEnvironment();
+    const onTerminalId = vi.fn();
+    render(
+      <TerminalView
+        projectId={projectId}
+        threadId={threadId}
+        onTerminalId={onTerminalId}
+      />,
+    );
+    const socket = MockWebSocket.instances[0];
+    if (socket === undefined) throw new Error("WebSocket was not created");
+    act(() => {
+      socket.open();
+      socket.message({ version: 1, type: "ready", projectId, terminalId });
+      socket.message({
+        version: 1,
+        type: "cwd",
+        projectId,
+        terminalId,
+        cwd: "apps/web",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(JSON.parse(socket.sent.at(-1) ?? "{}")).toEqual({
+      version: 1,
+      type: "restart",
+      projectId,
+      threadId,
+      terminalId,
+      cwd: "apps/web",
+    });
+
+    const replacement = "20000000-0000-4000-8000-000000000002";
+    act(() => {
+      socket.message({
+        version: 1,
+        type: "ready",
+        projectId,
+        terminalId: replacement,
+      });
+    });
+    expect(onTerminalId).toHaveBeenLastCalledWith(replacement);
   });
 });

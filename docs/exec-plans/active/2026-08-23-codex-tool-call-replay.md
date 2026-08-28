@@ -526,7 +526,7 @@ verification.
 - 2026-08-23: Automated verification covers strict contracts, a deterministic
   10,000-item traversal, rollout confinement/parsing/composition, server routes,
   browser paging, and a 700-item Playwright DOM/window test. Full repository
-  unit and six-spec Playwright suites are green.
+  unit and Playwright suites are green.
 
 ## Discoveries and blockers
 

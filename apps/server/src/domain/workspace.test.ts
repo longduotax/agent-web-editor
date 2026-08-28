@@ -19,7 +19,7 @@ import {
   type PtyProcess,
 } from "../terminal/manager.js";
 import { RuntimeRegistry } from "./runtimes.js";
-import { WorkspaceService } from "./workspace.js";
+import { fallbackTitle, WorkspaceService } from "./workspace.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -131,6 +131,8 @@ class ControlledRuntime implements AgentRuntime {
 
 class DeferredPty implements PtyProcess {
   public killed = false;
+  /** No pid, so nothing observes this fake's working directory (WSP-07). */
+  public readonly pid = null;
   public write(): void {
     return undefined;
   }
@@ -335,8 +337,10 @@ describe("run coordination", () => {
     const factory = new DeferredPtyFactory();
     const terminals = new ProjectTerminalManager(factory);
     const context = await fixture(terminals);
-    const attach = terminals.attach(context.project.id, context.projectPath, {
-      send: () => undefined,
+    const attach = terminals.attach({
+      projectId: context.project.id,
+      executionRoot: context.projectPath,
+      attachment: { send: () => undefined },
     });
 
     await vi.waitFor(() => {
@@ -1142,5 +1146,173 @@ describe("run coordination", () => {
     );
     await context.service.close();
     context.store.close();
+  });
+});
+
+// Implementer H's third handoff. `OpenRuntimeSession.stop()` bottoms out in
+// `AgentSession.abort()`, whose `waitForIdle()` has no timeout: an agent that
+// never reaches idle wedged the HTTP request forever and left the run row
+// `running` until a restart reconciled it. That was observed twice on this
+// build. The deadline is what stops the request hanging; what it must NOT do
+// is buy that by claiming the run was stopped.
+describe("a Stop the agent never answers", () => {
+  it("gives up on the request without reporting the run as stopped", async () => {
+    const context = await fixture();
+    const session = sessionFor(context, context.first.id);
+    const run = await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      "Work that will not come to rest",
+      "23000000-0000-4000-8000-000000000001",
+    );
+    // The wedge: abort is delivered, idle never arrives.
+    session.stopGate = () => new Promise<void>(() => undefined);
+
+    vi.useFakeTimers();
+    try {
+      const stopping = context.service.stop(
+        context.project.id,
+        context.first.id,
+        "23000000-0000-4000-8000-000000000002",
+      );
+      const settled = expect(stopping).rejects.toThrow("stop_timed_out");
+      // Let `openRuntime` resolve and the deadline register before it runs.
+      while (session.stopCount === 0) await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The run row is the only thing telling the reader whether the agent
+    // stopped, and nothing here knows that it did. Settling it `interrupted`
+    // would have said "Stopped by the user." about a run still going.
+    const still = context.store.runningRunForThread(context.first.id);
+    expect(still?.id).toBe(run.id);
+    expect(still?.state).toBe("running");
+
+    await context.service.close();
+    context.store.close();
+  });
+});
+
+// G14. Titles were slugged by deleting every character that is not a letter
+// or a digit and keeping the first seven words. That is exactly the wrong
+// class to remove from a developer's prompt: it turned a filename into three
+// words, and it silently deleted the `&&` from a shell command, changing the
+// meaning of the thing the title names. The sidebar title is the only handle
+// a thread has.
+describe("the fallback thread title", () => {
+  it("keeps a filename whole", () => {
+    expect(
+      fallbackTitle(
+        "Create a file called LOCAL-CHECKOUT-PROOF.txt containing the single line proof.",
+      ),
+    ).toBe("Create a file called LOCAL-CHECKOUT-PROOF.txt containing…");
+  });
+
+  it("keeps a shell operator that changes what the command does", () => {
+    expect(
+      fallbackTitle(
+        "Run the shell command: sleep 40 && ls. Reply with the single word done.",
+      ),
+    ).toBe("Run the shell command: sleep 40 && ls");
+  });
+
+  it("does not end on a dangling word where punctuation used to be", () => {
+    const title = fallbackTitle(
+      "Explore this repository before changing anything: run ls -la, run git log --oneline -5, and summarise.",
+    );
+    expect(title).toBe(
+      "Explore this repository before changing anything: run ls…",
+    );
+    expect(title).not.toMatch(/anything run$/);
+  });
+
+  it("cuts on a word boundary and never exceeds the column's budget", () => {
+    for (const prompt of [
+      "Refactor packages/pi-adapter/src/index.ts so the naming path is testable, then add tests",
+      "Read the file /definitely/not/here/missing.md and also run the shell command: cat /nonexistent/path/xyz.txt.",
+      "supercalifragilisticexpialidociousandthensomemoreletterspastthelimitxxxxxxxxxxxxxx",
+    ]) {
+      const title = fallbackTitle(prompt);
+      expect(title.length).toBeLessThanOrEqual(60);
+      // A truncated title says so, and does not say so twice.
+      expect(title.endsWith("…")).toBe(true);
+      expect(title).not.toMatch(/[\s,;:-]…$/);
+    }
+  });
+
+  it("takes a short first sentence whole, without its full stop", () => {
+    expect(fallbackTitle("Fix the flaky terminal test.")).toBe(
+      "Fix the flaky terminal test",
+    );
+    expect(fallbackTitle("Deploy it now!")).toBe("Deploy it now");
+  });
+
+  // Nit 8. A full stop adds nothing to a label. A question mark changes what
+  // the label says: "Why does the build fail" is a claim about the build,
+  // "Why does the build fail?" is what the user asked.
+  it("keeps a question mark, and only one of it", () => {
+    expect(fallbackTitle("Why does the build fail? It worked yesterday.")).toBe(
+      "Why does the build fail?",
+    );
+    expect(fallbackTitle("Is the release branch broken?!! Check CI.")).toBe(
+      "Is the release branch broken?",
+    );
+  });
+
+  // SF4. The slug this replaced removed control and zero-width characters as
+  // a side effect of removing all punctuation. `\s` does not: it covers the
+  // space-like code points and U+FEFF and nothing else, so a NUL or a
+  // zero-width space reached the title, and `threadRowSchema` is
+  // `min(1).max(200)` -- all of it persists.
+  it("removes characters that draw nothing", () => {
+    // Entirely invisible prompts are empty prompts.
+    for (const invisible of ["\u0000", "\u200b", "\u0001\u0007\u200b"])
+      expect(fallbackTitle(invisible)).toBe("New coding task");
+    // A NUL pasted out of a log file does not travel into the sidebar.
+    const title = fallbackTitle("Fix the\u0000flaky\u200btest run");
+    expect(title).toBe("Fix theflakytest run");
+    expect(title).not.toMatch(/\p{C}/u);
+  });
+
+  // ZWJ and ZWNJ are invisible too, and deleting them would change which
+  // glyphs the visible characters draw. They are the one exemption.
+  it("keeps the invisible characters that change what is visible", () => {
+    expect(
+      fallbackTitle("Rename the \u{1f468}\u200d\u{1f4bb} emoji test"),
+    ).toBe("Rename the \u{1f468}\u200d\u{1f4bb} emoji test");
+    expect(
+      fallbackTitle("\u0645\u06cc\u200c\u0631\u0648\u062f test"),
+    ).toContain("\u200c");
+  });
+
+  // Nit 7. `"\u00df".toUpperCase()` is `"SS"`, so capitalising the first
+  // character could hand back 61 characters from a 60-character budget --
+  // and rewrite the user's word on the way.
+  it("does not let capitalisation exceed the limit or rewrite the word", () => {
+    const long = `\u00df${"a".repeat(58)} tail that pushes this prompt past the sixty character budget`;
+    const title = fallbackTitle(long);
+    expect(title.length).toBeLessThanOrEqual(60);
+    expect(title.startsWith("\u00df")).toBe(true);
+    expect(fallbackTitle("\ufb01nd the flaky test")).toBe(
+      "\ufb01nd the flaky test",
+    );
+  });
+
+  it("treats a line break as a break, not as a character to delete", () => {
+    expect(fallbackTitle("Update the changelog\n\n- one\n- two")).toBe(
+      "Update the changelog",
+    );
+  });
+
+  it("still names an empty prompt", () => {
+    expect(fallbackTitle("   \n\t ")).toBe("New coding task");
+    expect(fallbackTitle("")).toBe("New coding task");
+  });
+
+  it("capitalises the first character", () => {
+    expect(fallbackTitle("fix the flaky test")).toBe("Fix the flaky test");
   });
 });

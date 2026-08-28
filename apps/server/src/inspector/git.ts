@@ -9,14 +9,25 @@ import {
 
 const OUTPUT_LIMIT = 5 * 1024 * 1024;
 
-interface ProcessResult {
+export interface ProcessResult {
   code: number;
   stdout: Buffer;
   stderr: Buffer;
   truncated: boolean;
 }
 
-async function runGit(cwd: string, args: string[]): Promise<ProcessResult> {
+/**
+ * The one place this application spawns Git.
+ *
+ * Exported so the tracked-path index (`trackedFiles.ts`) inherits this
+ * policy — argument array, no shell, minimal environment, no pager or
+ * colour, a 10-second timeout and a 5 MiB output limit — rather than
+ * spawning a second Git with rules of its own.
+ */
+export async function runGit(
+  cwd: string,
+  args: string[],
+): Promise<ProcessResult> {
   return await new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(
       "git",
@@ -205,7 +216,18 @@ export async function getGitDiff(cwd: string, rawPath: unknown) {
   ]);
   const unstagedResult =
     file.kind === "untracked"
-      ? await runGit(cwd, ["diff", "--no-index", "--", "/dev/null", path])
+      ? // `--no-ext-diff` here too: a user's `diff.external` would otherwise
+        // decide what an untracked file's preview looks like, and this is
+        // the one diff the browser renders that Git is not producing from
+        // its own index.
+        await runGit(cwd, [
+          "diff",
+          "--no-index",
+          "--no-ext-diff",
+          "--",
+          "/dev/null",
+          path,
+        ])
       : await runGit(cwd, ["diff", "--no-ext-diff", "--", path]);
   if (stagedResult.code !== 0 && stagedResult.code !== 1)
     throw new Error("git_diff_failed");

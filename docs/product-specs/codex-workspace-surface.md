@@ -11,13 +11,17 @@
 **Product approval:** Pending for specification version 1
 
 **Subsystem:** Browser workspace composition — pane visual surface, theming, and
-the single workspace inspector
+the single right-hand workspace region (CWS-06's inspector, superseded by the
+workspace panel)
 
 **Last verified:** 2026-08-22
 
 **Related ExecPlans:** [Codex-style workspace surface implementation plan](../exec-plans/active/2026-08-22-codex-workspace-surface.md)
+and [workspace panel implementation plan](../exec-plans/active/2026-08-22-workspace-panel.md)
+(implements the CWS-06 replacement)
 
 **Related documents:**
+[Workspace panel](workspace-panel.md) (supersedes CWS-06 in full),
 [Tiling workspace surface](tiling-workspace-surface.md) (revised by this spec),
 [Multi-agent tiling workspace design](../design/multi-agent-tiling-workspace.md),
 [Web workspace composition](../design/web-workspace-composition.md),
@@ -192,6 +196,20 @@ This requirement supersedes the tiling surface clauses listed in
 
 ### CWS-06 — One right-hand panel: the workspace inspector
 
+> **Superseded in full 2026-08-22 by
+> [Workspace panel](workspace-panel.md) (WSP-01 through WSP-10).** The fixed
+> `Changes | Files | Terminal` inspector is replaced by a tiling area of tab
+> groups holding durable, independently addressed tabs. The
+> **inspector-follows-the-focused-pane** rule below is struck: it existed
+> because a route addresses one thread while the surface holds several panes,
+> and durable per-tab context (WSP-02) answers that problem better, because a
+> tab states which worktree it reads instead of silently changing it. The
+> inspector's device-local visibility preference is replaced by the panel's
+> device-local record (WSP-04), which migrates it. The constraints this
+> requirement contributed are **retained** by the panel spec and are listed in
+> [Superseded requirements](#superseded-requirements). The body below is kept
+> as the record of what shipped; it is not current intent.
+
 **Revised 2026-08-22 (supersedes the Environment-panel model below).** The
 workspace has exactly **one** panel docked right of the pane surface at any
 width: the `Changes | Files | Terminal` **inspector**. A standalone
@@ -227,10 +245,20 @@ visibility preference, and its floating toggle are removed from the product.
 ### CWS-07 — One centered reading column
 
 Transcript content, the composer, and the new-chat card all sit inside the
-**same centered reading column**, sized by a single CSS custom property
-(`--surface-measure`, currently `48rem`). A user's turn and the input that
-answers it share one axis; no component may hardcode a competing measure. Below
-that width the column shrinks with the pane rather than clipping.
+**same centered reading column**, whose outer bound is a single CSS custom
+property (`--surface-measure`, currently `48rem`). A user's turn and the input
+that answers it share one axis; no component may hardcode a competing measure.
+Below that width the column shrinks with the pane rather than clipping.
+
+Transcript prose may be **narrower than that axis but never wider**. The
+transcript column is bounded by `min(--transcript-measure, --surface-measure)`,
+so `--transcript-measure` (currently `40rem`) tunes readability inside the
+shared axis rather than competing with it. At `48rem` a transcript line runs to
+roughly 113 characters, far past the 60–75 that prose wants; `40rem` brings the
+median to 83 while still fitting an 80-column code block without horizontal
+scrolling. Those two goals do not both fit — prose alone would want `38rem` and
+code needs at least `39.3rem` — and **code not scrolling wins**, because this is
+a tool for reading code.
 
 The pane's header chrome (run status, title, project chip, pane actions, and
 the quiet detail line) is full-width bar chrome, not reading content, and is
@@ -318,6 +346,35 @@ device-local and are never sourced from or written to the server.
    further settings later.
 
 ## Superseded requirements
+
+### By the workspace panel spec (2026-08-22)
+
+[Workspace panel](workspace-panel.md), approved for specification version 1 on
+2026-08-22, supersedes **CWS-06 — One right-hand panel: the workspace
+inspector** in full:
+
+- the fixed `Changes | Files | Terminal` inspector is replaced by the workspace
+  panel: a tiling area of tab groups whose tabs are durable, independently
+  addressed views (WSP-01, WSP-02);
+- the **inspector-follows-the-focused-pane** rule is struck. It existed because
+  a route addresses one thread while the surface holds several panes; durable
+  per-tab context answers that problem directly and better, because a tab
+  states which worktree it reads instead of silently changing it (WSP-02);
+- the inspector's device-local visibility preference is replaced by the panel's
+  device-local record, which migrates it (WSP-04);
+- the term **inspector** is retired from the product.
+
+CWS-06's constraints that the panel spec **retains**: exactly one region is
+docked right of the chat surface; it is docked, never floating; neither it nor
+its reopen control ever overlaps chat content; worktree mode and branch appear
+in the chat pane's own header and are not restated as a second column; and every
+view defines its loading, empty, and no-selection states in both themes.
+
+CWS-01 through CWS-05, CWS-07, and CWS-08 are unaffected. Acceptance criterion 6
+of this spec is superseded by acceptance criteria 1 and 2 of the workspace panel
+spec. Criterion 3's "the inspector's top row" clause is retained with the panel's
+tab strip as its subject: the pane headers and the panel's first row still share
+one continuous bottom hairline at every width.
 
 ### Within this spec (revised 2026-08-22, before approval)
 
