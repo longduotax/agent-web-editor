@@ -54,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   restoreScrollGeometry();
   // Drafts are real localStorage keys and outlive the render. A test that
   // leaves one behind hands it to the next test's composer, which reads its
@@ -308,6 +309,60 @@ describe("ThreadPane", () => {
     await waitFor(() => {
       expect(transcript.scrollTop).toBe(3000);
     });
+  });
+
+  it("keeps a pinned transcript at the newest content when the composer changes its height", async () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const observed = new Set<Element>();
+    class StubResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe(target: Element) {
+        observed.add(target);
+      }
+      unobserve() {
+        return;
+      }
+      disconnect() {
+        return;
+      }
+    }
+    vi.stubGlobal("ResizeObserver", StubResizeObserver);
+    stubScrollGeometry({ scrollHeight: 2000, clientHeight: 400 });
+    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const transcript = screen.getByLabelText("Conversation");
+    await waitFor(() => {
+      expect(transcript.scrollTop).toBe(2000);
+    });
+    expect(observed.has(transcript)).toBe(true);
+    const transcriptContent = transcript.firstElementChild;
+    expect(transcriptContent).not.toBeNull();
+    if (transcriptContent === null)
+      throw new Error("missing transcript content");
+    expect(observed.has(transcriptContent)).toBe(true);
+
+    // Growing the composer reduces the transcript viewport without changing
+    // its content key or necessarily dispatching a scroll event. Model the
+    // resulting stale old-bottom position, then deliver ResizeObserver's
+    // layout notification: a pinned transcript must follow the new bottom.
+    transcript.scrollTop = 1500;
+    act(() => {
+      callbacks[0]?.([], {} as ResizeObserver);
+    });
+    expect(transcript.scrollTop).toBe(2000);
+
+    // The same resize must not steal the viewport from someone who actually
+    // scrolled up to read history.
+    transcript.scrollTop = 0;
+    fireEvent.scroll(transcript);
+    act(() => {
+      callbacks[0]?.([], {} as ResizeObserver);
+    });
+    expect(transcript.scrollTop).toBe(0);
   });
 
   it("does not yank the user back to the bottom once they have scrolled up", async () => {
