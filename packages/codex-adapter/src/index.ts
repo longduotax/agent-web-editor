@@ -12,6 +12,7 @@ import {
   type RuntimePromptDispatch,
   type RuntimeSessionDescriptor,
   type RuntimeSnapshot,
+  type RuntimeUserInput,
 } from "@pi-web/agent-runtime";
 import {
   TranscriptCursorSchema,
@@ -164,6 +165,10 @@ export class CodexAgentRuntime implements AgentRuntime {
     this.client.onServerRequest((method) =>
       isApprovalRequest(method) ? { decision: "denied" } : null,
     );
+  }
+
+  public inspectImageInput(): Promise<"unsupported"> {
+    return Promise.resolve("unsupported");
   }
 
   public async discover(
@@ -639,9 +644,10 @@ class CodexOpenSession implements OpenRuntimeSession {
   }
 
   public async prompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch?: RuntimePromptDispatch,
   ): Promise<PromptAcceptance> {
+    const text = this.textInput(input);
     if (this.disposed)
       throw new RuntimeFailure("unavailable", "Runtime session is closed.");
     if (this.bufferedEvents !== null)
@@ -711,9 +717,10 @@ class CodexOpenSession implements OpenRuntimeSession {
   }
 
   public async recoverPrompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery> {
+    const text = this.textInput(input);
     const raw = await this.client.request("thread/read", {
       threadId: this.id,
       includeTurns: true,
@@ -738,7 +745,8 @@ class CodexOpenSession implements OpenRuntimeSession {
     return { outcome: "not_accepted" };
   }
 
-  public async steer(text: string): Promise<void> {
+  public async steer(input: RuntimeUserInput | string): Promise<void> {
+    const text = this.textInput(input);
     const turnId = this.activeTurnId;
     if (turnId === null)
       throw new RuntimeFailure(
@@ -750,6 +758,13 @@ class CodexOpenSession implements OpenRuntimeSession {
       input: [{ type: "text", text, text_elements: [] }],
       expectedTurnId: turnId,
     });
+  }
+
+  private textInput(input: RuntimeUserInput | string): string {
+    if (typeof input === "string") return input;
+    if (input.images.length > 0)
+      throw new RuntimeFailure("rejected", "chat_image_input_unsupported");
+    return input.text;
   }
 
   public async stop(): Promise<void> {

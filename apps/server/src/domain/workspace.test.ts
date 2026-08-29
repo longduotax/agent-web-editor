@@ -10,12 +10,14 @@ import type {
   OpenRuntimeSession,
   PromptAcceptance,
   RuntimeEvent,
+  RuntimeUserInput,
 } from "@pi-web/agent-runtime";
 import type { SessionDescriptor } from "@pi-web/contracts";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MetadataStore } from "../db/store.js";
+import { parseImageChatInput, parseTextChatInput } from "../chat-images.js";
 import { LiveBroker } from "../live/broker.js";
 import {
   ProjectTerminalManager,
@@ -33,6 +35,15 @@ afterEach(async () => {
   );
 });
 
+function png(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(24);
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  bytes.set([73, 72, 68, 82], 12);
+  return bytes;
+}
+
 class ControlledSession implements OpenRuntimeSession {
   public promptCount = 0;
   public steerCount = 0;
@@ -40,6 +51,8 @@ class ControlledSession implements OpenRuntimeSession {
   public discardCount = 0;
   public disposeCount = 0;
   public recoveredPrompts = false;
+  public lastPrompt: RuntimeUserInput | string | undefined;
+  public lastSteer: RuntimeUserInput | string | undefined;
 
   public constructor(public readonly id: string) {}
   private settle:
@@ -62,8 +75,11 @@ class ControlledSession implements OpenRuntimeSession {
       diagnostics: [],
     });
   }
-  public async prompt(): Promise<PromptAcceptance> {
+  public async prompt(
+    input: RuntimeUserInput | string,
+  ): Promise<PromptAcceptance> {
     this.promptCount += 1;
+    this.lastPrompt = input;
     this.recoveredPrompts = true;
     await this.promptGate;
     const settlement = new Promise<"completed" | "failed" | "interrupted">(
@@ -87,8 +103,9 @@ class ControlledSession implements OpenRuntimeSession {
         : ({ outcome: "not_accepted" } as const),
     );
   }
-  public steer() {
+  public steer(input: RuntimeUserInput | string) {
     this.steerCount += 1;
+    this.lastSteer = input;
     return Promise.resolve();
   }
   public async stop(): Promise<void> {
@@ -244,6 +261,57 @@ function sessionFor(
 }
 
 describe("run coordination", () => {
+  it("passes ordered image input to the runtime and deduplicates it by content", async () => {
+    const context = await fixture();
+    const session = sessionFor(context, context.first.id);
+    const key = "90000000-0000-4000-8000-000000000099";
+    const input = parseImageChatInput("Inspect this", [png(1, 1)]);
+
+    const first = await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      input,
+      key,
+    );
+    const duplicate = await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      input,
+      key,
+    );
+
+    expect(duplicate.id).toBe(first.id);
+    expect(session.promptCount).toBe(1);
+    expect(session.lastPrompt).toEqual({
+      text: input.text,
+      images: input.images,
+    });
+    await expect(
+      context.service.prompt(
+        context.project.id,
+        context.first.id,
+        parseImageChatInput("Inspect this", [png(2, 1)]),
+        key,
+      ),
+    ).rejects.toThrow("Idempotency key was reused");
+  });
+
+  it("creates an image-only thread with the deterministic fallback title", async () => {
+    const context = await fixture();
+    const input = parseImageChatInput("", [png(1, 1)]);
+    const started = await context.service.startThread(
+      context.project.id,
+      input,
+      { mode: "shared" },
+      "90000000-0000-4000-8000-000000000098",
+    );
+    expect(started.thread.title).toBe("Image request");
+    expect(sessionFor(context, started.thread.id).lastPrompt).toEqual({
+      text: input.text,
+      images: input.images,
+    });
+  });
+
   it("evicts a disconnected runtime so the next operation reopens it", async () => {
     const context = await fixture();
     const codex = await context.service.createThread(
@@ -465,7 +533,7 @@ describe("run coordination", () => {
     const key = "90000000-0000-4000-8000-000000000001";
     const initial = await context.service.startThread(
       context.project.id,
-      "Implement an idempotent start",
+      parseTextChatInput("Implement an idempotent start"),
       { mode: "shared" },
       key,
     );
@@ -480,12 +548,12 @@ describe("run coordination", () => {
     const later = await context.service.prompt(
       context.project.id,
       initial.thread.id,
-      "A later request",
+      parseTextChatInput("A later request"),
       "90000000-0000-4000-8000-000000000002",
     );
     const replay = await context.service.startThread(
       context.project.id,
-      "Implement an idempotent start",
+      parseTextChatInput("Implement an idempotent start"),
       { mode: "shared" },
       key,
     );
@@ -513,14 +581,14 @@ describe("run coordination", () => {
 
     const started = await context.service.startThread(
       context.project.id,
-      "Build the feature",
+      parseTextChatInput("Build the feature"),
       {
         mode: "worktree",
         baseBranch: GitBranchSchema.parse("main"),
         sourceChanges: "none",
       },
       "90000000-0000-4000-8000-000000000010",
-      "codex",
+      "pi",
     );
     const source = context.store.getThread(
       context.project.id,
@@ -540,13 +608,16 @@ describe("run coordination", () => {
     ).length;
     await expect(
       context.service.preflightContinuation(context.project.id, source.id),
-    ).resolves.toEqual({ available: true });
+    ).resolves.toEqual({ available: true, imageInput: "unknown" });
     expect(context.runtime.created).toBe(createdBeforePreflight);
     expect(context.store.listThreads(context.project.id)).toHaveLength(
       threadsBeforePreflight,
     );
 
     const key = "90000000-0000-4000-8000-000000000011";
+    const continuationInput = parseImageChatInput("Continue implementation", [
+      png(1, 1),
+    ]);
     const attachRun = vi
       .spyOn(context.store, "attachContinuationRun")
       .mockImplementationOnce(() => {
@@ -556,7 +627,7 @@ describe("run coordination", () => {
       context.service.continueThread(
         context.project.id,
         source.id,
-        "Continue implementation",
+        continuationInput,
         key,
       ),
     ).rejects.toThrow("crash_after_continuation_prompt");
@@ -565,13 +636,13 @@ describe("run coordination", () => {
     const continued = await context.service.continueThread(
       context.project.id,
       source.id,
-      "Continue implementation",
+      continuationInput,
       key,
     );
     const replay = await context.service.continueThread(
       context.project.id,
       source.id,
-      "Continue implementation",
+      continuationInput,
       key,
     );
     const sibling = context.store.getThread(
@@ -590,9 +661,14 @@ describe("run coordination", () => {
     expect(sibling.worktree_id).toBe(source.worktree_id);
     expect(sibling.title).toBe("Continue implementation");
     expect(sibling.initial_title_pending).toBe(0);
-    expect(
-      context.runtime.sessionById(sibling.runtime_session_id).promptCount,
-    ).toBe(1);
+    const siblingSession = context.runtime.sessionById(
+      sibling.runtime_session_id,
+    );
+    expect(siblingSession.promptCount).toBe(1);
+    expect(siblingSession.lastPrompt).toEqual({
+      text: continuationInput.text,
+      images: continuationInput.images,
+    });
     expect(context.runtime.createdPaths.at(-1)).toBe(worktree.execution_root);
     expect(
       (
@@ -617,7 +693,7 @@ describe("run coordination", () => {
     await expect(
       context.service.startThread(
         context.project.id,
-        "Recover one prompt",
+        parseTextChatInput("Recover one prompt"),
         { mode: "shared" },
         key,
       ),
@@ -634,7 +710,7 @@ describe("run coordination", () => {
     );
     const recovered = await restarted.startThread(
       context.project.id,
-      "Recover one prompt",
+      parseTextChatInput("Recover one prompt"),
       { mode: "shared" },
       key,
     );
@@ -864,7 +940,7 @@ describe("run coordination", () => {
     await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Running work",
+      parseTextChatInput("Running work"),
       "19000000-0000-4000-8000-000000000010",
     );
     await expect(
@@ -883,7 +959,7 @@ describe("run coordination", () => {
     const pending = context.service.prompt(
       context.project.id,
       context.second.id,
-      "Preflight work",
+      parseTextChatInput("Preflight work"),
       "19000000-0000-4000-8000-000000000012",
     );
     await vi.waitFor(() => {
@@ -921,13 +997,13 @@ describe("run coordination", () => {
     const firstRun = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Do the work",
+      parseTextChatInput("Do the work"),
       key,
     );
     const retry = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Do the work",
+      parseTextChatInput("Do the work"),
       key,
     );
     expect(retry.id).toBe(firstRun.id);
@@ -936,7 +1012,7 @@ describe("run coordination", () => {
     const secondRun = await context.service.prompt(
       context.project.id,
       context.second.id,
-      "Other work",
+      parseTextChatInput("Other work"),
       "20000000-0000-4000-8000-000000000002",
     );
     expect(secondRun.state).toBe("running");
@@ -945,7 +1021,7 @@ describe("run coordination", () => {
       context.service.prompt(
         context.project.id,
         context.first.id,
-        "Conflicting work",
+        parseTextChatInput("Conflicting work"),
         "20000000-0000-4000-8000-000000000003",
       ),
     ).rejects.toThrow("project_busy");
@@ -953,13 +1029,13 @@ describe("run coordination", () => {
     await context.service.steer(
       context.project.id,
       context.first.id,
-      "Adjust first",
+      parseTextChatInput("Adjust first"),
       "20000000-0000-4000-8000-000000000004",
     );
     await context.service.steer(
       context.project.id,
       context.second.id,
-      "Adjust second",
+      parseTextChatInput("Adjust second"),
       "20000000-0000-4000-8000-000000000005",
     );
     expect(firstSession.steerCount).toBe(1);
@@ -1002,13 +1078,13 @@ describe("run coordination", () => {
     const first = context.service.prompt(
       context.project.id,
       context.first.id,
-      "First work",
+      parseTextChatInput("First work"),
       "21000000-0000-4000-8000-000000000001",
     );
     const second = context.service.prompt(
       context.project.id,
       context.second.id,
-      "Second work",
+      parseTextChatInput("Second work"),
       "21000000-0000-4000-8000-000000000002",
     );
     await vi.waitFor(() => {
@@ -1043,7 +1119,7 @@ describe("run coordination", () => {
     const first = context.service.prompt(
       context.project.id,
       context.first.id,
-      "First work",
+      parseTextChatInput("First work"),
       "22000000-0000-4000-8000-000000000001",
     );
     await vi.waitFor(() => {
@@ -1054,7 +1130,7 @@ describe("run coordination", () => {
       context.service.prompt(
         context.project.id,
         context.first.id,
-        "Conflicting work",
+        parseTextChatInput("Conflicting work"),
         "22000000-0000-4000-8000-000000000002",
       ),
     ).rejects.toThrow("project_busy");
@@ -1076,7 +1152,7 @@ describe("run coordination", () => {
     await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Initial work",
+      parseTextChatInput("Initial work"),
       "22000000-0000-4000-8000-000000000010",
     );
 
@@ -1116,7 +1192,7 @@ describe("run coordination", () => {
     const replacement = context.service.prompt(
       context.project.id,
       context.first.id,
-      "Replacement work",
+      parseTextChatInput("Replacement work"),
       "22000000-0000-4000-8000-000000000013",
     );
     await vi.waitFor(() => {
@@ -1129,7 +1205,7 @@ describe("run coordination", () => {
       context.service.prompt(
         context.project.id,
         context.first.id,
-        "Conflicting work",
+        parseTextChatInput("Conflicting work"),
         "22000000-0000-4000-8000-000000000014",
       ),
     ).rejects.toThrow("project_busy");
@@ -1156,14 +1232,14 @@ describe("run coordination", () => {
     const first = context.service.prompt(
       context.project.id,
       context.first.id,
-      "Work",
+      parseTextChatInput("Work"),
       key,
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     const retry = context.service.prompt(
       context.project.id,
       context.first.id,
-      "Work",
+      parseTextChatInput("Work"),
       key,
     );
     release?.();
@@ -1186,7 +1262,7 @@ describe("run coordination", () => {
         context.service.prompt(
           context.project.id,
           context.first.id,
-          "Different",
+          parseTextChatInput("Different"),
           key,
         ),
     ],
@@ -1202,7 +1278,7 @@ describe("run coordination", () => {
       const first = context.service.prompt(
         context.project.id,
         context.first.id,
-        "Work",
+        parseTextChatInput("Work"),
         key,
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1233,7 +1309,12 @@ describe("run coordination", () => {
     );
 
     await expect(
-      context.service.prompt(context.project.id, context.first.id, "Work", key),
+      context.service.prompt(
+        context.project.id,
+        context.first.id,
+        parseTextChatInput("Work"),
+        key,
+      ),
     ).rejects.toThrow("storage_failed");
 
     expect(context.runtime.session.stopCount).toBe(1);
@@ -1243,7 +1324,7 @@ describe("run coordination", () => {
     const replacement = await context.service.prompt(
       context.project.id,
       context.second.id,
-      "Tracked work",
+      parseTextChatInput("Tracked work"),
       "60000000-0000-4000-8000-000000000002",
     );
     expect(replacement.state).toBe("running");
@@ -1272,7 +1353,7 @@ describe("run coordination", () => {
     const run = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Stop this",
+      parseTextChatInput("Stop this"),
       "30000000-0000-4000-8000-000000000002",
     );
     const stopKey = "30000000-0000-4000-8000-000000000003";
@@ -1300,13 +1381,13 @@ describe("run coordination", () => {
     const firstRun = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Remove this project",
+      parseTextChatInput("Remove this project"),
       "50000000-0000-4000-8000-000000000001",
     );
     const secondRun = await context.service.prompt(
       context.project.id,
       context.second.id,
-      "Also remove this",
+      parseTextChatInput("Also remove this"),
       "50000000-0000-4000-8000-000000000002",
     );
 
@@ -1338,7 +1419,7 @@ describe("run coordination", () => {
     const replacement = await context.service.prompt(
       restored.id,
       context.first.id,
-      "Start again",
+      parseTextChatInput("Start again"),
       "50000000-0000-4000-8000-000000000004",
     );
     expect(replacement.state).toBe("running");
@@ -1357,7 +1438,7 @@ describe("run coordination", () => {
     await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Start and cache the runtime",
+      parseTextChatInput("Start and cache the runtime"),
       "53000000-0000-4000-8000-000000000001",
     );
     vi.spyOn(firstSession, "dispose").mockRejectedValueOnce(
@@ -1374,7 +1455,7 @@ describe("run coordination", () => {
     const replacement = await context.service.prompt(
       context.project.id,
       context.second.id,
-      "Continue after failed removal",
+      parseTextChatInput("Continue after failed removal"),
       "53000000-0000-4000-8000-000000000003",
     );
     expect(replacement.state).toBe("running");
@@ -1393,7 +1474,7 @@ describe("run coordination", () => {
     const original = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Remove this project",
+      parseTextChatInput("Remove this project"),
       "52000000-0000-4000-8000-000000000001",
     );
     let releaseDisposal: (() => void) | undefined;
@@ -1413,7 +1494,7 @@ describe("run coordination", () => {
       context.service.prompt(
         context.project.id,
         context.second.id,
-        "Too late",
+        parseTextChatInput("Too late"),
         "52000000-0000-4000-8000-000000000003",
       ),
     ).rejects.toThrow("project_not_found");
@@ -1430,7 +1511,7 @@ describe("run coordination", () => {
     const replacement = await context.service.prompt(
       restored.id,
       context.second.id,
-      "Fresh prompt",
+      parseTextChatInput("Fresh prompt"),
       "52000000-0000-4000-8000-000000000004",
     );
     expect(replacement.state).toBe("running");
@@ -1463,13 +1544,13 @@ describe("run coordination", () => {
     const first = context.service.prompt(
       context.project.id,
       context.first.id,
-      "First blocked prompt",
+      parseTextChatInput("First blocked prompt"),
       "51000000-0000-4000-8000-000000000001",
     );
     const second = context.service.prompt(
       context.project.id,
       context.second.id,
-      "Second blocked prompt",
+      parseTextChatInput("Second blocked prompt"),
       "51000000-0000-4000-8000-000000000002",
     );
     await vi.waitFor(() => {
@@ -1491,7 +1572,7 @@ describe("run coordination", () => {
     const replacement = await context.service.prompt(
       restored.id,
       context.first.id,
-      "Fresh prompt",
+      parseTextChatInput("Fresh prompt"),
       "51000000-0000-4000-8000-000000000004",
     );
     expect(replacement.state).toBe("running");
@@ -1532,7 +1613,7 @@ describe("a Stop the agent never answers", () => {
     const run = await context.service.prompt(
       context.project.id,
       context.first.id,
-      "Work that will not come to rest",
+      parseTextChatInput("Work that will not come to rest"),
       "23000000-0000-4000-8000-000000000001",
     );
     // The wedge: abort is delivered, idle never arrives.

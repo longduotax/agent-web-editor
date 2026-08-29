@@ -1699,6 +1699,50 @@ describe("live streaming", () => {
     expect(composer).toHaveValue("");
   });
 
+  it("confirms an image-only accepted steer until Pi persists it", async () => {
+    api.getSnapshot.mockResolvedValue(running);
+    api.steer.mockResolvedValue({ run: running.currentRun });
+    const user = userEvent.setup();
+    const { queryClient } = renderPane();
+    await screen.findByRole("heading", { name: "Example thread" });
+
+    const image = new File([new Uint8Array([1, 2, 3])], "queued.png", {
+      type: "image/png",
+    });
+    fireEvent.change(screen.getByLabelText("＋ Add photos"), {
+      target: { files: [image] },
+    });
+    await user.click(screen.getByRole("button", { name: "Steer current run" }));
+
+    await waitFor(() => {
+      expect(api.steer).toHaveBeenCalled();
+    });
+    expect(await screen.findByLabelText("1 queued image")).toHaveTextContent(
+      "1 image queued for steering",
+    );
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("");
+
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcript: [
+        {
+          id: "pi-queued-image",
+          kind: "message",
+          role: "user",
+          text: "",
+          timestamp: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("1 queued image")).not.toBeInTheDocument();
+    });
+  });
+
   // Named for what it actually exercises. It settles the run in the same step
   // that delivers the persisted message, so the run-settled sweep clears the
   // echo whether or not retirement is wired in at all; the mid-run test below
@@ -1868,7 +1912,7 @@ describe("live streaming", () => {
   // queued into is aborted (`agent-loop.js:106-111`), so the words are gone
   // from the transcript AND from the composer, with no notice. The composer
   // clearing is this app's promise that the message was accepted.
-  it("returns an undelivered steer to the composer when the run is stopped", async () => {
+  it("keeps an undelivered steer individually retryable when the run is stopped", async () => {
     api.getSnapshot.mockResolvedValue(running);
     api.steer.mockResolvedValue({ run: running.currentRun });
     const user = userEvent.setup();
@@ -1898,18 +1942,14 @@ describe("live streaming", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
-        "wait, use pnpm",
-      );
-    });
+    await screen.findByRole("button", { name: "Retry steering message 1" });
     expect(screen.getByText(/never delivered/)).toBeInTheDocument();
   });
 
   // Nit 5. The hand-back used to remount the composer to make the restored
   // draft visible, which threw away focus and the caret. A reader typing
   // when a stopped run hands a steer back should keep both.
-  it("hands a steer back without taking the reader's cursor with it", async () => {
+  it("keeps a reader's draft and cursor when a steer becomes retryable", async () => {
     api.getSnapshot.mockResolvedValue(running);
     api.steer.mockResolvedValue({ run: running.currentRun });
     const user = userEvent.setup();
@@ -1940,12 +1980,11 @@ describe("live streaming", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
-        "and then\n\nwait, use pnpm",
-      );
-    });
-    // Same element, still focused: the box was not rebuilt underneath them.
+    await screen.findByRole("button", { name: "Retry steering message 1" });
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
+      "and then",
+    );
+    // Same element, still focused: recovery does not rebuild the draft.
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(composer);
     expect(composer).toHaveFocus();
     expect(localStorage.getItem(`pi-draft:${threadId}`)).toBe(
@@ -1958,7 +1997,7 @@ describe("live streaming", () => {
   // dropped with no notice at all -- the exact outcome this path exists to
   // prevent, and now a guaranteed loss rather than a double send, because
   // the adapter really does clear Pi's queue.
-  it("still returns a stranded steer once the next run has already started", async () => {
+  it("keeps a stranded steer retryable once the next run has already started", async () => {
     api.getSnapshot.mockResolvedValue(running);
     api.steer.mockResolvedValue({ run: running.currentRun });
     const user = userEvent.setup();
@@ -1986,11 +2025,7 @@ describe("live streaming", () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue(
-        "wait, use pnpm",
-      );
-    });
+    await screen.findByRole("button", { name: "Retry steering message 1" });
     // And it says why, although the run it belongs to is no longer the one
     // the pane has an outcome for.
     expect(screen.getByText(/never delivered/)).toBeInTheDocument();

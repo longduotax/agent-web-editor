@@ -8,6 +8,7 @@ belong here.
 | Capability                                                        | Current version | Proposed version | Proposal | Implementation | Related open plan                                                                                   |
 | ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | --------------------------------------------------------------------------------------------------- |
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)               |
+| [Chat image attachments](chat-image-attachments.md)               | 1               | None             | None     | Current        | —                                                                                                   |
 | [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | In progress    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md)   |
 | [Thread management](thread-management.md)                         | 3               | None             | None     | Current        | —                                                                                                   |
 | [Thread workspaces](thread-workspaces.md)                         | 3               | 4                | Approved | In progress    | [Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md) |
@@ -27,12 +28,22 @@ preserving the merged per-thread concurrency behavior. A pre-merge immediate
 same-worktree continuation revision was approved and implemented but not
 promoted. The user then selected deferred first-prompt creation so an abandoned
 exact `/new` leaves no empty server thread or agent session. That material
-revision is Approved version 4: `/new` opens a device-local pending same-worktree composer,
-and its first real prompt recovery-safely creates the titled thread, session,
-prompt, and run. One-to-many managed-worktree ownership, one active sibling
+revision is Approved version 4: `/new` opens a device-local pending
+same-worktree composer, and its first real prompt recovery-safely creates the
+titled thread, session, prompt, and run. One-to-many managed-worktree ownership, one active sibling
 agent, no copied context/Git operation, and Local checkout exclusion remain.
 The user approved product version 4 and plan version 2 on 2026-08-29;
 refactoring is active.
+
+Chat image attachments version 1 is Current. The user approved product version 1
+on 2026-08-29, and the implementation was verified the same day. It lets users
+drag or paste JPEG, PNG, or WebP images into a specific new-chat or thread
+composer (with an accessible Add photos alternative), preview and remove up to
+four bounded images, and send text-plus-image or image-only Pi prompts and
+steering messages. Pending photos are page-memory only and multipart command
+bodies avoid a staging store. Accepted images remain in native Pi history, load
+on demand in typed user messages through authorized opaque references, and
+never expose local paths; arbitrary Markdown images remain disabled.
 
 Scalable conversation history is a separate Approved capability for bounded
 latest pages, progressive older-history navigation, polite live following, and

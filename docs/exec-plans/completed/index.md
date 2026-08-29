@@ -40,6 +40,11 @@ specifications, designs, code, or tests.
   added a manually invoked project-local Pi skill and checked-in start/close
   commands for random-port, disposable-SQLite UI review environments that
   install missing dependencies and hard-refuse the main worktree.
+- [Chat image attachments](2026-08-29-chat-image-attachments.md) — added
+  pane-scoped JPEG/PNG/WebP drag, focused clipboard paste, and accessible file
+  selection; bounded multipart prompt/steer transport; Pi multimodal delivery,
+  idempotent recovery, native-history image refs, and authorized on-demand
+  rendering without a staging store or local path exposure.
 - [Default-model thread and worktree naming](2026-08-29-default-model-thread-naming.md) —
   changed automatic first-prompt naming from a distinct lower-cost
   same-provider model to the selected project's configured default Pi model,

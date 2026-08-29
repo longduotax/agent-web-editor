@@ -22,6 +22,8 @@ import {
 
 import {
   ApiClientError,
+  commandId,
+  getChatImage,
   getOlderTranscriptPage,
   getSnapshot,
   getWorkspace,
@@ -48,6 +50,7 @@ import {
   isReaderFacingDiagnostic,
   mergeLiveTurn,
   mergePendingSteers,
+  queuedSteerImageCount,
   reduceLiveTurn,
   STREAMING_ITEM_ID,
   type LiveTurn,
@@ -60,6 +63,7 @@ import {
   runOutcomeNotice,
 } from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
+import { ChatAttachmentStrip, useChatAttachments } from "./chatAttachments.js";
 
 export interface ThreadPaneProps {
   projectId: ProjectId;
@@ -366,6 +370,73 @@ function transcriptContentKey(
   ].join(":");
 }
 
+function TranscriptImage({
+  projectId,
+  threadId,
+  image,
+  ordinal,
+}: {
+  projectId: ProjectId;
+  threadId: ThreadId;
+  image: NonNullable<
+    Extract<TranscriptItem, { kind: "message" }>["images"]
+  >[number];
+  ordinal: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const query = useQuery({
+    queryKey: ["chat-image", projectId, threadId, image.id],
+    queryFn: () => getChatImage(projectId, threadId, image.id),
+  });
+  if (query.isPending)
+    return (
+      <span className="transcript-image-loading" role="status">
+        Loading attached image {String(ordinal)}…
+      </span>
+    );
+  if (query.data === undefined)
+    return <span className="transcript-image-error">Image unavailable</span>;
+  const src = `data:${query.data.mimeType};base64,${query.data.data}`;
+  return (
+    <>
+      <button
+        type="button"
+        className="transcript-image-button"
+        aria-label={`Open attached image ${String(ordinal)}`}
+        onClick={() => {
+          setOpen(true);
+        }}
+      >
+        <img src={src} alt={`Attached image ${String(ordinal)}`} />
+      </button>
+      {open && (
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Attached image ${String(ordinal)}`}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            className="image-lightbox-close"
+            aria-label="Close image preview"
+            autoFocus
+            onClick={() => {
+              setOpen(false);
+            }}
+          >
+            ×
+          </button>
+          <img src={src} alt={`Attached image ${String(ordinal)}, enlarged`} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function pageKey(page: TranscriptPage): string {
   return `${page.items[0]?.id ?? "empty"}:${page.items.at(-1)?.id ?? "empty"}:${String(page.items.length)}`;
 }
@@ -556,13 +627,42 @@ function Transcript({
             );
           }
           if (item.role === "user") {
+            const queuedImageCount = queuedSteerImageCount(item);
             return (
               <div className="u-row" key={item.id}>
                 <div className="u-bubble">
                   <span className="sr-only">You</span>
-                  <div className="markdown">
-                    <Markdown>{item.text}</Markdown>
-                  </div>
+                  {(item.images?.length ?? 0) > 0 && (
+                    <div
+                      className="transcript-images"
+                      aria-label="Attached images"
+                    >
+                      {(item.images ?? []).map((image, imageIndex) => (
+                        <TranscriptImage
+                          key={image.id}
+                          projectId={snapshot.project.id}
+                          threadId={snapshot.thread.id}
+                          image={image}
+                          ordinal={imageIndex + 1}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {queuedImageCount > 0 && (
+                    <div
+                      className="transcript-images"
+                      aria-label={`${String(queuedImageCount)} queued ${queuedImageCount === 1 ? "image" : "images"}`}
+                    >
+                      {queuedImageCount === 1
+                        ? "1 image queued for steering"
+                        : `${String(queuedImageCount)} images queued for steering`}
+                    </div>
+                  )}
+                  {item.text !== "" && (
+                    <div className="markdown">
+                      <Markdown>{item.text}</Markdown>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -604,7 +704,7 @@ export function Composer({
   onSteered,
   onSent,
   onContinue,
-  restoreDraft,
+  onFocus,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
@@ -623,28 +723,30 @@ export function Composer({
         text: string,
         runId: string,
         baseline: { priorCopies: number; priorUserMessages: number },
+        images: readonly File[],
       ) => void)
     | undefined;
   /** Anything was sent: re-pin the transcript to the bottom. */
   onSent?: (() => void) | undefined;
   /** Exact `/new` passed preflight and should open a pending sibling pane. */
   onContinue?: (() => void) | undefined;
-  /**
-   * A token whose identity changes when the pane has written something back
-   * into this thread's draft — an undelivered steer handed back after a
-   * stopped run. The composer re-reads its draft when it changes.
-   *
-   * This used to be a `key` on the composer, which remounted it to make the
-   * new draft visible. A remount drops focus and the caret, so a reader who
-   * was already typing when a stopped run handed a steer back had their
-   * cursor thrown into a textarea they had not asked for. Re-reading in
-   * place keeps both, and keeps the merge itself in one place (the pane).
-   */
-  restoreDraft?: { token: number; texts: readonly string[] } | undefined;
+  onFocus?: (() => void) | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
+  const attachments = useChatAttachments(
+    snapshot.capabilities.imageInput ?? "unknown",
+    () => {
+      onFocus?.();
+      textareaRef.current?.focus();
+    },
+  );
+  const submissionKey = useRef(commandId());
+  const attachmentKey = attachments.images.map((image) => image.id).join(":");
+  useEffect(() => {
+    submissionKey.current = commandId();
+  }, [text, attachmentKey]);
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
@@ -681,7 +783,16 @@ export function Composer({
       // trailing newline from Shift+Enter was enough -- so the echo could
       // never be retired and the steer showed twice for the rest of the run.
       const sent = text.trim();
-      if (activeRun === null) return await prompt(projectId, threadId, sent);
+      if (activeRun === null)
+        return attachments.files.length === 0
+          ? await prompt(projectId, threadId, sent)
+          : await prompt(
+              projectId,
+              threadId,
+              sent,
+              attachments.files,
+              submissionKey.current,
+            );
       // Measured before the request, so a copy that arrives after it is
       // unambiguously this steer landing. Both are taken: Pi rewrites a
       // `/`-prefixed steer before storing it, and the count of ALL user
@@ -690,12 +801,22 @@ export function Composer({
         priorCopies: countUserMessages(snapshot.transcriptPage.items, sent),
         priorUserMessages: countAllUserMessages(snapshot.transcriptPage.items),
       };
-      const result = await steer(projectId, threadId, sent);
-      onSteered?.(sent, activeRun.id, baseline);
+      const result =
+        attachments.files.length === 0
+          ? await steer(projectId, threadId, sent)
+          : await steer(
+              projectId,
+              threadId,
+              sent,
+              attachments.files,
+              submissionKey.current,
+            );
+      onSteered?.(sent, activeRun.id, baseline, attachments.files);
       return result;
     },
     onSuccess: async () => {
       setText("");
+      attachments.clear();
       removeDraft(`pi-draft:${threadId}`);
       await queryClient.invalidateQueries({
         queryKey: ["snapshot", projectId, threadId],
@@ -706,25 +827,17 @@ export function Composer({
   useEffect(() => {
     writeDraft(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
-  // The pane hands back only the undelivered steers. The current draft lives
-  // here, not in storage: a stop snapshot can arrive before the persistence
-  // effect for the reader's most recent keystroke, so storage may be stale.
-  useEffect(() => {
-    if (restoreDraft === undefined) return;
-    setText((current) => {
-      const merged = [current, ...restoreDraft.texts]
-        .filter((part) => part !== "")
-        .join("\n\n");
-      writeDraft(`pi-draft:${threadId}`, merged);
-      return merged;
-    });
-  }, [restoreDraft, threadId]);
-
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const submitted = text.trim();
-    if (runtimeUnavailable || submitted === "") return;
-    if (submitted === "/new") {
+    if (
+      runtimeUnavailable ||
+      (submitted === "" && attachments.images.length === 0)
+    )
+      return;
+    // Never discard pending photos by interpreting their caption as an app
+    // command. Exact text-only `/new` remains the continuation command.
+    if (submitted === "/new" && attachments.images.length === 0) {
       continuing.mutate();
       return;
     }
@@ -744,7 +857,34 @@ export function Composer({
     mutation.error instanceof ApiClientError &&
     mutation.error.code === "thread_not_found";
   return (
-    <form className={`composer${active ? " steering" : ""}`} onSubmit={submit}>
+    <form
+      className={`composer${active ? " steering" : ""}${attachments.dragging ? " image-dragging" : ""}`}
+      onSubmit={submit}
+      onDragEnterCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDragOverCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDropCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      {...attachments.dropHandlers}
+    >
+      {attachments.dragging && (
+        <div className="chat-drop-overlay" aria-hidden="true">
+          Drop photos here
+        </div>
+      )}
       <div className="composer-stack">
         {text.trimStart().startsWith("/") && (
           <button
@@ -760,6 +900,23 @@ export function Composer({
           </button>
         )}
         <div className="composer-input">
+          <ChatAttachmentStrip
+            images={attachments.images}
+            error={attachments.error}
+            onRemove={attachments.remove}
+            onAdd={(files) => {
+              attachments.addFiles(files, "picker");
+            }}
+            disabled={
+              mutation.isPending ||
+              snapshot.capabilities.imageInput === "unsupported"
+            }
+            unavailableExplanation={
+              snapshot.capabilities.imageInput === "unsupported"
+                ? "The selected Pi model or settings cannot receive images."
+                : undefined
+            }
+          />
           <textarea
             ref={textareaRef}
             aria-label={`Message ${agentLabel}`}
@@ -778,6 +935,20 @@ export function Composer({
             onChange={(event) => {
               setText(event.target.value);
             }}
+            onPasteCapture={(event) => {
+              if (
+                mutation.isPending &&
+                [...event.clipboardData.items].some(
+                  (item) =>
+                    item.kind === "file" && item.type.startsWith("image/"),
+                )
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+            onPaste={attachments.onPaste}
+            readOnly={mutation.isPending}
             onKeyDown={(event) => {
               if (isReleaseKey(event)) {
                 event.preventDefault();
@@ -816,14 +987,14 @@ export function Composer({
               type="submit"
               className="send"
               aria-label={
-                text.trim() === "/new"
+                text.trim() === "/new" && attachments.images.length === 0
                   ? "Start new chat in this worktree"
                   : active
                     ? "Steer current run"
                     : "Send message"
               }
               title={
-                text.trim() === "/new"
+                text.trim() === "/new" && attachments.images.length === 0
                   ? "Start new chat in this worktree"
                   : active
                     ? "Steer current run"
@@ -833,7 +1004,7 @@ export function Composer({
                 runtimeUnavailable ||
                 mutation.isPending ||
                 continuing.isPending ||
-                text.trim() === ""
+                (text.trim() === "" && attachments.images.length === 0)
               }
             >
               <span aria-hidden="true">↑</span>
@@ -1044,12 +1215,13 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       text: string,
       runId: string,
       baseline: { priorCopies: number; priorUserMessages: number },
+      images: readonly File[],
     ) => {
       const ordinal = nextOrdinal.current;
       nextOrdinal.current += 1;
       setPendingSteers((current) => [
         ...current,
-        { runId, text, ordinal, ...baseline },
+        { runId, text, ordinal, images, ...baseline },
       ]);
     },
     [],
@@ -1068,13 +1240,11 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       dropSettledSteers(settledTranscript, current),
     );
   }, [settledTranscript]);
-  // Text the run ended without ever delivering, handed back to the composer.
-  // `token` changes identity on every hand-back, which is what tells the
-  // composer to re-read its draft.
+  // Steers the run ended without ever delivering. They stay independently
+  // actionable: merging their images into the active draft would silently
+  // discard anything beyond one message's four-image limit.
   const [undelivered, setUndelivered] = useState<{
-    token: number;
-    count: number;
-    texts: readonly string[];
+    steers: readonly PendingSteer[];
   } | null>(null);
   const lastRun = snapshot.data?.lastRun ?? null;
   // An echo belongs to its run, and cannot outlive it.
@@ -1117,13 +1287,19 @@ function ThreadPaneBody(props: ThreadPaneProps) {
         ? stale
         : dropSettledSteers(settledTranscript, stale);
     if (lost.length === 0) return;
-    // The composer owns the in-memory draft, which may be newer than the
-    // persisted copy while its write effect is pending. It merges and stores
-    // these texts without replacing what the reader is currently typing.
+    // Keep the reader's in-memory draft and caret untouched, but preserve the
+    // lost text in the reload-safe draft as well as the explicit retry queue.
+    // Image files remain in the retry records because browser storage cannot
+    // safely or durably represent them.
+    const draftKey = `pi-draft:${threadId}`;
+    writeDraft(
+      draftKey,
+      [readDraft(draftKey), ...lost.map((steer) => steer.text)]
+        .filter((part) => part !== "")
+        .join("\n\n"),
+    );
     setUndelivered((current) => ({
-      token: (current?.token ?? 0) + 1,
-      count: lost.length,
-      texts: lost.map((steer) => steer.text),
+      steers: [...(current?.steers ?? []), ...lost],
     }));
   }, [runActive, currentRunId, pendingSteers, settledTranscript, threadId]);
   const restore = useMutation({
@@ -1198,6 +1374,46 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   const outcome = runOutcomeNotice(
     lastRun !== null && lastRun.id !== dismissedOutcomeRunId ? lastRun : null,
   );
+  const recoverSteer = useMutation({
+    mutationFn: async (lost: PendingSteer) => {
+      const currentSnapshot = snapshot.data;
+      const currentRun = currentSnapshot?.currentRun;
+      const files = lost.images ?? [];
+      if (currentRun?.state === "running" && currentSnapshot !== undefined) {
+        const baseline = {
+          priorCopies: countUserMessages(
+            currentSnapshot.transcriptPage.items,
+            lost.text,
+          ),
+          priorUserMessages: countAllUserMessages(
+            currentSnapshot.transcriptPage.items,
+          ),
+        };
+        const result =
+          files.length === 0
+            ? await steer(projectId, threadId, lost.text)
+            : await steer(projectId, threadId, lost.text, files, commandId());
+        onSteered(lost.text, currentRun.id, baseline, files);
+        return result;
+      }
+      return files.length === 0
+        ? await prompt(projectId, threadId, lost.text)
+        : await prompt(projectId, threadId, lost.text, files, commandId());
+    },
+    onSuccess: async (_result, restored) => {
+      setUndelivered((current) => {
+        if (current === null) return null;
+        const steers = current.steers.filter(
+          (steer) => steer.ordinal !== restored.ordinal,
+        );
+        return steers.length === 0 ? null : { steers };
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["snapshot", projectId, threadId],
+      });
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
 
   // The transcript and the composer are siblings, and sending has to re-pin
   // the transcript, so the pin lives here where both can reach it rather than
@@ -1372,11 +1588,33 @@ function ThreadPaneBody(props: ThreadPaneProps) {
                 {outcome?.text}
                 {outcome !== null && undelivered !== null && " "}
                 {undelivered !== null &&
-                  (undelivered.count === 1
-                    ? "Your steering message was never delivered — it is back in the composer."
-                    : `Your ${String(undelivered.count)} steering messages were never delivered — they are back in the composer.`)}
+                  (undelivered.steers.length === 1
+                    ? "Your steering message was never delivered. Retry it below."
+                    : `Your ${String(undelivered.steers.length)} steering messages were never delivered. Retry each below.`)}
               </p>
+              {undelivered !== null && (
+                <div className="undelivered-steers">
+                  {undelivered.steers.map((lost, index) => (
+                    <button
+                      type="button"
+                      key={lost.ordinal}
+                      disabled={recoverSteer.isPending}
+                      onClick={() => {
+                        recoverSteer.mutate(lost);
+                      }}
+                    >
+                      {`Retry steering message ${String(index + 1)}${(lost.images?.length ?? 0) === 0 ? "" : ` with ${String(lost.images?.length ?? 0)} photos`}`}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
+          )}
+          {recoverSteer.error !== null && (
+            <ErrorNotice
+              error={recoverSteer.error}
+              context="Could not retry steering message"
+            />
           )}
           {archived ? (
             <ArchivedNotice
@@ -1388,20 +1626,15 @@ function ThreadPaneBody(props: ThreadPaneProps) {
             />
           ) : (
             <Composer
-              // The composer reads its saved draft ONCE, in a `useState`
-              // initialiser, so anything that changes the draft underneath
-              // it -- an undelivered steer handed back above -- has to tell
-              // it to look again. A token rather than a `key`, because a key
-              // remounts it and a remount costs the reader their focus and
-              // caret. (Rebinding to another thread is handled a level up,
-              // by the key on the pane itself.)
-              restoreDraft={undelivered ?? undefined}
               projectId={projectId}
               threadId={threadId}
               snapshot={snapshot.data}
               onSteered={onSteered}
               onContinue={() => {
                 props.onContinue?.();
+              }}
+              onFocus={() => {
+                props.onFocus();
               }}
               onSent={() => {
                 setUndelivered(null);

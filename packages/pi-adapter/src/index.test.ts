@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -9,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { ChatImageIdSchema } from "@pi-web/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({
@@ -18,6 +20,7 @@ const sdk = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
   modelCreate: vi.fn(),
   settingsCreate: vi.fn(),
+  resizeImage: vi.fn(),
 }));
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
@@ -29,6 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: sdk.createAgentSession,
   ModelRuntime: { create: sdk.modelCreate },
   SettingsManager: { create: sdk.settingsCreate },
+  resizeImage: sdk.resizeImage,
 }));
 
 import { parseGeneratedTitle, PiAgentRuntime } from "./index.js";
@@ -86,6 +90,61 @@ function openedManager(branch: unknown = []): {
   getBranch(): unknown;
 } {
   return { getSessionId: () => sessionId, getBranch: () => branch };
+}
+
+function png(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes, 0);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+function jpeg(width: number, height: number): Buffer {
+  return Buffer.from([
+    0xff,
+    0xd8,
+    0xff,
+    0xc0,
+    0x00,
+    0x11,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
+    0x03,
+    0x01,
+    0x11,
+    0x00,
+    0x02,
+    0x11,
+    0x00,
+    0x03,
+    0x11,
+    0x00,
+    0xff,
+    0xd9,
+  ]);
+}
+
+function webp(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(30);
+  bytes.write("RIFF", 0, "ascii");
+  bytes.writeUInt32LE(22, 4);
+  bytes.write("WEBP", 8, "ascii");
+  bytes.write("VP8X", 12, "ascii");
+  bytes.writeUInt32LE(10, 16);
+  const encodedWidth = width - 1;
+  const encodedHeight = height - 1;
+  bytes[24] = encodedWidth & 0xff;
+  bytes[25] = (encodedWidth >> 8) & 0xff;
+  bytes[26] = (encodedWidth >> 16) & 0xff;
+  bytes[27] = encodedHeight & 0xff;
+  bytes[28] = (encodedHeight >> 8) & 0xff;
+  bytes[29] = (encodedHeight >> 16) & 0xff;
+  return bytes;
 }
 
 function descriptor(cwd: string, path: unknown): unknown {
@@ -464,6 +523,56 @@ describe("PiAgentRuntime naming-model boundary", () => {
   });
 });
 
+describe("PiAgentRuntime image capability preflight", () => {
+  it.each([
+    [["text", "image"], false, "supported"],
+    [["text"], false, "unsupported"],
+    [["text", "image"], true, "unsupported"],
+  ] as const)(
+    "uses only global settings before the trust-sensitive session is opened",
+    async (input, blocked, expected) => {
+      const context = await fixture();
+      await writeFile(
+        join(context.root, "settings.json"),
+        JSON.stringify({
+          defaultProvider: "test",
+          defaultModel: "model",
+          images: { blockImages: blocked },
+        }),
+      );
+      const getModel = vi.fn().mockReturnValue({
+        ...namingHandle("test", "model"),
+        input: [...input],
+      });
+      sdk.modelCreate.mockResolvedValue({ getModel });
+
+      await expect(
+        new PiAgentRuntime(context.root).inspectImageInput(context.project),
+      ).resolves.toBe(expected);
+      if (blocked) expect(sdk.modelCreate).not.toHaveBeenCalled();
+      else expect(getModel).toHaveBeenCalledWith("test", "model");
+    },
+  );
+
+  it("stays unknown when project settings require Pi's trust decision", async () => {
+    const context = await fixture();
+    await mkdir(join(context.project, ".pi"));
+    await writeFile(join(context.project, ".pi", "settings.json"), "{}");
+    await writeFile(
+      join(context.root, "settings.json"),
+      JSON.stringify({
+        defaultProvider: "test",
+        defaultModel: "image-model",
+      }),
+    );
+
+    await expect(
+      new PiAgentRuntime(context.root).inspectImageInput(context.project),
+    ).resolves.toBe("unknown");
+    expect(sdk.modelCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe("PiAgentRuntime session open boundary", () => {
   it("parses the agent-directory setting before native operations", () => {
     expect(() => new PiAgentRuntime(undefined)).not.toThrow();
@@ -756,6 +865,125 @@ describe("PiAgentRuntime session open boundary", () => {
       ],
     });
   });
+
+  it("projects native user images as bounded refs and reads them without exposing a path", async () => {
+    const context = await fixture();
+    const data = png(1, 1).toString("base64");
+    const id = createHash("sha256")
+      .update("image/png")
+      .update("\0")
+      .update(data)
+      .digest("hex");
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(
+      openedManager([
+        {
+          id: "user-image",
+          type: "message",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "Inspect this" },
+              { type: "image", mimeType: "image/png", data },
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: "bm90IGEgcG5n",
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: { subscribe: () => () => undefined },
+    });
+
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    await expect(opened.snapshot()).resolves.toMatchObject({
+      diagnostics: ["A malformed native image was omitted."],
+      transcript: [
+        {
+          id: "user-image",
+          kind: "message",
+          role: "user",
+          text: "Inspect this",
+          images: [{ id, mimeType: "image/png" }],
+        },
+      ],
+    });
+    await expect(
+      opened.readImage?.(ChatImageIdSchema.parse(id)),
+    ).resolves.toEqual({
+      id,
+      mimeType: "image/png",
+      data,
+    });
+    expect(JSON.stringify(await opened.snapshot())).not.toContain(
+      context.sessionPath,
+    );
+  });
+
+  it.each([
+    ["PNG", "image/png", png(10_000, 10_000)],
+    ["JPEG", "image/jpeg", jpeg(10_000, 10_000)],
+    ["WebP", "image/webp", webp(10_000, 10_000)],
+  ] as const)(
+    "omits persisted oversized %s images from projection and retrieval",
+    async (_format, mimeType, bytes) => {
+      const context = await fixture();
+      const data = bytes.toString("base64");
+      const id = createHash("sha256")
+        .update(mimeType)
+        .update("\0")
+        .update(data)
+        .digest("hex");
+      sdk.list.mockResolvedValue([
+        descriptor(context.project, context.sessionPath),
+      ]);
+      sdk.open.mockReturnValue(
+        openedManager([
+          {
+            id: "oversized-image",
+            type: "message",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: "Inspect this" },
+                { type: "image", mimeType, data },
+              ],
+            },
+          },
+        ]),
+      );
+      sdk.createAgentSession.mockResolvedValue({
+        session: { subscribe: () => () => undefined },
+      });
+
+      const opened = await new PiAgentRuntime().open(
+        context.project,
+        sessionId,
+      );
+      await expect(opened.snapshot()).resolves.toMatchObject({
+        diagnostics: ["A malformed native image was omitted."],
+        transcript: [
+          {
+            id: "oversized-image",
+            kind: "message",
+            role: "user",
+            text: "Inspect this",
+          },
+        ],
+      });
+      await expect(
+        opened.readImage?.(ChatImageIdSchema.parse(id)),
+      ).rejects.toMatchObject({ code: "unavailable" });
+    },
+  );
 
   it("rejects malformed native history collections from snapshots", async () => {
     const context = await fixture();
@@ -1178,6 +1406,227 @@ describe("PiOpenSession preflight boundary", () => {
       expect(events).toHaveLength(accepted ? 1 : 0);
     },
   );
+
+  it("normalizes and sends image bytes through Pi's multimodal prompt option", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    const prompt = vi.fn(
+      (
+        _text: string,
+        options: { preflightResult: (value: boolean) => void },
+      ) => {
+        options.preflightResult(true);
+        return new Promise<void>(() => undefined);
+      },
+    );
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        model: { input: ["text", "image"] },
+        settingsManager: { getBlockImages: () => false },
+        subscribe: () => () => undefined,
+        prompt,
+        steer: () => Promise.resolve(),
+        abort: () => Promise.resolve(),
+        dispose: () => undefined,
+      },
+    });
+    sdk.resizeImage.mockResolvedValue({
+      data: png(1, 1).toString("base64"),
+      mimeType: "image/png",
+      originalWidth: 1,
+      originalHeight: 1,
+      width: 1,
+      height: 1,
+      wasResized: false,
+    });
+    const bytes = new Uint8Array(png(1, 1));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+
+    const acceptance = await opened.prompt({
+      text: "Inspect this",
+      images: [{ mimeType: "image/png", data: bytes, digest }],
+    });
+
+    expect(acceptance.accepted).toBe(true);
+    expect(sdk.resizeImage).toHaveBeenCalledWith(
+      bytes,
+      "image/png",
+      expect.objectContaining({ maxWidth: 2_000, maxHeight: 2_000 }),
+    );
+    expect(prompt).toHaveBeenCalledWith(
+      "Inspect this",
+      expect.objectContaining({
+        images: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: png(1, 1).toString("base64"),
+          },
+        ],
+      }),
+    );
+  });
+
+  it.each([
+    ["a malformed model input", { input: "image" }, (): unknown => false],
+    [
+      "a malformed block-images value",
+      { input: ["text", "image"] },
+      (): unknown => "no",
+    ],
+  ])("fails closed for %s", async (_caseName, model, getBlockImages) => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    const prompt = vi.fn();
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        model,
+        settingsManager: { getBlockImages },
+        subscribe: () => () => undefined,
+        prompt,
+        steer: () => Promise.resolve(),
+        abort: () => Promise.resolve(),
+        dispose: () => undefined,
+      },
+    });
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+
+    await expect(opened.snapshot()).resolves.not.toHaveProperty("imageInput");
+    await expect(
+      opened.prompt({
+        text: "Inspect this",
+        images: [
+          {
+            mimeType: "image/png",
+            data: new Uint8Array(png(1, 1)),
+            digest: createHash("sha256")
+              .update(new Uint8Array(png(1, 1)))
+              .digest("hex"),
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(sdk.resizeImage).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a Pi capability accessor throws", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    const prompt = vi.fn();
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        get model() {
+          throw new Error("Pi model unavailable");
+        },
+        settingsManager: { getBlockImages: () => false },
+        subscribe: () => () => undefined,
+        prompt,
+        steer: () => Promise.resolve(),
+        abort: () => Promise.resolve(),
+        dispose: () => undefined,
+      },
+    });
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    await expect(opened.snapshot()).resolves.not.toHaveProperty("imageInput");
+    await expect(
+      opened.steer({
+        text: "Inspect this",
+        images: [
+          {
+            mimeType: "image/png",
+            data: new Uint8Array(png(1, 1)),
+            digest: createHash("sha256")
+              .update(new Uint8Array(png(1, 1)))
+              .digest("hex"),
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(sdk.resizeImage).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("reserves released image-preparation slots for queued requests", async () => {
+    const context = await fixture();
+    sdk.list.mockResolvedValue([
+      descriptor(context.project, context.sessionPath),
+    ]);
+    sdk.open.mockReturnValue(openedManager());
+    sdk.createAgentSession.mockResolvedValue({
+      session: {
+        model: { input: ["text", "image"] },
+        settingsManager: { getBlockImages: () => false },
+        subscribe: () => () => undefined,
+        prompt: (
+          _text: string,
+          options: { preflightResult: (value: boolean) => void },
+        ) => {
+          options.preflightResult(true);
+          return new Promise<void>(() => undefined);
+        },
+        steer: () => Promise.resolve(),
+        abort: () => Promise.resolve(),
+        dispose: () => undefined,
+      },
+    });
+    const releases: (() => void)[] = [];
+    let activeResizes = 0;
+    let maximumActiveResizes = 0;
+    sdk.resizeImage.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          activeResizes += 1;
+          maximumActiveResizes = Math.max(maximumActiveResizes, activeResizes);
+          releases.push(() => {
+            activeResizes -= 1;
+            resolve({
+              data: png(1, 1).toString("base64"),
+              mimeType: "image/png",
+              originalWidth: 1,
+              originalHeight: 1,
+              width: 1,
+              height: 1,
+              wasResized: false,
+            });
+          });
+        }),
+    );
+    const opened = await new PiAgentRuntime().open(context.project, sessionId);
+    const bytes = new Uint8Array(png(1, 1));
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const input = {
+      text: "Inspect this",
+      images: [{ mimeType: "image/png" as const, data: bytes, digest }],
+    };
+
+    const first = opened.prompt(input);
+    const second = opened.prompt(input);
+    const third = opened.prompt(input);
+    const fourth = opened.prompt(input);
+    expect(releases).toHaveLength(2);
+
+    releases[0]?.();
+    releases[1]?.();
+    const competing = opened.prompt(input);
+    for (let index = 2; index < 5; index += 1) {
+      while (releases.length <= index) await Promise.resolve();
+      releases[index]?.();
+    }
+
+    await Promise.all([first, second, third, fourth, competing]);
+    expect(maximumActiveResizes).toBeLessThanOrEqual(2);
+  });
 
   // G12. "Provider retry N of M." reached the browser and was dropped, so a
   // stalled run was indistinguishable from a slow one. Fixing that in the

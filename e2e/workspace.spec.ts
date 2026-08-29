@@ -8,13 +8,17 @@ import type {
   AgentRuntime,
   OpenRuntimeSession,
   RuntimeEvent,
+  RuntimeUserInput,
 } from "../packages/agent-runtime/src/index.js";
 
 import { buildServer, type WorkspaceServer } from "../apps/server/src/app.js";
 import { parseConfig } from "../apps/server/src/config.js";
 
 class BrowserSession implements OpenRuntimeSession {
-  public constructor(public readonly id: string) {}
+  public constructor(
+    public readonly id: string,
+    private readonly onPrompt: (input: RuntimeUserInput | string) => void,
+  ) {}
   public snapshot() {
     return Promise.resolve({
       sessionId: this.id,
@@ -22,7 +26,8 @@ class BrowserSession implements OpenRuntimeSession {
       diagnostics: [],
     });
   }
-  public prompt() {
+  public prompt(input: RuntimeUserInput | string) {
+    this.onPrompt(input);
     return Promise.resolve({
       accepted: true,
       settlement: new Promise<"completed" | "failed" | "interrupted">(
@@ -52,6 +57,13 @@ class BrowserSession implements OpenRuntimeSession {
 
 class BrowserRuntime implements AgentRuntime {
   private nextId = 1;
+  private lastInput: RuntimeUserInput | string | null = null;
+  public resetInput(): void {
+    this.lastInput = null;
+  }
+  public receivedInput(): RuntimeUserInput | string | null {
+    return this.lastInput;
+  }
   public discover() {
     return Promise.resolve({ sessions: [], diagnostics: [] });
   }
@@ -60,7 +72,11 @@ class BrowserRuntime implements AgentRuntime {
     return Promise.resolve({ sessionId: id });
   }
   public open(_projectPath: string, sessionId: string) {
-    return Promise.resolve(new BrowserSession(sessionId));
+    return Promise.resolve(
+      new BrowserSession(sessionId, (input) => {
+        this.lastInput = input;
+      }),
+    );
   }
 }
 
@@ -84,6 +100,7 @@ async function availablePort(): Promise<number> {
 }
 
 let server: WorkspaceServer;
+let runtime: BrowserRuntime;
 let root: string;
 let projectPath: string;
 let launchUrl: string;
@@ -106,9 +123,10 @@ test.beforeAll(async () => {
     },
   });
   let browseCount = 0;
+  runtime = new BrowserRuntime();
   server = await buildServer({
     config,
-    runtime: new BrowserRuntime(),
+    runtime,
     directoryPicker: {
       chooseDirectory: () => {
         const currentBrowse = browseCount++;
@@ -248,6 +266,49 @@ test("adds a project, creates a route-addressable thread, and discloses direct e
   await expect(panel).toBeVisible();
   const restored = await panel.boundingBox();
   expect(restored?.width).toBeCloseTo(afterResize?.width ?? 0, 0);
+});
+
+test("attaches and sends an image-only message through the real multipart boundary", async ({
+  page,
+}) => {
+  runtime.resetInput();
+  await page.goto(launchUrl);
+  const projectName = basename(projectPath);
+  const projectLink = page.locator("a.project-link", { hasText: projectName });
+  await expect(projectLink).toBeVisible();
+  await projectLink.hover();
+  await page
+    .getByRole("button", { name: `New thread in ${projectName}` })
+    .click();
+  const pane = page.getByRole("region", { name: "New chat" });
+  await pane
+    .getByRole("combobox", { name: "Execution location" })
+    .selectOption("shared");
+  const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nJ8AAAAASUVORK5CYII=",
+    "base64",
+  );
+  await pane.locator('input[type="file"]').setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: image,
+  });
+  await expect(
+    pane.getByRole("img", { name: "Preview of pixel.png" }),
+  ).toBeVisible();
+  await expect(
+    pane.getByText("stored in native Pi session history"),
+  ).toBeVisible();
+  await pane.getByRole("button", { name: "Create chat and send" }).click();
+  await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
+
+  const input = runtime.receivedInput();
+  if (input === null || typeof input === "string")
+    throw new Error("The image input did not reach the runtime");
+  expect(input.text).toBe("");
+  expect(input.images).toHaveLength(1);
+  expect(input.images[0]?.mimeType).toBe("image/png");
+  expect(input.images[0]?.data.byteLength).toBe(image.byteLength);
 });
 
 // NEW-5. The single worst thing left in the product: the ONLY way to add a

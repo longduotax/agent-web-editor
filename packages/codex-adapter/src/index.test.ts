@@ -622,6 +622,27 @@ describe("CodexOpenSession", () => {
     await session.dispose();
   });
 
+  it("rejects image input before dispatching a Codex turn", async () => {
+    const { server, session } = await opened();
+    await expect(
+      session.prompt({
+        text: "Inspect this",
+        images: [
+          {
+            mimeType: "image/png",
+            data: new Uint8Array([1, 2, 3]),
+            digest: "0".repeat(64),
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "rejected",
+      message: "chat_image_input_unsupported",
+    });
+    expect(server.sentAll("turn/start")).toHaveLength(0);
+    await session.dispose();
+  });
+
   it("accepts a prompt and settles it when the turn completes", async () => {
     const { server, session } = await opened({
       "turn/start": {

@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { realpath, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import {
   basename,
@@ -16,6 +16,7 @@ import {
   SessionManager,
   SettingsManager,
   createAgentSession,
+  resizeImage,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type {
@@ -27,13 +28,24 @@ import type {
   RuntimeEvent,
   RuntimeSessionDescriptor,
   RuntimeSnapshot,
+  RuntimeUserInput,
+  RuntimeImageContent,
   TitleSuggestion,
 } from "@pi-web/agent-runtime";
 import { RuntimeFailure, TranscriptPager } from "@pi-web/agent-runtime";
 import {
+  CHAT_IMAGE_MAX_BASE64_BYTES,
+  CHAT_IMAGE_MAX_COUNT,
+  CHAT_IMAGE_MAX_DIMENSION,
+  CHAT_IMAGE_MAX_SOURCE_BYTES,
+  ChatImageIdSchema,
+  ChatImageMimeTypeSchema,
+  parseChatImageBytes,
   TimestampSchema,
   SessionIdSchema,
   TranscriptItemSchema,
+  type ChatImageId,
+  type ChatImageRef,
   type TranscriptCursor,
   type TranscriptItem,
   type TranscriptPage,
@@ -53,6 +65,11 @@ const sessionInfoSchema = z.object({
 const nativeHistorySchema = z.array(z.unknown());
 const nativeSessionListSchema = z.array(z.unknown());
 const nativeSessionNameSchema = z.string().max(200).nullable();
+// Pi SDK values are third-party runtime data even when their declarations say
+// otherwise. These deliberately project only the capability fields this
+// adapter authorizes below.
+const openSessionModelInputSchema = z.object({ input: z.array(z.string()) });
+const openSessionBlockImagesSchema = z.boolean();
 const createdSessionHeaderSchema = z.strictObject({
   type: z.literal("session"),
   version: z.literal(3),
@@ -79,6 +96,12 @@ const namingModelSelectorSchema = z.object({
   provider: z.string().min(1),
   id: z.string().min(1),
 });
+const globalImageSettingsSchema = z.looseObject({
+  defaultProvider: z.string().min(1).optional(),
+  defaultModel: z.string().min(1).optional(),
+  images: z.looseObject({ blockImages: z.boolean().optional() }).optional(),
+});
+const fileErrorSchema = z.looseObject({ code: z.string() });
 const namingModelDescriptorSchema = z.object({
   provider: z.string().min(1),
   id: z.string().min(1),
@@ -167,11 +190,212 @@ interface NativeSessionDescriptor {
 
 const creationMarker = / \[pi-create:([0-9a-f-]{36})\]$/;
 const initialPromptDispatchType = "pi-web-initial-prompt-dispatch";
-const initialPromptDispatchEntrySchema = z.object({
+const legacyInitialPromptDispatchEntrySchema = z.object({
   type: z.literal("custom"),
   customType: z.literal(initialPromptDispatchType),
   data: z.object({ id: z.uuid(), text: z.string() }),
 });
+const initialPromptDispatchEntrySchema = z.object({
+  type: z.literal("custom"),
+  customType: z.literal(initialPromptDispatchType),
+  data: z
+    .object({
+      version: z.literal(2),
+      id: z.uuid(),
+      inputFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    })
+    .strict(),
+});
+const runtimeImageInputSchema = z
+  .object({
+    mimeType: ChatImageMimeTypeSchema,
+    data: z
+      .instanceof(Uint8Array)
+      .refine(
+        (value) =>
+          value.byteLength > 0 &&
+          value.byteLength <= CHAT_IMAGE_MAX_SOURCE_BYTES,
+      ),
+    digest: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+const runtimeUserInputSchema = z
+  .object({
+    text: z.string().max(200_000),
+    images: z.array(runtimeImageInputSchema).max(CHAT_IMAGE_MAX_COUNT),
+  })
+  .strict();
+
+/**
+ * Image input after the adapter has re-parsed bytes that crossed the runtime
+ * boundary.  In particular, `data` is an adapter-owned copy whose format,
+ * MIME type, decoded dimensions, and digest have all been established.
+ */
+interface ParsedRuntimeImageInput {
+  mimeType: z.infer<typeof ChatImageMimeTypeSchema>;
+  data: Uint8Array;
+  digest: string;
+}
+
+interface ParsedRuntimeUserInput {
+  text: string;
+  images: readonly ParsedRuntimeImageInput[];
+}
+function canonicalBase64(value: string): Buffer | null {
+  try {
+    const bytes = Buffer.from(value, "base64");
+    return bytes.length > 0 && bytes.toString("base64") === value
+      ? bytes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const piImageContentSchema = z
+  .object({
+    type: z.literal("image"),
+    mimeType: ChatImageMimeTypeSchema,
+    data: z
+      .string()
+      .min(1)
+      .max(CHAT_IMAGE_MAX_BASE64_BYTES)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      ),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const bytes = canonicalBase64(value.data);
+    if (bytes === null) {
+      context.addIssue({ code: "custom", message: "Malformed image content" });
+      return;
+    }
+    try {
+      if (parseChatImageBytes(bytes).mimeType !== value.mimeType)
+        context.addIssue({
+          code: "custom",
+          message: "Malformed image content",
+        });
+    } catch {
+      context.addIssue({ code: "custom", message: "Malformed image content" });
+    }
+  });
+
+function normalizeRuntimeInput(
+  input: RuntimeUserInput | string,
+): RuntimeUserInput {
+  return typeof input === "string" ? { text: input, images: [] } : input;
+}
+
+/**
+ * Parses caller-provided runtime input at the SDK-neutral-to-Pi boundary.
+ * Structural validation alone cannot establish that claimed image MIME types
+ * decode, so every image is reparsed before anything can resize or dispatch
+ * it to Pi.
+ */
+function parseRuntimeUserInput(
+  rawInput: RuntimeUserInput | string,
+): ParsedRuntimeUserInput {
+  const structural = runtimeUserInputSchema.safeParse(
+    normalizeRuntimeInput(rawInput),
+  );
+  if (!structural.success)
+    throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+
+  const images = structural.data.images.map((image) => {
+    // A caller retains the original RuntimeImageInput, so make the parsed
+    // value independent from later mutation before computing its digest or
+    // handing it to the SDK.
+    const data = new Uint8Array(image.data);
+    try {
+      if (parseChatImageBytes(data).mimeType !== image.mimeType)
+        throw new Error("chat_image_mime_mismatch");
+    } catch {
+      throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+    }
+    const digest = createHash("sha256").update(data).digest("hex");
+    if (digest !== image.digest)
+      throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+    return { mimeType: image.mimeType, data, digest: image.digest };
+  });
+  return { text: structural.data.text, images };
+}
+
+function inputFingerprint(input: {
+  text: string;
+  images: readonly { mimeType: string; digest: string }[];
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        text: input.text,
+        images: input.images.map(({ mimeType, digest }) => ({
+          mimeType,
+          digest,
+        })),
+      }),
+    )
+    .digest("hex");
+}
+
+function imageId(mimeType: string, data: string): ChatImageId {
+  return ChatImageIdSchema.parse(
+    createHash("sha256")
+      .update(mimeType)
+      .update("\0")
+      .update(data)
+      .digest("hex"),
+  );
+}
+
+const MAX_CONCURRENT_IMAGE_PREPARATIONS = 2;
+const MAX_QUEUED_IMAGE_PREPARATIONS = 16;
+let activeImagePreparations = 0;
+const imagePreparationQueue: (() => void)[] = [];
+
+async function withImagePreparationSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (
+    activeImagePreparations >= MAX_CONCURRENT_IMAGE_PREPARATIONS ||
+    imagePreparationQueue.length > 0
+  ) {
+    if (imagePreparationQueue.length >= MAX_QUEUED_IMAGE_PREPARATIONS)
+      throw new RuntimeFailure("busy", "chat_image_processing_busy");
+    await new Promise<void>((resolve) => imagePreparationQueue.push(resolve));
+  } else activeImagePreparations += 1;
+  try {
+    return await work();
+  } finally {
+    const next = imagePreparationQueue.shift();
+    if (next === undefined) activeImagePreparations -= 1;
+    else next();
+  }
+}
+
+function imageRefsFromContent(content: unknown): ChatImageRef[] {
+  if (!Array.isArray(content)) return [];
+  const images: ChatImageRef[] = [];
+  for (const block of content) {
+    const parsed = piImageContentSchema.safeParse(block);
+    if (!parsed.success) continue;
+    images.push({
+      id: imageId(parsed.data.mimeType, parsed.data.data),
+      mimeType: parsed.data.mimeType,
+    });
+    if (images.length >= CHAT_IMAGE_MAX_COUNT) break;
+  }
+  return images;
+}
+
+function hasMalformedImageContent(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => {
+    const imageShape = z
+      .looseObject({ type: z.literal("image") })
+      .safeParse(block);
+    return imageShape.success && !piImageContentSchema.safeParse(block).success;
+  });
+}
 
 function parseSessionName(value: string | null): {
   name: string | null;
@@ -577,11 +801,14 @@ function translateMessage(
           ? "user"
           : null;
   if (role === null) return null;
+  const images =
+    role === "user" ? imageRefsFromContent(parsed.data.content) : [];
   return TranscriptItemSchema.parse({
     id,
     kind: "message",
     role,
     text: textFromContent(parsed.data.content),
+    ...(images.length === 0 ? {} : { images }),
     timestamp,
   });
 }
@@ -636,6 +863,15 @@ function transcriptFromManager(manager: SessionManager): RuntimeSnapshot {
         diagnostics.push("An unsupported native message was omitted.");
       else {
         transcript.push(item);
+        const messageContent = messageShapeSchema.safeParse(
+          parsed.data.message,
+        );
+        if (
+          messageContent.success &&
+          messageContent.data.role === "user" &&
+          hasMalformedImageContent(messageContent.data.content)
+        )
+          diagnostics.push("A malformed native image was omitted.");
         if (
           parsed.data.message !== null &&
           typeof parsed.data.message === "object"
@@ -808,7 +1044,66 @@ class PiOpenSession implements OpenRuntimeSession {
   }
 
   public snapshot(): Promise<RuntimeSnapshot> {
-    return Promise.resolve().then(() => transcriptFromManager(this.manager));
+    return Promise.resolve().then(() => {
+      const imageInput = this.imageInputCapability();
+      return {
+        ...transcriptFromManager(this.manager),
+        ...(imageInput === "unknown" ? {} : { imageInput }),
+      };
+    });
+  }
+
+  private imageInputCapability(): "supported" | "unsupported" | "unknown" {
+    let rawModel: unknown;
+    let rawBlockImages: unknown;
+    try {
+      rawModel = this.session.model as unknown;
+      rawBlockImages = this.session.settingsManager.getBlockImages();
+    } catch {
+      return "unknown";
+    }
+    const model = openSessionModelInputSchema.safeParse(rawModel);
+    const blockImages = openSessionBlockImagesSchema.safeParse(rawBlockImages);
+    if (!model.success || !blockImages.success) return "unknown";
+    return model.data.input.includes("image") && !blockImages.data
+      ? "supported"
+      : "unsupported";
+  }
+
+  private async prepareImages(rawInput: RuntimeUserInput | string) {
+    const input = parseRuntimeUserInput(rawInput);
+    if (input.images.length > 0 && this.imageInputCapability() !== "supported")
+      throw new RuntimeFailure("rejected", "chat_image_input_unsupported");
+    const images =
+      input.images.length === 0
+        ? []
+        : await withImagePreparationSlot(async () => {
+            const preparedImages: z.infer<typeof piImageContentSchema>[] = [];
+            for (const image of input.images) {
+              const resized = await resizeImage(image.data, image.mimeType, {
+                maxWidth: CHAT_IMAGE_MAX_DIMENSION,
+                maxHeight: CHAT_IMAGE_MAX_DIMENSION,
+                maxBytes: CHAT_IMAGE_MAX_BASE64_BYTES,
+              });
+              const prepared = piImageContentSchema.safeParse(
+                resized === null
+                  ? null
+                  : {
+                      type: "image",
+                      mimeType: resized.mimeType,
+                      data: resized.data,
+                    },
+              );
+              if (!prepared.success)
+                throw new RuntimeFailure(
+                  "malformed",
+                  "chat_image_processing_failed",
+                );
+              preparedImages.push(prepared.data);
+            }
+            return preparedImages;
+          });
+    return { input, images };
   }
 
   public latestTranscriptPage(): Promise<TranscriptPage> {
@@ -826,21 +1121,23 @@ class PiOpenSession implements OpenRuntimeSession {
   }
 
   public async prompt(
-    text: string,
+    rawInput: RuntimeUserInput | string,
     dispatch?: RuntimePromptDispatch,
   ): Promise<PromptAcceptance> {
-    if (dispatch !== undefined) {
-      z.uuid().parse(dispatch.id);
-      if (!this.hasPromptDispatch(dispatch, text))
-        this.manager.appendCustomEntry(initialPromptDispatchType, {
-          id: dispatch.id,
-          text,
-        });
-    }
     if (this.disposed)
       throw new RuntimeFailure("unavailable", "Runtime session is closed.");
     if (this.bufferedEvents !== null)
       throw new RuntimeFailure("busy", "A prompt preflight is already active.");
+    const { input, images } = await this.prepareImages(rawInput);
+    if (dispatch !== undefined) {
+      z.uuid().parse(dispatch.id);
+      if (!this.hasPromptDispatch(dispatch, input))
+        this.manager.appendCustomEntry(initialPromptDispatchType, {
+          version: 2,
+          id: dispatch.id,
+          inputFingerprint: inputFingerprint(input),
+        });
+    }
     const buffer: RuntimeEvent[] = [];
     this.bufferedEvents = buffer;
     let preflightResolve: ((accepted: boolean) => void) | undefined;
@@ -848,7 +1145,8 @@ class PiOpenSession implements OpenRuntimeSession {
       preflightResolve = resolve;
     });
     let acceptedKnown = false;
-    const operation = this.session.prompt(text, {
+    const operation = this.session.prompt(input.text, {
+      ...(images.length === 0 ? {} : { images }),
       preflightResult: (accepted) => {
         if (!acceptedKnown) {
           acceptedKnown = true;
@@ -912,15 +1210,19 @@ class PiOpenSession implements OpenRuntimeSession {
   }
 
   public async recoverPrompt(
-    text: string,
+    rawInput: RuntimeUserInput | string,
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery> {
     z.uuid().parse(dispatch.id);
+    const input = parseRuntimeUserInput(rawInput);
     const snapshot = await this.snapshot();
-    return this.hasPromptDispatch(dispatch, text) &&
+    return this.hasPromptDispatch(dispatch, input) &&
       snapshot.transcript.some(
         (item) =>
-          item.kind === "message" && item.role === "user" && item.text === text,
+          item.kind === "message" &&
+          item.role === "user" &&
+          item.text === input.text &&
+          (item.images?.length ?? 0) === input.images.length,
       )
       ? { outcome: "accepted" }
       : { outcome: "not_accepted" };
@@ -928,20 +1230,60 @@ class PiOpenSession implements OpenRuntimeSession {
 
   private hasPromptDispatch(
     dispatch: RuntimePromptDispatch,
-    text: string,
+    input: ParsedRuntimeUserInput,
   ): boolean {
     return parseNativeHistory(this.manager.getBranch()).some((entry) => {
-      const parsed = initialPromptDispatchEntrySchema.safeParse(entry);
+      const current = initialPromptDispatchEntrySchema.safeParse(entry);
+      if (current.success)
+        return (
+          current.data.data.id === dispatch.id &&
+          current.data.data.inputFingerprint === inputFingerprint(input)
+        );
+      const legacy = legacyInitialPromptDispatchEntrySchema.safeParse(entry);
       return (
-        parsed.success &&
-        parsed.data.data.id === dispatch.id &&
-        parsed.data.data.text === text
+        input.images.length === 0 &&
+        legacy.success &&
+        legacy.data.data.id === dispatch.id &&
+        legacy.data.data.text === input.text
       );
     });
   }
 
-  public async steer(text: string): Promise<void> {
-    await this.session.steer(text);
+  public async steer(rawInput: RuntimeUserInput | string): Promise<void> {
+    const { input, images } = await this.prepareImages(rawInput);
+    await this.session.steer(
+      input.text,
+      images.length === 0 ? undefined : images,
+    );
+  }
+
+  public readImage(imageIdValue: ChatImageId): Promise<RuntimeImageContent> {
+    const requested = ChatImageIdSchema.parse(imageIdValue);
+    for (const entry of parseNativeHistory(this.manager.getBranch())) {
+      const base = baseEntrySchema.safeParse(entry);
+      if (!base.success || base.data.type !== "message") continue;
+      const message = messageShapeSchema.safeParse(base.data.message);
+      if (
+        !message.success ||
+        message.data.role !== "user" ||
+        !Array.isArray(message.data.content)
+      )
+        continue;
+      for (const block of message.data.content) {
+        const image = piImageContentSchema.safeParse(block);
+        if (!image.success) continue;
+        const id = imageId(image.data.mimeType, image.data.data);
+        if (id === requested)
+          return Promise.resolve({
+            id,
+            mimeType: image.data.mimeType,
+            data: image.data.data,
+          });
+      }
+    }
+    return Promise.reject(
+      new RuntimeFailure("unavailable", "chat_image_not_found"),
+    );
   }
   /**
    * Stop the run, and take Pi's steering queue with it.
@@ -1017,6 +1359,54 @@ export class PiAgentRuntime implements AgentRuntime {
   ) {
     this.agentDirectory = parseAgentDirectory(agentDirectory);
     this.namingModel = namingModel;
+  }
+
+  public async inspectImageInput(
+    projectPath: string,
+  ): Promise<"supported" | "unsupported" | "unknown"> {
+    try {
+      const canonical = await realpath(projectPath);
+      // Project settings are trust-sensitive. If one exists, only the real
+      // session-opening path may decide whether it applies; preflight stays
+      // explicitly unknown instead of reading an untrusted override.
+      try {
+        await stat(join(canonical, ".pi", "settings.json"));
+        return "unknown";
+      } catch (error) {
+        const parsed = fileErrorSchema.safeParse(error);
+        if (!parsed.success || parsed.data.code !== "ENOENT") return "unknown";
+      }
+      const rawText = await readFile(
+        join(this.agentDirectory, "settings.json"),
+        "utf8",
+      );
+      let rawSettings: unknown;
+      try {
+        rawSettings = JSON.parse(rawText);
+      } catch {
+        return "unknown";
+      }
+      const settings = globalImageSettingsSchema.safeParse(rawSettings);
+      if (!settings.success) return "unknown";
+      if (settings.data.images?.blockImages === true) return "unsupported";
+      const selector = namingModelSelectorSchema.safeParse({
+        provider: settings.data.defaultProvider,
+        id: settings.data.defaultModel,
+      });
+      if (!selector.success) return "unknown";
+      const runtime = await (this.modelRuntime ??= ModelRuntime.create({
+        authPath: join(this.agentDirectory, "auth.json"),
+        modelsPath: join(this.agentDirectory, "models.json"),
+        allowModelNetwork: false,
+      }));
+      const model = parseNamingModelHandle(
+        runtime.getModel(selector.data.provider, selector.data.id),
+      );
+      if (model === null) return "unknown";
+      return model.input.includes("image") ? "supported" : "unsupported";
+    } catch {
+      return "unknown";
+    }
   }
 
   public async suggestTitle(

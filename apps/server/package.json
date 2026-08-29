@@ -10,6 +10,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@fastify/multipart": "^9.4.0",
     "@fastify/static": "^10.1.3",
     "@fastify/websocket": "^11.3.0",
     "@pi-web/agent-runtime": "workspace:*",

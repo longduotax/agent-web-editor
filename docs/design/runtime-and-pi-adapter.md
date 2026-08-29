@@ -20,12 +20,21 @@ The server owns live SDK-neutral runtimes while `packages/pi-adapter` exclusivel
 
 - discover/create/open persistent sessions by opaque runtime-session ID;
 - obtain an authoritative SDK-neutral transcript snapshot;
-- submit a prompt with distinct preflight acceptance and eventual settlement;
-- steer an active run, stop it, and dispose runtime ownership;
+- submit SDK-neutral text-plus-image input with distinct preflight acceptance
+  and eventual settlement;
+- steer an active run with the same input shape, report image capability, resolve
+  authorized native image content, stop it, and dispose runtime ownership;
 - subscribe to normalized message/tool/lifecycle events; and
 - return typed unavailable, malformed, unauthorized, busy, rejected, provider, tool, and interrupted failures.
 
-No Pi class, event, content block, path, or generic SDK type crosses the adapter boundary. The interface should remain extensible through new versions, but it does not include speculative approval or reviewer-agent methods.
+No Pi class, event, content block, path, or generic SDK type crosses the adapter
+boundary. Browser image bytes are bounded and fingerprinted before this
+boundary. The adapter parses them again, refuses a text-only model or Pi's
+`images.blockImages` setting, uses Pi's exported worker-backed resize helper
+under a bounded process-wide concurrency queue, and supplies flat
+`ImageContent` blocks to `AgentSession.prompt` or `steer`. Native user image
+blocks become content-addressed opaque refs; retrieving a ref scans only the
+authorized session branch and returns no path. The interface should remain extensible through new versions, but it does not include speculative approval or reviewer-agent methods.
 
 ## Pi sessions and import
 

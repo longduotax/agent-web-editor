@@ -8,6 +8,9 @@ import {
 import {
   TranscriptCursorSchema,
   TranscriptPageSchema,
+  type ChatImageId,
+  type ChatImageMimeType,
+  type ImageInputCapability,
   type TranscriptCursor,
   type TranscriptItem,
   type TranscriptPage,
@@ -48,6 +51,25 @@ export interface RuntimeSnapshot {
   sessionId: string;
   transcript: TranscriptItem[];
   diagnostics: string[];
+  imageInput?: ImageInputCapability;
+}
+
+export interface RuntimeImageInput {
+  mimeType: ChatImageMimeType;
+  data: Uint8Array;
+  /** SHA-256 of the bounded source bytes, used for idempotency and recovery. */
+  digest: string;
+}
+
+export interface RuntimeUserInput {
+  text: string;
+  images: RuntimeImageInput[];
+}
+
+export interface RuntimeImageContent {
+  id: ChatImageId;
+  mimeType: ChatImageMimeType;
+  data: string;
 }
 
 export type TitleSuggestion =
@@ -116,14 +138,15 @@ export interface OpenRuntimeSession {
   /** One bounded page immediately older than a runtime-owned cursor. */
   olderTranscriptPage?(cursor: TranscriptCursor): Promise<TranscriptPage>;
   prompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch?: RuntimePromptDispatch,
   ): Promise<PromptAcceptance>;
   recoverPrompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery>;
-  steer(text: string): Promise<void>;
+  steer(input: RuntimeUserInput | string): Promise<void>;
+  readImage?(imageId: ChatImageId): Promise<RuntimeImageContent>;
   stop(): Promise<void>;
   subscribe(listener: (event: RuntimeEvent) => void): () => void;
   /**
@@ -282,6 +305,7 @@ export class TranscriptPager {
 
 export interface AgentRuntime {
   suggestTitle?(projectPath: string, prompt: string): Promise<TitleSuggestion>;
+  inspectImageInput?(projectPath: string): Promise<ImageInputCapability>;
   discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }>;

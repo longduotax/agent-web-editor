@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -12,6 +18,7 @@ const api = vi.hoisted(() => ({
   getAgentBackends: vi.fn(),
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
+  preflightContinuation: vi.fn(),
   startThread: vi.fn(),
   continueThread: vi.fn(),
 }));
@@ -95,6 +102,10 @@ function renderNewChat(
         : [{ id: continuationSourceThreadId, runtime: "pi" }],
     diagnostics: [],
   });
+  api.preflightContinuation.mockResolvedValue({
+    available: true,
+    imageInput: "unknown",
+  });
   api.getWorkspacePreflight.mockResolvedValue({
     worktreeAvailable: true,
     unavailableReason: null,
@@ -158,6 +169,7 @@ describe("pending same-worktree continuation", () => {
         threadId,
         "Continue after reload",
         persistedKey,
+        [],
       );
     });
   });
@@ -188,10 +200,45 @@ describe("pending same-worktree continuation", () => {
         threadId,
         "Continue implementation",
         expect.any(String),
+        [],
       );
     });
     expect(api.startThread).not.toHaveBeenCalled();
     expect(onThreadStarted).toHaveBeenCalledWith(threadId);
+  });
+
+  it("sends photos with the first prompt of an inherited Pi chat", async () => {
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    renderNewChat({}, threadId);
+    const image = new File([new Uint8Array([1, 2, 3])], "context.png", {
+      type: "image/png",
+    });
+
+    fireEvent.change(await screen.findByLabelText("＋ Add photos"), {
+      target: { files: [image] },
+    });
+    expect(
+      await screen.findByRole("list", { name: "Attached photos" }),
+    ).toBeInTheDocument();
+    await user.type(
+      screen.getByRole("textbox", { name: "First message" }),
+      "Use this screenshot",
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Use this screenshot",
+        expect.any(String),
+        [image],
+      );
+    });
   });
 });
 

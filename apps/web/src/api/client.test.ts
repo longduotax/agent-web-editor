@@ -8,6 +8,7 @@ import {
   PANEL_READ_TIMEOUT_MS,
   getFiles,
   getWorkspace,
+  prompt,
   shouldRetryRequest,
 } from "./client.js";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
@@ -114,6 +115,59 @@ describe("a read that never answers", () => {
       truncated: false,
       ignoredHidden: false,
     });
+  });
+});
+
+describe("image-bearing chat commands", () => {
+  it("uses multipart without overriding the browser boundary header", async () => {
+    let sent: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_path: string, init?: RequestInit) => {
+        sent = init;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              run: {
+                id: "30000000-0000-4000-8000-000000000001",
+                threadId,
+                projectId,
+                state: "running",
+                startedAt: "2026-01-01T00:00:00.000Z",
+                endedAt: null,
+                failureCode: null,
+                failureMessage: null,
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const image = new File([new Uint8Array([1, 2, 3])], "photo.png", {
+      type: "image/png",
+    });
+    await prompt(
+      projectId,
+      threadId,
+      "Inspect this",
+      [image],
+      "40000000-0000-4000-8000-000000000001",
+    );
+
+    expect(sent?.body).toBeInstanceOf(FormData);
+    const form = sent?.body as FormData;
+    const metadata = form.get("metadata");
+    expect(typeof metadata).toBe("string");
+    if (typeof metadata !== "string") throw new Error("metadata was not text");
+    expect(JSON.parse(metadata)).toEqual({
+      prompt: "Inspect this",
+      idempotencyKey: "40000000-0000-4000-8000-000000000001",
+    });
+    expect(form.getAll("images")).toEqual([image]);
+    const headers = new Headers(sent?.headers);
+    expect(headers.get("content-type")).toBeNull();
+    expect(headers.get("x-pi-web-request")).toBe("1");
   });
 });
 

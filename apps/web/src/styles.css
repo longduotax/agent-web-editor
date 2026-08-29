@@ -1696,6 +1696,72 @@ a:focus-visible {
   font-size: 1rem;
   line-height: 1.5;
 }
+.transcript-images,
+.pending-transcript-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+.transcript-image-button {
+  overflow: hidden;
+  width: min(12rem, 42vw);
+  height: 8rem;
+  padding: 0;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.7rem;
+  background: var(--surface);
+  cursor: zoom-in;
+}
+.transcript-image-button img,
+.pending-transcript-images img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pending-transcript-images img {
+  width: min(12rem, 42vw);
+  height: 8rem;
+  border-radius: 0.7rem;
+}
+.transcript-image-loading,
+.transcript-image-error {
+  display: grid;
+  width: min(12rem, 42vw);
+  height: 8rem;
+  place-items: center;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.7rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.image-lightbox {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  inset: 0;
+  place-items: center;
+  padding: 3rem;
+  background: rgb(0 0 0 / 72%);
+}
+.image-lightbox img {
+  max-width: min(90vw, 1200px);
+  max-height: 85vh;
+  object-fit: contain;
+}
+.image-lightbox-close {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid rgb(255 255 255 / 45%);
+  border-radius: 50%;
+  color: white;
+  background: rgb(0 0 0 / 55%);
+  font-size: 1.5rem;
+  cursor: pointer;
+}
 .a-block {
   margin: 0 0 1.4rem;
   color: var(--text);
@@ -2118,6 +2184,7 @@ a:focus-visible {
 }
 
 .composer {
+  position: relative;
   overflow: hidden;
   flex: none;
   padding: 0.5rem 1.25rem 1rem;
@@ -2177,6 +2244,114 @@ a:focus-visible {
 }
 .composer-input textarea:focus-visible {
   outline: none;
+}
+.chat-attachments {
+  display: flex;
+  overflow-x: auto;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.65rem 0.75rem 0.15rem;
+  list-style: none;
+}
+.chat-attachment {
+  position: relative;
+  display: grid;
+  width: 8.5rem;
+  flex: none;
+  grid-template-columns: 1fr auto;
+  gap: 0.05rem 0.35rem;
+  padding: 0.3rem;
+  border: 1px solid var(--hairline-2);
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+.chat-attachment img,
+.chat-attachment-placeholder {
+  width: 100%;
+  height: 4.5rem;
+  grid-column: 1 / -1;
+  border-radius: 0.4rem;
+  object-fit: cover;
+  background: var(--hover);
+}
+.chat-attachment-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.chat-attachment-name,
+.chat-attachment-size {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attachment-size {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.chat-attachment-remove {
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text);
+  background: var(--hover);
+  cursor: pointer;
+}
+.add-photos {
+  position: relative;
+  display: inline-flex;
+  margin: 0.4rem 0.85rem 0;
+  color: var(--text-2);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.add-photos:hover:not(.disabled) {
+  color: var(--accent);
+}
+.add-photos.disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.add-photos input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.add-photos:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+.chat-attachment-error,
+.chat-attachment-disclosure {
+  margin: 0.25rem 0.85rem 0;
+  font-size: 0.75rem;
+}
+.chat-attachment-error {
+  color: var(--fail-ink);
+}
+.chat-attachment-disclosure {
+  color: var(--muted);
+}
+.chat-drop-overlay {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  inset: 0.35rem;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 0.8rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  font-weight: 650;
+  pointer-events: none;
 }
 .composer-actions {
   display: flex;
@@ -4013,6 +4188,7 @@ a:focus-visible {
   margin-bottom: 0;
 }
 .new-chat-card {
+  position: relative;
   width: 100%;
   max-width: var(--surface-measure);
   flex: none;
