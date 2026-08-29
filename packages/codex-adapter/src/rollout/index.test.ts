@@ -152,4 +152,66 @@ describe("rollout confinement and reverse replay", () => {
         .map((value) => value.item?.id),
     ).toEqual(["command-1"]);
   });
+
+  it("keeps an older response-only turn after projecting a newer structured turn", async () => {
+    const olderTurn = "turn-older";
+    const newerTurn = "turn-newer";
+    const { path } = await fixture([
+      entry("event_msg", { type: "task_started", turn_id: olderTurn }),
+      entry("response_item", {
+        type: "custom_tool_call",
+        id: "older-response-call",
+        call_id: "older-response-call",
+        name: "exec",
+        input: '{"cmd":"printf older"}',
+        internal_chat_message_metadata_passthrough: { turn_id: olderTurn },
+      }),
+      entry("response_item", {
+        type: "custom_tool_call_output",
+        call_id: "older-response-call",
+        output: '{"exit_code":0,"output":"older"}',
+        internal_chat_message_metadata_passthrough: { turn_id: olderTurn },
+      }),
+      entry("event_msg", { type: "task_complete", turn_id: olderTurn }),
+      entry("event_msg", { type: "task_started", turn_id: newerTurn }),
+      entry("response_item", {
+        type: "custom_tool_call",
+        id: "newer-response-call",
+        call_id: "newer-response-call",
+        name: "exec",
+        input: '{"cmd":"printf duplicate"}',
+        internal_chat_message_metadata_passthrough: { turn_id: newerTurn },
+      }),
+      entry("response_item", {
+        type: "custom_tool_call_output",
+        call_id: "newer-response-call",
+        output: '{"exit_code":0,"output":"duplicate"}',
+        internal_chat_message_metadata_passthrough: { turn_id: newerTurn },
+      }),
+      entry("event_msg", {
+        type: "item_completed",
+        turn_id: newerTurn,
+        item: {
+          type: "CommandExecution",
+          id: "newer-structured-call",
+          command: "printf structured",
+          status: "Completed",
+          aggregated_output: "structured",
+        },
+      }),
+      entry("event_msg", { type: "task_complete", turn_id: newerTurn }),
+    ]);
+    const reader = await RolloutReader.open(path);
+
+    expect(
+      (await reader.projectTurn(newerTurn)).entries.map(
+        (value) => value.item?.id,
+      ),
+    ).toEqual(["newer-structured-call"]);
+    expect(
+      (await reader.projectTurn(olderTurn)).entries.map(
+        (value) => value.item?.id,
+      ),
+    ).toEqual(["older-response-call"]);
+  });
 });

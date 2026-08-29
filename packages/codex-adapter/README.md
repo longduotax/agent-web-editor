@@ -51,6 +51,13 @@ This is deliberately stricter than Pi, which runs with the server user's full
 permissions. The difference is a stated product property, not an accident; see
 [Agent backends](../../docs/product-specs/agent-backends.md) AGB-06.
 
+The app-server and every Codex tool it starts receive a sanitized process
+environment: only its resolved `CODEX_HOME` and the small set of execution
+variables needed for path lookup, locale, temporary files, and Windows process
+startup are retained. Credentials and server configuration are never inherited
+by Codex; configure credentials through an approved Codex-owned mechanism,
+not the server process environment.
+
 ## Replaying stored history
 
 Codex app-server returns messages for past turns but not the shell and file

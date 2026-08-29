@@ -104,6 +104,8 @@ export const ThreadSummarySchema = z.object({
   runState: RunStateSchema.nullable(),
   unread: z.boolean(),
   runtimeAvailable: z.boolean(),
+  /** Present when opening this existing backend session is currently unsafe. */
+  runtimeUnavailableReason: z.string().max(500).optional(),
   runtime: RuntimeKindSchema,
   workspace: ThreadWorkspaceSummarySchema,
 });

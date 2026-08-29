@@ -347,9 +347,16 @@ function dropTrailingStopword(text: string): string {
 export class WorkspaceService {
   private readonly runtimes = new Map<
     ThreadId,
-    { runtime: OpenRuntimeSession; unsubscribe: () => void }
+    {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    }
   >();
   private readonly fallbackPagers = new Map<ThreadId, TranscriptPager>();
+  /** Last readable page lets a temporarily unavailable external backend stay readable. */
+  private readonly transcriptPages = new Map<ThreadId, TranscriptPage>();
+  private readonly runtimeUnavailableReasons = new Map<ThreadId, string>();
   private readonly activeThreads = new Set<ThreadId>();
   private readonly preflightPrompts = new Map<ThreadId, PendingPreflight>();
   private readonly removingProjects = new Set<ProjectId>();
@@ -394,6 +401,9 @@ export class WorkspaceService {
       record.worktree_id === null
         ? null
         : this.store.getWorktree(record.worktree_id);
+    const runtimeUnavailableReason = this.runtimeUnavailableReasons.get(
+      record.id,
+    );
     return ThreadSummarySchema.parse({
       id: record.id,
       projectId: record.project_id,
@@ -403,7 +413,11 @@ export class WorkspaceService {
       runState: latest?.state ?? null,
       unread: this.store.isUnread(record),
       runtimeAvailable:
-        record.worktree_id === null || worktree?.state === "ready",
+        (record.worktree_id === null || worktree?.state === "ready") &&
+        runtimeUnavailableReason === undefined,
+      ...(runtimeUnavailableReason === undefined
+        ? {}
+        : { runtimeUnavailableReason }),
       runtime: record.runtime,
       workspace:
         worktree === null
@@ -477,6 +491,10 @@ export class WorkspaceService {
           projectId,
           idempotencyKey,
         );
+        // Do this before recording or provisioning a new creation. A registered
+        // external adapter may be installed but presently unable to start.
+        // Existing operations retain their normal idempotent recovery path.
+        if (existingCreation === null) await this.adapters.usable(runtime);
         if (existingCreation === null && workspace.mode === "worktree")
           await this.worktreeManager.authorizeBaseBranch(
             projectRoot,
@@ -1390,14 +1408,56 @@ export class WorkspaceService {
     const current = this.runtimes.get(thread.id);
     if (current !== undefined) return current.runtime;
     const context = await this.executionContexts.resolve(thread);
-    const runtime = await this.adapters
-      .get(thread.runtime)
-      .open(context.executionRoot, thread.runtime_session_id);
+    let runtime: OpenRuntimeSession;
+    try {
+      runtime = await this.adapters
+        .get(thread.runtime)
+        .open(context.executionRoot, thread.runtime_session_id);
+    } catch (error) {
+      this.runtimeUnavailableReasons.set(
+        thread.id,
+        error instanceof Error
+          ? error.message
+          : "The native agent session is unavailable or malformed.",
+      );
+      throw error;
+    }
+    this.runtimeUnavailableReasons.delete(thread.id);
     const unsubscribe = runtime.subscribe((event) => {
       this.onRuntimeEvent(thread, event);
     });
-    this.runtimes.set(thread.id, { runtime, unsubscribe });
+    const owner: {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    } = {
+      runtime,
+      unsubscribe,
+      unsubscribeUnavailable: () => undefined,
+    };
+    owner.unsubscribeUnavailable =
+      runtime.onUnavailable?.(() => {
+        this.invalidateRuntime(thread.id, owner);
+      }) ?? (() => undefined);
+    this.runtimes.set(thread.id, owner);
     return runtime;
+  }
+
+  private invalidateRuntime(
+    threadId: ThreadId,
+    owner: {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    },
+  ): void {
+    // An old session can report its delayed disconnect after a fresh one has
+    // been opened. Only its own cache entry may be evicted.
+    if (this.runtimes.get(threadId) !== owner) return;
+    this.runtimes.delete(threadId);
+    owner.unsubscribe();
+    owner.unsubscribeUnavailable();
+    void owner.runtime.dispose().catch(() => undefined);
   }
 
   private onRuntimeEvent(thread: ThreadRecord, event: RuntimeEvent): void {
@@ -1431,8 +1491,15 @@ export class WorkspaceService {
         transcriptPage = pager.latest(native.transcript);
         diagnostics.push(...native.diagnostics);
       }
-    } catch {
-      diagnostics.push("The native agent session is unavailable or malformed.");
+      this.transcriptPages.set(threadId, transcriptPage);
+    } catch (error) {
+      transcriptPage = this.transcriptPages.get(threadId) ?? transcriptPage;
+      const reason =
+        error instanceof Error
+          ? error.message
+          : "The native agent session is unavailable or malformed.";
+      this.runtimeUnavailableReasons.set(threadId, reason);
+      diagnostics.push(reason);
     }
     const latest = this.store.latestRun(threadId);
     const current = latest?.state === "running" ? latest : null;
@@ -1447,9 +1514,11 @@ export class WorkspaceService {
       epoch: cursor.epoch,
       highWaterSequence: cursor.sequence,
       capabilities: {
-        prompt: current === null,
-        steer: current !== null,
-        stop: current !== null,
+        prompt:
+          current === null && !this.runtimeUnavailableReasons.has(threadId),
+        steer:
+          current !== null && !this.runtimeUnavailableReasons.has(threadId),
+        stop: current !== null && !this.runtimeUnavailableReasons.has(threadId),
       },
       diagnostics,
     });
@@ -1801,6 +1870,7 @@ export class WorkspaceService {
     if (owner === undefined) return;
     this.runtimes.delete(threadId);
     owner.unsubscribe();
+    owner.unsubscribeUnavailable();
     await owner.runtime.dispose();
   }
 
@@ -1811,8 +1881,10 @@ export class WorkspaceService {
     await Promise.allSettled(
       owners.map(async (owner) => {
         owner.unsubscribe();
+        owner.unsubscribeUnavailable();
         await owner.runtime.dispose();
       }),
     );
+    await this.adapters.close();
   }
 }

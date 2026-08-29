@@ -1,6 +1,5 @@
 import { open, realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { extname, isAbsolute, join, relative } from "node:path";
 
 import { TranscriptItemSchema, type TranscriptItem } from "@pi-web/contracts";
 import { z } from "zod";
@@ -83,7 +82,7 @@ function contained(path: string, root: string): boolean {
 
 export async function locateRollout(
   rawPath: unknown,
-  configuredHome?: string,
+  codexHome: string,
 ): Promise<string> {
   if (
     typeof rawPath !== "string" ||
@@ -91,10 +90,7 @@ export async function locateRollout(
     extname(rawPath) !== ".jsonl"
   )
     throw new Error("unavailable");
-  const home = resolve(
-    configuredHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"),
-  );
-  const sessions = await realpath(join(home, "sessions"));
+  const sessions = await realpath(join(codexHome, "sessions"));
   const path = await realpath(rawPath);
   const info = await stat(path);
   if (!info.isFile() || !contained(path, sessions))
@@ -378,7 +374,6 @@ function structuredMessageType(type: string): boolean {
  */
 export class RolloutReader {
   private offset: number;
-  private structured = false;
   private recognizedDialect = false;
   private reachedStart = false;
   private incomplete = false;
@@ -408,8 +403,16 @@ export class RolloutReader {
   public async projectTurn(turnId: string): Promise<RolloutTurnProjection> {
     if (!this.scannedTurns.has(turnId) && !this.reachedStart)
       await this.scanTo(turnId);
-    const entries = (this.entries.get(turnId) ?? [])
-      .filter((entry) => !this.structured || entry.source === "structured")
+    const turnEntries = this.entries.get(turnId) ?? [];
+    // Codex has written both response-format and structured records for the
+    // same turn during dialect migrations. Prefer the structured projection
+    // only for that turn; an entry from a newer turn must not hide valid
+    // response-format history while paging back through an older one.
+    const hasStructuredEntries = turnEntries.some(
+      (entry) => entry.source === "structured",
+    );
+    const entries = turnEntries
+      .filter((entry) => !hasStructuredEntries || entry.source === "structured")
       .sort((left, right) => left.position - right.position);
     return {
       entries,
@@ -467,7 +470,6 @@ export class RolloutReader {
         }
         const completed = itemCompletedSchema.safeParse(payload);
         if (completed.success) {
-          this.structured = true;
           this.recognizedDialect = true;
           if (structuredMessageType(completed.data.item.type))
             this.add(completed.data.turn_id, {

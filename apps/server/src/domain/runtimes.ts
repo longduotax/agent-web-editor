@@ -9,6 +9,10 @@ interface ProbeableRuntime {
   probe?: () => Promise<{ available: boolean; reason?: string }>;
 }
 
+interface ClosableRuntime {
+  close?: () => Promise<void> | void;
+}
+
 const LABELS: Record<RuntimeKind, string> = { pi: "Pi", codex: "Codex" };
 const ORDER: RuntimeKind[] = ["pi", "codex"];
 
@@ -89,5 +93,37 @@ export class RuntimeRegistry {
         `${LABELS[kind]} is not available on this machine. Install it and restart the workspace server.`,
       );
     return adapter;
+  }
+
+  /** Returns a selected adapter only after its optional availability probe passes. */
+  public async usable(kind: RuntimeKind): Promise<AgentRuntime> {
+    const adapter = this.get(kind);
+    const probe = (adapter as ProbeableRuntime).probe;
+    if (probe === undefined) return adapter;
+    try {
+      const result = await probe.call(adapter);
+      if (result.available) return adapter;
+      throw new RuntimeFailure(
+        "unavailable",
+        result.reason ?? `${LABELS[kind]} is not available on this machine.`,
+      );
+    } catch (error) {
+      if (error instanceof RuntimeFailure) throw error;
+      throw new RuntimeFailure(
+        "unavailable",
+        error instanceof Error
+          ? error.message
+          : `${LABELS[kind]} could not be reached.`,
+      );
+    }
+  }
+
+  /** Shuts down each registered external runtime once during server teardown. */
+  public async close(): Promise<void> {
+    await Promise.allSettled(
+      [...new Set(Object.values(this.adapters))].map(async (adapter) => {
+        await (adapter as ClosableRuntime).close?.();
+      }),
+    );
   }
 }

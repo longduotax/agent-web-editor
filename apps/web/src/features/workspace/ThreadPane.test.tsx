@@ -41,10 +41,35 @@ import { ApiClientError } from "../../api/client.js";
 import { isTextEntryTarget } from "./keybindings.js";
 import { ThreadPane } from "./ThreadPane.js";
 
+function localStorageFake(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length(): number {
+      return values.size;
+    },
+    clear(): void {
+      values.clear();
+    },
+    getItem(key: string): string | null {
+      return values.get(key) ?? null;
+    },
+    key(index: number): string | null {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key: string): void {
+      values.delete(key);
+    },
+    setItem(key: string, value: string): void {
+      values.set(key, value);
+    },
+  };
+}
+
 // The pane now asks the workspace listing whether its thread is still there
 // (see the archive derivation in ThreadPane). Every test that is not about
 // archiving wants the ordinary answer: yes.
 beforeEach(() => {
+  vi.stubGlobal("localStorage", localStorageFake());
   api.getWorkspace.mockResolvedValue({
     projects: [],
     threads: [{ id: threadId }],
@@ -60,6 +85,7 @@ afterEach(() => {
   // leaves one behind hands it to the next test's composer, which reads its
   // draft in a `useState` initialiser.
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 // jsdom has no layout, so scrollHeight/clientHeight are always 0 and any
@@ -282,6 +308,79 @@ describe("ThreadPane", () => {
       threadId,
       "abcdefghijklmnop",
     );
+  });
+
+  it("keeps a contiguous five-page history window and can jump back to latest", async () => {
+    const latest = {
+      id: "latest-message",
+      kind: "message" as const,
+      role: "assistant" as const,
+      text: "Latest remains visible",
+      timestamp: null,
+    };
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: {
+        items: [latest],
+        olderCursor: "cursor-0000000001",
+        atLatest: true,
+      },
+    });
+    for (let index = 1; index <= 6; index += 1) {
+      api.getOlderTranscriptPage.mockResolvedValueOnce({
+        items: [
+          {
+            id: `older-${String(index)}`,
+            kind: "message" as const,
+            role: "user" as const,
+            text: `Older ${String(index)}`,
+            timestamp: null,
+          },
+        ],
+        olderCursor: index < 6 ? `cursor-000000000${String(index + 1)}` : null,
+        atLatest: false,
+      });
+    }
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByText("Latest remains visible");
+
+    for (let index = 0; index < 6; index += 1) {
+      await user.click(
+        screen.getByRole("button", { name: "Load earlier messages" }),
+      );
+      await screen.findByText(`Older ${String(index + 1)}`);
+    }
+
+    // The window is oldest-first in loading order, so after the sixth prepend
+    // it contains 6 through 2 with no missing page in the middle.
+    for (let index = 2; index <= 6; index += 1)
+      expect(screen.getByText(`Older ${String(index)}`)).toBeInTheDocument();
+    expect(screen.queryByText("Older 1")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Latest remains visible"),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Jump to latest" }));
+    expect(
+      await screen.findByText("Latest remains visible"),
+    ).toBeInTheDocument();
+  });
+
+  it("retains an unavailable backend draft without allowing it to submit", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtimeAvailable: false },
+    });
+    const user = userEvent.setup();
+    renderPane();
+    const input = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(input, "Keep this draft");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("Keep this draft");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(api.prompt).not.toHaveBeenCalled();
   });
 
   // Rewritten for UX-4: the pane no longer stacks a second `.thread-header`
@@ -1682,6 +1781,9 @@ describe("live streaming", () => {
     // Same element, still focused: the box was not rebuilt underneath them.
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(composer);
     expect(composer).toHaveFocus();
+    expect(localStorage.getItem(`pi-draft:${threadId}`)).toBe(
+      "and then\n\nwait, use pnpm",
+    );
   });
 
   // Nit 6. `lost` was filtered to `steer.runId === lastRun.id`, and a fast
@@ -1696,10 +1798,8 @@ describe("live streaming", () => {
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
-    await user.type(
-      await screen.findByRole("textbox", { name: "Message Pi" }),
-      "wait, use pnpm",
-    );
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "wait, use pnpm");
     await user.keyboard("{Enter}");
     await screen.findByText("wait, use pnpm");
 
@@ -1727,6 +1827,7 @@ describe("live streaming", () => {
     // And it says why, although the run it belongs to is no longer the one
     // the pane has an outcome for.
     expect(screen.getByText(/never delivered/)).toBeInTheDocument();
+    expect(composer).toHaveFocus();
   });
 
   // Nit 5. The outcome notice is about the run that just ended; once the user

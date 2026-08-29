@@ -126,6 +126,11 @@ export interface OpenRuntimeSession {
   steer(text: string): Promise<void>;
   stop(): Promise<void>;
   subscribe(listener: (event: RuntimeEvent) => void): () => void;
+  /**
+   * Called when this open handle can no longer be used. Callers must reopen
+   * the durable session before making another runtime request.
+   */
+  onUnavailable?(listener: (reason: string) => void): () => void;
   dispose(): Promise<void>;
 }
 

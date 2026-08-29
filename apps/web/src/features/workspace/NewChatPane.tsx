@@ -200,12 +200,30 @@ export function NewChatPane(props: NewChatPaneProps) {
   });
   // Non-sticky by design: the composer opens on the resolved default every
   // time, so an incidental one-off pick never becomes a standing choice.
+  const backendChoice = readBackendChoice();
   const resolvedDefault = resolveDefaultBackend(
-    readBackendChoice(),
+    backendChoice,
     backends.data?.defaultRuntime,
   );
   const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
-  const selectedRuntime = runtime ?? resolvedDefault;
+  const backendFor = (kind: RuntimeKind) =>
+    backends.data?.backends.find((backend) => backend.kind === kind);
+  const resolvedDefaultBackend = backendFor(resolvedDefault);
+  const fallbackRuntime = backends.data?.backends.find(
+    (backend) => backend.available,
+  )?.kind;
+  // A default is a policy, not an explicit one-off choice. If that policy
+  // names an unavailable backend, pick the first server-advertised available
+  // backend. An explicit choice stays visible so its refusal is explainable.
+  const selectedRuntime =
+    runtime ??
+    (resolvedDefaultBackend?.available === false
+      ? (fallbackRuntime ?? resolvedDefault)
+      : resolvedDefault);
+  const selectedBackend = backendFor(selectedRuntime);
+  const selectedUnavailable = selectedBackend?.available === false;
+  const selectedUnavailableReason =
+    selectedBackend?.reason ?? "This agent backend is unavailable.";
   const agentLabel = selectedRuntime === "codex" ? "Codex" : "Pi";
   const [text, setText] = useState(() => readDraft(draftKey));
   // The prompt the user has already committed to but that has no thread yet.
@@ -254,7 +272,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                 : {}),
             },
         creationKey,
-        selectedRuntime,
+        runtime === null &&
+          backendChoice === "follow-machine" &&
+          backends.data === undefined
+          ? undefined
+          : selectedRuntime,
       ),
     onSuccess: async (result) => {
       setSentPrompt(null);
@@ -277,7 +299,7 @@ export function NewChatPane(props: NewChatPaneProps) {
     // the unchanged `creationKey` deduplicated it server-side -- but the
     // composer is cleared now, so typing again regenerates the key and a
     // second Enter would create a second thread and a second git worktree.
-    if (create.isPending) return;
+    if (create.isPending || selectedUnavailable) return;
     if (
       value.trim() === "" ||
       (mode === "worktree" &&
@@ -612,6 +634,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                 {preflight.data.unavailableReason}
               </p>
             )}
+          {selectedUnavailable && (
+            <p className="new-chat-note" role="alert">
+              {selectedUnavailableReason}
+            </p>
+          )}
           {mode === "worktree" && sourceChanges === "none" && (
             <p className="new-chat-note">
               Starts from committed {baseBranch || "HEAD"}. Local changes are
@@ -694,7 +721,9 @@ export function NewChatPane(props: NewChatPaneProps) {
                 type="submit"
                 className="send"
                 aria-label="Create chat and send"
-                disabled={create.isPending || text.trim() === ""}
+                disabled={
+                  create.isPending || text.trim() === "" || selectedUnavailable
+                }
               >
                 <span aria-hidden="true">↑</span>
               </button>

@@ -8,6 +8,7 @@ import { RuntimeFailure, type RuntimeEvent } from "@pi-web/agent-runtime";
 
 import {
   CodexAgentRuntime,
+  parseCodexHome,
   type CodexAgentRuntimeOptions,
   type CodexSandbox,
 } from "./index.js";
@@ -23,6 +24,24 @@ afterEach(async () => {
       .splice(0)
       .map((path) => rm(path, { recursive: true, force: true })),
   );
+});
+
+describe("Codex home configuration boundary", () => {
+  it("accepts an explicit absolute home and rejects a relative one", () => {
+    expect(parseCodexHome("/tmp/codex-home")).toBe("/tmp/codex-home");
+    expect(() => parseCodexHome("relative-home")).toThrow(/absolute/);
+  });
+
+  it("uses the explicit fallback when CODEX_HOME is missing", () => {
+    const prior = process.env.CODEX_HOME;
+    delete process.env.CODEX_HOME;
+    try {
+      expect(parseCodexHome()).toMatch(/\.codex$/);
+    } finally {
+      if (prior === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prior;
+    }
+  });
 });
 
 interface Frame {
@@ -198,6 +217,52 @@ describe("CodexAgentRuntime.create", () => {
     expect(server.sentParams("thread/name/set")).toBeUndefined();
   });
 
+  it("sends and verifies the caller-owned thread source marker", async () => {
+    const creationId = "00000000-0000-4000-8000-0000000000ab";
+    const marker = `pi-web:create:${creationId}`;
+    const server = new ScriptedServer({
+      "thread/list": { data: [], nextCursor: null },
+      "thread/start": { thread: thread({ threadSource: marker }) },
+      "thread/name/set": {},
+    });
+    await runtimeOver(server).create("/repo", "Fix the parser", creationId);
+    expect(server.sentParams("thread/start")).toMatchObject({
+      threadSource: marker,
+    });
+  });
+
+  it("reuses the exact marked thread after creation was interrupted", async () => {
+    const creationId = "00000000-0000-4000-8000-0000000000ac";
+    const marker = `pi-web:create:${creationId}`;
+    const server = new ScriptedServer({
+      "thread/list": {
+        data: [thread({ threadSource: marker })],
+        nextCursor: null,
+      },
+    });
+    await expect(
+      runtimeOver(server).create("/repo", "Retry", creationId),
+    ).resolves.toEqual({
+      sessionId: THREAD,
+    });
+    expect(server.sentParams("thread/start")).toBeUndefined();
+  });
+
+  it("fails closed when Codex returns a mismatched creation marker", async () => {
+    const creationId = "00000000-0000-4000-8000-0000000000ad";
+    const server = new ScriptedServer({
+      "thread/list": { data: [], nextCursor: null },
+      "thread/start": {
+        thread: thread({
+          threadSource: "pi-web:create:00000000-0000-4000-8000-0000000000ae",
+        }),
+      },
+    });
+    await expect(
+      runtimeOver(server).create("/repo", "Retry", creationId),
+    ).rejects.toMatchObject({ code: "malformed" });
+  });
+
   it("refuses a response whose thread identity is unusable", async () => {
     const server = new ScriptedServer({
       "thread/start": { thread: { id: "nope" } },
@@ -228,6 +293,49 @@ describe("CodexOpenSession", () => {
       approvalPolicy: "never",
     });
     await session.dispose();
+  });
+
+  it("marks a disconnected handle unavailable so reopening resumes before reuse", async () => {
+    const first = new ScriptedServer({
+      "thread/resume": { thread: thread() },
+      "thread/read": { thread: thread() },
+      "thread/unsubscribe": {},
+    });
+    const second = new ScriptedServer({
+      "thread/resume": { thread: thread() },
+      "thread/read": { thread: thread() },
+      "thread/unsubscribe": {},
+    });
+    const servers = [first, second];
+    const runtime = new CodexAgentRuntime({
+      connect: () => {
+        const server = servers.shift();
+        if (server === undefined) throw new Error("unexpected reconnect");
+        return Promise.resolve(server);
+      },
+      sandbox: "workspace-write",
+    });
+    const stale = await runtime.open("/repo", THREAD);
+    const unavailable = vi.fn();
+    stale.onUnavailable?.(unavailable);
+    first.close();
+    expect(unavailable).toHaveBeenCalledOnce();
+    await stale.dispose();
+    expect(first.sentAll("thread/unsubscribe")).toHaveLength(0);
+
+    const reopened = await runtime.open("/repo", THREAD);
+    await reopened.snapshot();
+    const methods = second.frames.flatMap((frame) =>
+      frame.method === undefined ? [] : [frame.method],
+    );
+    expect(methods.indexOf("thread/resume")).toBeLessThan(
+      methods.indexOf("thread/read"),
+    );
+    expect(second.sentParams("thread/resume")).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+    });
+    await reopened.dispose();
   });
 
   it("asks for the thread's items, which are not returned by default", async () => {
@@ -435,6 +543,38 @@ describe("CodexOpenSession", () => {
       turn: { id: "turn-1", status: "completed", items: [], error: null },
     });
     expect(await acceptance.settlement).toBe("completed");
+    await session.dispose();
+  });
+
+  it("settles when completion follows turn/start in the same transport turn", async () => {
+    const server = new ScriptedServer({
+      "thread/resume": { thread: thread() },
+      "thread/read": { thread: thread() },
+      "thread/unsubscribe": {},
+      "turn/start": () => {
+        server.notify("turn/completed", {
+          threadId: THREAD,
+          turn: {
+            id: "turn-early",
+            status: "completed",
+            items: [],
+            error: null,
+          },
+        });
+        return {
+          turn: {
+            id: "turn-early",
+            status: "inProgress",
+            items: [],
+            error: null,
+          },
+        };
+      },
+    });
+    const session = await runtimeOver(server).open("/repo", THREAD);
+    const acceptance = await session.prompt("finish immediately");
+    expect(acceptance.accepted).toBe(true);
+    await expect(acceptance.settlement).resolves.toBe("completed");
     await session.dispose();
   });
 

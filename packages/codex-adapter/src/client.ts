@@ -30,26 +30,35 @@ export interface CodexClientOptions {
  * Everything below arrives from an external program, so each frame is parsed
  * into one of the three shapes JSON-RPC allows rather than trusted by shape.
  */
-const responseFrameSchema = z.object({
-  id: z.union([z.number(), z.string()]),
-  result: z.unknown().optional(),
-  error: z
-    .object({
-      code: z.number().optional(),
-      message: z.string().optional(),
-      data: z.unknown().optional(),
-    })
-    .optional(),
-});
-const notificationFrameSchema = z.object({
-  method: z.string().min(1),
-  params: z.unknown().optional(),
-});
-const serverRequestFrameSchema = z.object({
-  id: z.union([z.number(), z.string()]),
-  method: z.string().min(1),
-  params: z.unknown().optional(),
-});
+const responseFrameSchema = z
+  .object({
+    jsonrpc: z.literal("2.0").optional(),
+    id: z.union([z.number(), z.string()]),
+    result: z.unknown().optional(),
+    error: z
+      .object({
+        code: z.number().optional(),
+        message: z.string().optional(),
+        data: z.unknown().optional(),
+      })
+      .optional(),
+  })
+  .strict();
+const notificationFrameSchema = z
+  .object({
+    jsonrpc: z.literal("2.0").optional(),
+    method: z.string().min(1),
+    params: z.unknown().optional(),
+  })
+  .strict();
+const serverRequestFrameSchema = z
+  .object({
+    jsonrpc: z.literal("2.0").optional(),
+    id: z.union([z.number(), z.string()]),
+    method: z.string().min(1),
+    params: z.unknown().optional(),
+  })
+  .strict();
 
 type NotificationListener = (method: string, params: unknown) => void;
 type ServerRequestHandler = (method: string, params: unknown) => unknown;
@@ -243,7 +252,7 @@ export class CodexClient {
     }
 
     const response = responseFrameSchema.safeParse(frame);
-    if (response.success && !("method" in (frame as object))) {
+    if (response.success) {
       const pending = session.pending.get(String(response.data.id));
       if (pending === undefined) {
         this.droppedFrames += 1;

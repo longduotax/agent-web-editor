@@ -44,6 +44,8 @@ class ControlledSession implements OpenRuntimeSession {
   public stopGate:
     ((stopCount: number) => Promise<void> | undefined) | undefined;
   public disposeGate: Promise<void> | undefined;
+  public unavailable = false;
+  private readonly unavailableListeners = new Set<(reason: string) => void>();
   public snapshot() {
     return Promise.resolve({
       sessionId: this.id,
@@ -89,6 +91,10 @@ class ControlledSession implements OpenRuntimeSession {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  public onUnavailable(listener: (reason: string) => void) {
+    this.unavailableListeners.add(listener);
+    return () => this.unavailableListeners.delete(listener);
+  }
   public async dispose(): Promise<void> {
     this.disposeCount += 1;
     await this.disposeGate;
@@ -96,12 +102,18 @@ class ControlledSession implements OpenRuntimeSession {
   public complete(): void {
     this.settle?.("completed");
   }
+  public disconnect(reason = "Codex app-server stopped."): void {
+    this.unavailable = true;
+    for (const listener of this.unavailableListeners) listener(reason);
+  }
 }
 
 class ControlledRuntime implements AgentRuntime {
   private readonly sessions = new Map<string, ControlledSession>();
   public created = 0;
   public createFailure: Error | undefined;
+  public openFailure: Error | undefined;
+  public openCount = 0;
 
   public get session(): ControlledSession {
     const session = this.sessions.values().next().value;
@@ -125,7 +137,15 @@ class ControlledRuntime implements AgentRuntime {
     return Promise.resolve({ sessionId });
   }
   public open(_projectPath: string, sessionId: string) {
-    return Promise.resolve(this.sessionById(sessionId));
+    if (this.openFailure !== undefined) return Promise.reject(this.openFailure);
+    this.openCount += 1;
+    const session = this.sessionById(sessionId);
+    if (session.unavailable) {
+      const replacement = new ControlledSession(sessionId);
+      this.sessions.set(sessionId, replacement);
+      return Promise.resolve(replacement);
+    }
+    return Promise.resolve(session);
   }
 }
 
@@ -201,6 +221,70 @@ function sessionFor(
 }
 
 describe("run coordination", () => {
+  it("evicts a disconnected runtime so the next operation reopens it", async () => {
+    const context = await fixture();
+    const codex = await context.service.createThread(
+      context.project.id,
+      "Codex reconnect",
+      undefined,
+      "codex",
+    );
+    await context.service.snapshot(context.project.id, codex.id);
+    const stale = sessionFor(context, codex.id);
+    stale.disconnect();
+
+    await context.service.snapshot(context.project.id, codex.id);
+    expect(context.runtime.openCount).toBe(2);
+    expect(sessionFor(context, codex.id)).not.toBe(stale);
+    expect(stale.disposeCount).toBe(1);
+
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("keeps an existing Codex transcript readable when its runtime becomes unavailable", async () => {
+    const context = await fixture();
+    const codex = await context.service.createThread(
+      context.project.id,
+      "Codex history",
+      undefined,
+      "codex",
+    );
+    const initial = await context.service.snapshot(
+      context.project.id,
+      codex.id,
+    );
+    await context.service.disposeThread(codex.id);
+    context.runtime.openFailure = new Error("Codex CLI is unavailable.");
+
+    const unavailable = await context.service.snapshot(
+      context.project.id,
+      codex.id,
+    );
+    expect(unavailable.transcriptPage).toEqual(initial.transcriptPage);
+    expect(unavailable.thread.runtime).toBe("codex");
+    expect(unavailable.thread.runtimeAvailable).toBe(false);
+    expect(unavailable.thread.runtimeUnavailableReason).toBe(
+      "Codex CLI is unavailable.",
+    );
+    expect(unavailable.capabilities).toEqual({
+      prompt: false,
+      steer: false,
+      stop: false,
+    });
+    expect(unavailable.diagnostics).toContain("Codex CLI is unavailable.");
+    expect((await context.service.list()).threads).toContainEqual(
+      expect.objectContaining({
+        id: codex.id,
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "Codex CLI is unavailable.",
+      }),
+    );
+
+    await context.service.close();
+    context.store.close();
+  });
+
   it("replays the original start run after a later run exists", async () => {
     const context = await fixture();
     const key = "90000000-0000-4000-8000-000000000001";

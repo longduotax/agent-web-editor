@@ -145,6 +145,22 @@ describe("CodexClient framing and correlation", () => {
     await codex.dispose();
   });
 
+  it("drops a response/request hybrid instead of resolving a pending request", async () => {
+    const transport = new FakeTransport();
+    const codex = client(transport);
+    await codex.ready();
+    const pending = codex.request("turn/start", {});
+    await vi.waitFor(() => {
+      expect(transport.sent.length).toBe(3);
+    });
+    const id = transport.parsedSent(2).id ?? 0;
+    transport.emit({ jsonrpc: "2.0", id, result: {}, method: "turn/started" });
+    expect(codex.droppedFrames).toBe(1);
+    transport.reply(id, { turnId: "t1" });
+    await expect(pending).resolves.toEqual({ turnId: "t1" });
+    await codex.dispose();
+  });
+
   it("ignores unparseable and unknown frames rather than failing the session", async () => {
     const transport = new FakeTransport();
     const codex = client(transport);

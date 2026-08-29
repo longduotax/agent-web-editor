@@ -285,13 +285,18 @@ export async function discoverSessions(projectId: ProjectId) {
 export async function importThread(
   projectId: ProjectId,
   runtimeSessionId: string,
+  runtime?: RuntimeKind,
 ) {
   return await request(
     `/api/projects/${projectId}/threads/import`,
     ThreadMutationResponseSchema,
     {
       method: "POST",
-      body: body({ runtimeSessionId, idempotencyKey: commandId() }),
+      body: body({
+        runtimeSessionId,
+        idempotencyKey: commandId(),
+        ...(runtime === undefined ? {} : { runtime }),
+      }),
     },
   );
 }

@@ -675,6 +675,7 @@ describe("safe and accessible workspace rendering", () => {
           modifiedAt: "2026-01-01T00:00:00.000Z",
           messageCount: 1,
           preview: "Existing work",
+          runtime: "codex" as const,
           imported: false,
         },
       ],
@@ -796,6 +797,7 @@ describe("safe and accessible workspace rendering", () => {
       expect(api.importThread).toHaveBeenCalledWith(
         projectId,
         "50000000-0000-4000-8000-000000000001",
+        "codex",
       );
       expect(api.getSnapshot).toHaveBeenCalledWith(projectId, importedThreadId);
     });

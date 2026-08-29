@@ -404,6 +404,15 @@ function Transcript({
     setPages((current) => {
       const latestIndex = current.findIndex((page) => page.atLatest);
       if (latestIndex < 0) return current;
+      // An unavailable backend cannot authoritatively replace history with an
+      // empty page: retain the page this pane already obtained until it can
+      // reopen, while still showing the availability diagnostic.
+      if (
+        !snapshot.thread.runtimeAvailable &&
+        snapshot.transcriptPage.items.length === 0 &&
+        current[latestIndex]?.items.length !== 0
+      )
+        return current;
       const next = [...current];
       next[latestIndex] = snapshot.transcriptPage;
       return next;
@@ -450,6 +459,9 @@ function Transcript({
         threadId,
         oldestCursor,
       );
+      // Keep one contiguous browser window. Once it is full, discard its
+      // newest edge (including the latest page) rather than a page in the
+      // middle; Jump to latest restores that deliberately omitted edge.
       setPages((current) => [page, ...current].slice(0, 5));
       requestAnimationFrame(() => {
         if (element !== null)
@@ -622,7 +634,7 @@ export function Composer({
    * cursor thrown into a textarea they had not asked for. Re-reading in
    * place keeps both, and keeps the merge itself in one place (the pane).
    */
-  restoreDraft?: { token: number } | undefined;
+  restoreDraft?: { token: number; texts: readonly string[] } | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
@@ -630,6 +642,7 @@ export function Composer({
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
+  const runtimeUnavailable = !snapshot.thread.runtimeAvailable;
   // Stop used to be `void stop(...).then(...)` with no rejection handler: a
   // Stop the server refused produced an unhandled promise rejection in the
   // console and NOTHING on screen, so the run went on running under a button
@@ -679,19 +692,23 @@ export function Composer({
   useEffect(() => {
     writeDraft(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
-  // The pane has merged something into the stored draft. Read it rather than
-  // being told it, so storage and the box cannot disagree about what the
-  // reader is now holding.
-  // Re-reading what the `useState` initialiser already read is a no-op, so
-  // no guard is needed for the mount where a token is already in place.
+  // The pane hands back only the undelivered steers. The current draft lives
+  // here, not in storage: a stop snapshot can arrive before the persistence
+  // effect for the reader's most recent keystroke, so storage may be stale.
   useEffect(() => {
     if (restoreDraft === undefined) return;
-    setText(readDraft(`pi-draft:${threadId}`));
+    setText((current) => {
+      const merged = [current, ...restoreDraft.texts]
+        .filter((part) => part !== "")
+        .join("\n\n");
+      writeDraft(`pi-draft:${threadId}`, merged);
+      return merged;
+    });
   }, [restoreDraft, threadId]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (text.trim() === "") return;
+    if (runtimeUnavailable || text.trim() === "") return;
     // Before the request, not after it: sending is the moment the reader
     // expects to be taken to the bottom, and waiting for the response would
     // leave them staring at old history for the length of a round trip.
@@ -767,7 +784,9 @@ export function Composer({
             className="send"
             aria-label={active ? "Steer current run" : "Send message"}
             title={active ? "Steer current run" : "Send message"}
-            disabled={mutation.isPending || text.trim() === ""}
+            disabled={
+              runtimeUnavailable || mutation.isPending || text.trim() === ""
+            }
           >
             <span aria-hidden="true">↑</span>
           </button>
@@ -980,6 +999,7 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   const [undelivered, setUndelivered] = useState<{
     token: number;
     count: number;
+    texts: readonly string[];
   } | null>(null);
   const lastRun = snapshot.data?.lastRun ?? null;
   // An echo belongs to its run, and cannot outlive it.
@@ -1022,16 +1042,13 @@ function ThreadPaneBody(props: ThreadPaneProps) {
         ? stale
         : dropSettledSteers(settledTranscript, stale);
     if (lost.length === 0) return;
-    const draftKey = `pi-draft:${threadId}`;
-    const kept = [readDraft(draftKey), ...lost.map((steer) => steer.text)]
-      .filter((part) => part !== "")
-      .join("\n\n");
-    writeDraft(draftKey, kept);
-    // Written here rather than handed to the composer as a value so that the
-    // text survives even when there is no composer mounted to receive it.
+    // The composer owns the in-memory draft, which may be newer than the
+    // persisted copy while its write effect is pending. It merges and stores
+    // these texts without replacing what the reader is currently typing.
     setUndelivered((current) => ({
       token: (current?.token ?? 0) + 1,
       count: lost.length,
+      texts: lost.map((steer) => steer.text),
     }));
   }, [runActive, currentRunId, pendingSteers, settledTranscript, threadId]);
   const queryClient = useQueryClient();

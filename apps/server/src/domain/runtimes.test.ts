@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeFailure, type AgentRuntime } from "@pi-web/agent-runtime";
 
@@ -51,5 +51,24 @@ describe("RuntimeRegistry", () => {
     expect(() => new RuntimeRegistry({ pi: stub("pi") }, "codex")).toThrow(
       /Codex/,
     );
+  });
+
+  it("refuses a registered backend whose probe reports unavailable", async () => {
+    const codex = {
+      ...stub("codex"),
+      probe: () =>
+        Promise.resolve({ available: false, reason: "Codex missing" }),
+    };
+    await expect(
+      new RuntimeRegistry({ pi: stub("pi"), codex }, "pi").usable("codex"),
+    ).rejects.toMatchObject({ code: "unavailable", message: "Codex missing" });
+  });
+
+  it("closes each registered external runtime once", async () => {
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const runtime = { ...stub("pi"), close };
+    const registry = new RuntimeRegistry({ pi: runtime, codex: runtime }, "pi");
+    await registry.close();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

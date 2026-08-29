@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createCodexProcessEnvironment } from "./index.js";
 import { spawnCodexTransport } from "./spawn.js";
 
 /**
@@ -8,6 +9,42 @@ import { spawnCodexTransport } from "./spawn.js";
  * depending on a Codex installation.
  */
 describe("spawnCodexTransport", () => {
+  it("does not pass server secrets to the app-server child", async () => {
+    const prior = process.env.PI_WEB_TEST_SENTINEL_SECRET;
+    process.env.PI_WEB_TEST_SENTINEL_SECRET = "must-not-reach-codex";
+    try {
+      const transport = await spawnCodexTransport(
+        "node",
+        [
+          "-e",
+          'process.stdout.write(JSON.stringify({ secret: process.env.PI_WEB_TEST_SENTINEL_SECRET ?? null, codexHome: process.env.CODEX_HOME, path: process.env.PATH ?? null }) + "\\n")',
+        ],
+        {
+          env: createCodexProcessEnvironment("/tmp/codex-home"),
+        },
+      );
+      const lines: string[] = [];
+      transport.onLine((line) => lines.push(line));
+      await vi.waitFor(
+        () => {
+          expect(lines).toHaveLength(1);
+        },
+        { timeout: 4000 },
+      );
+      expect(lines).toEqual([
+        JSON.stringify({
+          secret: null,
+          codexHome: "/tmp/codex-home",
+          path: process.env.PATH ?? null,
+        }),
+      ]);
+      transport.close();
+    } finally {
+      if (prior === undefined) delete process.env.PI_WEB_TEST_SENTINEL_SECRET;
+      else process.env.PI_WEB_TEST_SENTINEL_SECRET = prior;
+    }
+  });
+
   it("splits stdout into lines even when they arrive in fragments", async () => {
     const script = `
       process.stdout.write('{"a":1}\\n{"b":');

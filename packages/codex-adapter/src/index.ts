@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 import {
   RuntimeFailure,
@@ -58,13 +60,63 @@ export interface CodexAgentRuntimeOptions {
   connect?: () => Promise<CodexTransport>;
 }
 
+/** Parses the Codex state-root boundary before either the CLI or replay reads it. */
+export function parseCodexHome(configuredHome?: string): string {
+  const rawHome = configuredHome ?? process.env.CODEX_HOME;
+  if (rawHome === undefined) return join(homedir(), ".codex");
+  if (!isAbsolute(rawHome))
+    throw new Error("CODEX_HOME must be an absolute path");
+  return resolve(rawHome);
+}
+
+const CODEX_PROCESS_ENVIRONMENT_KEYS = [
+  "PATH",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "COMSPEC",
+  "ComSpec",
+  "PATHEXT",
+] as const;
+
+/**
+ * Constructs the deliberately narrow environment available to Codex and the
+ * commands it runs. Server configuration and credentials must not cross this
+ * process boundary through an inherited environment.
+ */
+export function createCodexProcessEnvironment(
+  codexHome: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const codexEnvironment: NodeJS.ProcessEnv = { CODEX_HOME: codexHome };
+  for (const key of CODEX_PROCESS_ENVIRONMENT_KEYS) {
+    const value = environment[key];
+    if (value !== undefined) codexEnvironment[key] = value;
+  }
+  return codexEnvironment;
+}
+
 const DISCOVERY_PAGE_LIMIT = 100;
 const DISCOVERY_MAX_PAGES = 50;
+const CREATION_MARKER_PREFIX = "pi-web:create:";
 
 const threadEnvelopeSchema = z.object({ thread: z.object({ id: z.uuid() }) });
+const startedThreadEnvelopeSchema = z.object({
+  thread: z.object({ id: z.uuid(), threadSource: z.string() }),
+});
 const threadListSchema = z.object({
   data: z.array(z.unknown()).default([]),
   nextCursor: z.string().nullish(),
+});
+const creationLookupThreadSchema = z.object({
+  id: z.uuid(),
+  threadSource: z.string().nullish(),
 });
 const threadReadSchema = z.object({
   thread: z.looseObject({ path: z.string().nullish() }),
@@ -73,6 +125,10 @@ const turnEnvelopeSchema = z.object({
   turn: z.object({ id: z.string().min(1) }),
 });
 const threadScopedSchema = z.object({ threadId: z.string().min(1) });
+const turnCompletionSchema = z.object({
+  threadId: z.string().min(1),
+  turn: z.object({ id: z.string().min(1) }),
+});
 const userMessageWithClientIdSchema = z.object({
   type: z.literal("userMessage"),
   clientId: z.string().nullish(),
@@ -88,17 +144,20 @@ const turnsSchema = z.object({
 export class CodexAgentRuntime implements AgentRuntime {
   private readonly client: CodexClient;
   private readonly sandbox: CodexSandbox;
-  private readonly codexHome: string | undefined;
+  private readonly codexHome: string;
   private readonly replayTools: boolean;
 
   public constructor(options: CodexAgentRuntimeOptions = {}) {
     this.sandbox = options.sandbox ?? "workspace-write";
-    this.codexHome = options.codexHome;
+    this.codexHome = parseCodexHome(options.codexHome);
     this.replayTools = options.replayTools ?? true;
     const command = options.command ?? "codex";
     const connect =
       options.connect ??
-      (() => spawnCodexTransport(command, ["app-server"], {}));
+      (() =>
+        spawnCodexTransport(command, ["app-server"], {
+          env: createCodexProcessEnvironment(this.codexHome),
+        }));
     this.client = new CodexClient({ connect });
     // Registered once for the whole process: every approval Codex raises is
     // declined immediately so no run can wait on an answer nothing can give.
@@ -145,11 +204,19 @@ export class CodexAgentRuntime implements AgentRuntime {
   public async create(
     projectPath: string,
     title?: string,
+    creationId?: string,
   ): Promise<{ sessionId: string }> {
+    const marker =
+      creationId === undefined ? undefined : creationMarkerFrom(creationId);
+    if (marker !== undefined) {
+      const existing = await this.findCreatedThread(projectPath, marker);
+      if (existing !== undefined) return { sessionId: existing };
+    }
     const raw = await this.client.request("thread/start", {
       cwd: projectPath,
       approvalPolicy: APPROVAL_POLICY,
       sandbox: this.sandbox,
+      ...(marker === undefined ? {} : { threadSource: marker }),
     });
     const parsed = threadEnvelopeSchema.safeParse(raw);
     if (!parsed.success)
@@ -157,6 +224,14 @@ export class CodexAgentRuntime implements AgentRuntime {
         "malformed",
         "Codex did not return a usable thread identifier.",
       );
+    if (marker !== undefined) {
+      const started = startedThreadEnvelopeSchema.safeParse(raw);
+      if (!started.success || started.data.thread.threadSource !== marker)
+        throw new RuntimeFailure(
+          "malformed",
+          "Codex did not preserve the thread creation marker.",
+        );
+    }
     const sessionId = parsed.data.thread.id;
     if (title !== undefined && title !== "")
       await this.client.request("thread/name/set", {
@@ -164,6 +239,70 @@ export class CodexAgentRuntime implements AgentRuntime {
         name: title,
       });
     return { sessionId };
+  }
+
+  /** Finds exactly one persisted native thread for a caller-owned creation. */
+  private async findCreatedThread(
+    projectPath: string,
+    marker: string,
+  ): Promise<string | undefined> {
+    const matches: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < DISCOVERY_MAX_PAGES; page += 1) {
+      const raw = await this.client.request("thread/list", {
+        cwd: projectPath,
+        limit: DISCOVERY_PAGE_LIMIT,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      const parsed = threadListSchema.safeParse(raw);
+      if (!parsed.success)
+        throw new RuntimeFailure(
+          "malformed",
+          "Codex returned an unreadable session list.",
+        );
+      for (const entry of parsed.data.data) {
+        const thread = creationLookupThreadSchema.safeParse(entry);
+        if (!thread.success)
+          throw new RuntimeFailure(
+            "malformed",
+            "Codex returned an unreadable thread creation marker.",
+          );
+        if (
+          thread.data.threadSource === undefined ||
+          thread.data.threadSource === null
+        )
+          continue;
+        const returnedMarker = parseCreationMarker(thread.data.threadSource);
+        if (
+          returnedMarker === null &&
+          thread.data.threadSource.startsWith(CREATION_MARKER_PREFIX)
+        )
+          throw new RuntimeFailure(
+            "malformed",
+            "Codex returned an invalid thread creation marker.",
+          );
+        if (thread.data.threadSource === marker) matches.push(thread.data.id);
+      }
+      const next = parsed.data.nextCursor;
+      if (next === null || next === undefined || next === "") {
+        if (matches.length > 1)
+          throw new RuntimeFailure(
+            "malformed",
+            "Codex returned multiple threads for one creation marker.",
+          );
+        return matches[0];
+      }
+      if (page === DISCOVERY_MAX_PAGES - 1)
+        throw new RuntimeFailure(
+          "rejected",
+          "Codex session lookup reached its safe page limit.",
+        );
+      cursor = next;
+    }
+    throw new RuntimeFailure(
+      "rejected",
+      "Codex session lookup reached its safe page limit.",
+    );
   }
 
   public async open(
@@ -209,6 +348,23 @@ export class CodexAgentRuntime implements AgentRuntime {
   }
 }
 
+function creationMarkerFrom(creationId: string): string {
+  const parsed = z.uuid().safeParse(creationId);
+  if (!parsed.success)
+    throw new RuntimeFailure(
+      "malformed",
+      "The thread creation identity is invalid.",
+    );
+  return `${CREATION_MARKER_PREFIX}${parsed.data}`;
+}
+
+function parseCreationMarker(value: string): string | null {
+  const prefix = value.startsWith(CREATION_MARKER_PREFIX);
+  if (!prefix) return null;
+  const parsed = z.uuid().safeParse(value.slice(CREATION_MARKER_PREFIX.length));
+  return parsed.success ? parsed.data : null;
+}
+
 function isApprovalRequest(method: string): boolean {
   return /approval/i.test(method) || /elicitation/i.test(method);
 }
@@ -229,6 +385,7 @@ const CURSOR_LIMIT = 2_000;
 
 class CodexOpenSession implements OpenRuntimeSession {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly unavailableListeners = new Set<(reason: string) => void>();
   private readonly pageCursors = new Map<
     TranscriptCursor,
     StoredCodexPagePosition
@@ -241,14 +398,23 @@ class CodexOpenSession implements OpenRuntimeSession {
   private replayWarningAdded = false;
   private settleActiveTurn:
     ((outcome: "completed" | "failed" | "interrupted") => void) | undefined;
+  private promptPreflight:
+    | {
+        settle: (outcome: "completed" | "failed" | "interrupted") => void;
+        terminal:
+          | { turnId: string; outcome: "completed" | "failed" | "interrupted" }
+          | undefined;
+      }
+    | undefined;
   private disposed = false;
+  private unavailable = false;
   private readonly unsubscribeNotifications: () => void;
   private readonly unsubscribeDisconnect: () => void;
 
   public constructor(
     private readonly client: CodexClient,
     public readonly id: string,
-    private readonly codexHome: string | undefined,
+    private readonly codexHome: string,
     private readonly replayTools: boolean,
   ) {
     this.unsubscribeNotifications = client.onNotification((method, params) => {
@@ -257,8 +423,10 @@ class CodexOpenSession implements OpenRuntimeSession {
     // A dead app-server can never complete an in-flight turn, so settle it as
     // failed rather than leaving the run hanging.
     this.unsubscribeDisconnect = client.onDisconnect((reason) => {
+      this.unavailable = true;
       this.emit({ type: "diagnostic", level: "error", message: reason });
       this.settle("failed");
+      for (const listener of this.unavailableListeners) listener(reason);
     });
   }
 
@@ -476,6 +644,16 @@ class CodexOpenSession implements OpenRuntimeSession {
         settleResolve = resolve;
       },
     );
+    if (settleResolve === undefined)
+      throw new RuntimeFailure(
+        "provider",
+        "Codex prompt settlement was not initialized.",
+      );
+    const preflight: NonNullable<typeof this.promptPreflight> = {
+      settle: settleResolve,
+      terminal: undefined,
+    };
+    this.promptPreflight = preflight;
 
     const discardEvents = () => {
       if (this.bufferedEvents === buffer) this.bufferedEvents = null;
@@ -499,8 +677,9 @@ class CodexOpenSession implements OpenRuntimeSession {
       if (!parsed.success) throw new RuntimeFailure("malformed", "no turn");
       turnId = parsed.data.turn.id;
     } catch (error) {
+      if (this.promptPreflight === preflight) this.promptPreflight = undefined;
       discardEvents();
-      settleResolve?.("failed");
+      settleResolve("failed");
       return {
         accepted: false,
         reason:
@@ -513,6 +692,9 @@ class CodexOpenSession implements OpenRuntimeSession {
 
     this.activeTurnId = turnId;
     this.settleActiveTurn = settleResolve;
+    if (this.promptPreflight === preflight) this.promptPreflight = undefined;
+    if (preflight.terminal?.turnId === turnId)
+      this.settle(preflight.terminal.outcome);
     return { accepted: true, settlement, releaseEvents, discardEvents };
   }
 
@@ -572,12 +754,23 @@ class CodexOpenSession implements OpenRuntimeSession {
     return () => this.listeners.delete(listener);
   }
 
+  public onUnavailable(listener: (reason: string) => void): () => void {
+    this.unavailableListeners.add(listener);
+    return () => this.unavailableListeners.delete(listener);
+  }
+
   public async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribeNotifications();
     this.unsubscribeDisconnect();
     this.listeners.clear();
+    this.unavailableListeners.clear();
+    // The disconnect listener runs before a later request causes the shared
+    // client to create its replacement app-server. Never send this stale
+    // handle's unsubscribe through that replacement: its owner must resume
+    // first, with the configured sandbox and approval policy.
+    if (this.unavailable) return;
     try {
       await this.client.request("thread/unsubscribe", { threadId: this.id });
     } catch {
@@ -594,6 +787,20 @@ class CodexOpenSession implements OpenRuntimeSession {
     const event = mapNotification(method, params);
     if (event === null) return;
     if (event.type === "settled") {
+      const completion = turnCompletionSchema.safeParse(params);
+      if (!completion.success) return;
+      if (this.promptPreflight !== undefined && this.activeTurnId === null) {
+        this.promptPreflight.terminal = {
+          turnId: completion.data.turn.id,
+          outcome: event.outcome,
+        };
+        return;
+      }
+      if (
+        this.activeTurnId !== null &&
+        completion.data.turn.id !== this.activeTurnId
+      )
+        return;
       this.settle(event.outcome);
       return;
     }
