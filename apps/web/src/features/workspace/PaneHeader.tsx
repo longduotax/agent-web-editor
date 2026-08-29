@@ -1,3 +1,4 @@
+import type { RuntimeKind } from "@pi-web/contracts";
 import { useState, type JSX, type ReactNode } from "react";
 
 import { ThreadRenameForm } from "../../components/ThreadRenameForm.js";
@@ -7,11 +8,19 @@ import {
   type PaneRunStatus,
 } from "./runStatus.js";
 
+export const BACKEND_LABEL: Record<RuntimeKind, string> = {
+  pi: "Pi",
+  codex: "Codex",
+};
+
 export interface PaneHeaderProps {
   status: PaneRunStatus | null; // null on a new-chat/never-run pane -> no status shown
   elapsed: string | null; // elapsed timer text while running, else null
   title: string; // thread title, or "New chat" for a threadless pane
   projectLabel: string; // project/worktree chip text
+  // Which agent runs this chat. Null on a new-chat pane, which has no thread
+  // and therefore no backend yet.
+  runtime: RuntimeKind | null;
   focused: boolean;
   // Optional quiet second line (workspace/branch context and the trust
   // notice). This is the pane's ONE header: nothing below it restates the
@@ -32,8 +41,16 @@ export interface PaneHeaderProps {
 }
 
 export function PaneHeader(props: PaneHeaderProps): JSX.Element {
-  const { status, elapsed, title, projectLabel, focused, detail, detailTitle } =
-    props;
+  const {
+    status,
+    elapsed,
+    title,
+    projectLabel,
+    runtime,
+    focused,
+    detail,
+    detailTitle,
+  } = props;
   const [editingTitle, setEditingTitle] = useState(false);
 
   return (
@@ -86,6 +103,14 @@ export function PaneHeader(props: PaneHeaderProps): JSX.Element {
           >
             {title}
           </h1>
+        )}
+        {runtime !== null && (
+          <span
+            className="agent-badge"
+            title={`Runs on ${BACKEND_LABEL[runtime]}`}
+          >
+            {BACKEND_LABEL[runtime]}
+          </span>
         )}
         <span className="repo">{projectLabel}</span>
         <span className="acts">

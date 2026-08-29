@@ -149,7 +149,7 @@ pnpm --filter @pi-web/web build
 Run one future Vitest file from the root with:
 
 ```sh
-pnpm vitest run path/to/example.test.ts
+pnpm test:vitest -- path/to/example.test.ts
 ```
 
 ## Configuration and data stores

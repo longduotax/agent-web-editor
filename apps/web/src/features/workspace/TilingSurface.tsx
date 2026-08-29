@@ -169,11 +169,11 @@ function PaneRegion({
     };
   }, [paneId, registerPaneElement]);
 
-  // Follow command-driven pane focus in the DOM. A split lands directly in
-  // the new pane's composer so the user can type immediately. Direction and
-  // close commands still park on the pane shell, keeping workspace shortcuts
-  // armed until the user starts typing. This runs after React's `autoFocus`
-  // handling, making the target explicit rather than depending on mount order.
+  // Follow command-driven pane focus in the DOM. Splits, directions, and close
+  // commands park on the pane shell so workspace shortcuts remain armed; a
+  // printable key then enters the composer without losing that character.
+  // This runs after React's `autoFocus` handling, making the target explicit
+  // rather than depending on mount order.
   useEffect(() => {
     // Sequence 0 is a cold load: leave the entry composer's normal autofocus
     // alone.

@@ -109,7 +109,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -130,9 +130,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -181,7 +182,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -202,9 +203,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -323,7 +325,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -344,9 +346,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -497,13 +500,14 @@ describe("safe and accessible workspace rendering", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread: {
         id: threadId,
@@ -514,9 +518,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -670,6 +675,17 @@ describe("safe and accessible workspace rendering", () => {
           modifiedAt: "2026-01-01T00:00:00.000Z",
           messageCount: 1,
           preview: "Existing work",
+          runtime: "codex" as const,
+          imported: false,
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000001",
+          name: "Existing Pi session",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          modifiedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 1,
+          preview: "Existing Pi work",
+          runtime: "pi" as const,
           imported: false,
         },
       ],
@@ -691,7 +707,7 @@ describe("safe and accessible workspace rendering", () => {
     // requested thread id rather than being a single fixed value.
     api.getSnapshot.mockImplementation((_projectId: string, tid: string) =>
       Promise.resolve({
-        version: 1,
+        version: 2,
         project: workspace.projects[0],
         thread:
           tid === importedThreadId
@@ -723,7 +739,7 @@ describe("safe and accessible workspace rendering", () => {
                   available: true,
                 },
               },
-        transcript: [],
+        transcriptPage: { items: [], olderCursor: null, atLatest: true },
         currentRun: null,
         lastRun: null,
         epoch: "60000000-0000-4000-8000-000000000001",
@@ -765,6 +781,7 @@ describe("safe and accessible workspace rendering", () => {
         mutations: { retry: false },
       },
     });
+    const consoleError = vi.spyOn(console, "error");
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
@@ -779,20 +796,43 @@ describe("safe and accessible workspace rendering", () => {
       }),
     );
     expect(
-      await screen.findByRole("button", { name: "Import" }),
-    ).toBeInTheDocument();
+      await screen.findAllByRole("button", { name: "Import" }),
+    ).toHaveLength(2);
     expect(api.discoverSessions).toHaveBeenCalledWith(projectId);
     expect(
       screen.getByText("One session could not be read."),
     ).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join(" ")).not.toContain(
+      "Encountered two children with the same key",
+    );
+    consoleError.mockRestore();
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    const [codexImport] = screen.getAllByRole("button", { name: "Import" });
+    if (codexImport === undefined) throw new Error("Codex import is missing");
+    await user.click(codexImport);
     await waitFor(() => {
       expect(api.importThread).toHaveBeenCalledWith(
         projectId,
         "50000000-0000-4000-8000-000000000001",
+        "codex",
       );
       expect(api.getSnapshot).toHaveBeenCalledWith(projectId, importedThreadId);
+    });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Import an existing session into Example project",
+      }),
+    );
+    await screen.findAllByRole("button", { name: "Import" });
+    const [, piImport] = screen.getAllByRole("button", { name: "Import" });
+    if (piImport === undefined) throw new Error("Pi import is missing");
+    await user.click(piImport);
+    await waitFor(() => {
+      expect(api.importThread).toHaveBeenCalledWith(
+        projectId,
+        "50000000-0000-4000-8000-000000000001",
+        "pi",
+      );
     });
     expect(
       await screen.findByRole("heading", { name: "Existing session" }),
@@ -986,6 +1026,7 @@ describe("the panel does not follow the focused pane", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -1021,10 +1062,10 @@ describe("the panel does not follow the focused pane", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1740,7 +1781,7 @@ describe("workspace surface identity across the /new boundary", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -1761,9 +1802,14 @@ describe("workspace surface identity across the /new boundary", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi",
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: {
+        items: [],
+        olderCursor: null,
+        atLatest: true,
+      },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1863,6 +1909,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -1933,6 +1980,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -2051,6 +2099,7 @@ describe("panel Files tab search", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -2097,10 +2146,10 @@ describe("panel Files tab search", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -2205,6 +2254,7 @@ describe("panel Changes tab states", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -2250,10 +2300,10 @@ describe("panel Changes tab states", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",

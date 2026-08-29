@@ -22,7 +22,7 @@
 
 The new capability specification [Scalable conversation history v1](../../product-specs/scalable-conversation-history.md) is Approved with no open product questions. It extends, but does not replace, the initial workspace's persistent-thread and authoritative-native-history contract. It is independently specified because progressive history navigation and bounded viewport behavior have their own lifecycle, acceptance criteria, failure modes, and reader entry point.
 
-The user explicitly approved product specification version 1 and technical plan version 1 on 2026-08-16. Product approval remains valid because the approved transcript UX is unchanged. The post-approval cache-ownership and live-refresh redesign was a material architecture-only revision in plan version 2. Review then found that its unchanged-order adapter-cache rule did not define a safe in-progress streaming path. This plan version 3 is therefore Draft and technical approval is pending; production implementation is paused until version 3 is explicitly approved.
+The user explicitly approved product specification version 1 and technical plan version 1 on 2026-08-16. Product approval remains valid because the approved transcript UX is unchanged. The post-approval cache-ownership and live-refresh redesign was a material architecture-only revision in plan version 2. Review then found that its unchanged-order adapter-cache rule did not define a safe in-progress streaming path. This plan version 3 is therefore Draft and technical approval is pending; work beyond the separately approved bounded-page foundation is paused until version 3 is explicitly approved.
 
 ## Purpose and user-visible outcome
 
@@ -43,9 +43,21 @@ The implementation bounds browser wire, query-cache, Markdown, layout, and DOM w
 
 ## Current behavior and affected invariants
 
-The current thread route requests `ThreadSnapshotSchema` version 1. Its `transcript` field accepts up to 100,000 complete items. `WorkspaceService.snapshot()` opens the runtime and requests a complete `RuntimeSnapshot`; `packages/pi-adapter` calls `SessionManager.getBranch()`, translates the complete active path, and returns one array. The browser executes the complete shared parser, filters blank assistant messages, maps every remaining item to React/Markdown/activity DOM, starts at scroll position zero, invalidates the same snapshot after every recognized live frame, and also polls every 15 seconds.
+The current thread route now requests `ThreadSnapshotSchema` version 2 and
+returns one `TranscriptPage`: at most 100 items with a 1 MiB target and an
+opaque older cursor. A read-only older-page route, explicit Load earlier action,
+stale reset, Jump to latest, and a five-page/500-row browser window were
+implemented under the separately approved Agent backends v3 / Codex replay plan
+v2. Both Pi and Codex conform to that shared wire shape, so network, browser
+parsing, query-adjacent page state, Markdown construction, and mounted rows no
+longer scale with total history merely because a chat opens.
 
-Existing partial protections are not sufficient for long chats: tool detail bodies mount only when expanded, stable item IDs are React keys, and individual contract fields are bounded, but network, Zod parsing, query memory, Markdown construction, and row count still scale with total transcript length.
+The remaining plan-v3 problem is narrower. Pi still calls
+`SessionManager.getBranch()` and translates its complete active path for each
+page request; ordinary live events and the 15-second poll still fetch a bounded
+latest page while a reader is away rather than page-free metadata; and the full
+bidirectional, streaming-projection, viewport, and scrollbar behavior below has
+not been implemented. This plan remains Draft for that remaining architecture.
 
 The following invariants must remain true:
 
@@ -213,7 +225,7 @@ No database row, environment variable, filesystem path, or new durable serializa
 
 ## Touched-legacy-code analysis
 
-- `ThreadSnapshotSchema` v1 and `OpenRuntimeSession.snapshot()` currently imply a complete transcript. Characterize small-session output before replacing them; migrate every fake, adapter, server, and browser caller in one branch rather than adding an unchecked optional second shape.
+- `ThreadSnapshotSchema` v1 was replaced coherently by snapshot v2 under Agent backends v3 / Codex replay plan v2; every fake, adapter, server, and browser caller now uses or adapts to the bounded shape. Preserve that migration while adding the remaining cache/live semantics rather than introducing an optional legacy transcript.
 - `transcriptFromManager()` currently performs full active-branch translation and tool pairing in one pass. Extract that logic under existing fixture tests first. Preserve output IDs/order/diagnostics exactly for histories that fit one page; page boundaries must not duplicate separate tool call and result rows.
 - `useLive()` currently validates only the live envelope and invalidates queries for each frame. Preserve authoritative snapshot recovery and sequence ownership while adding coalescing; do not promote unknown payload to transcript truth.
 - `Transcript` currently lives in `App.tsx` and renders chronological items directly. Preserve Markdown safety, activity semantics, empty state, stable keys, and project display-path behavior while extracting it.
@@ -271,16 +283,22 @@ Recorded browser verification uses the deterministic fake runtime and generated 
 - [x] Received explicit user approval for scalable conversation history plan version 1 on 2026-08-16.
 - [x] Classified the post-approval cache-ownership and live-refresh redesign as material architecture-only work; created plan version 2 in Draft and invalidated version-1 technical approval.
 - [x] Classified the mutable `message_update` cache exception, typed live-projection admission, and final reconciliation as a material technical-plan revision; created plan version 3 in Draft and invalidated plan-version-2 technical approval without changing product specification version 1.
-- [ ] Obtain explicit technical approval for plan version 3 before implementing milestones 1-5; implementation is paused.
+- [x] Shared snapshot-v2 contracts, fixed-limit latest/older pages, stale reset,
+      explicit older loading, a five-page browser window, 10,000-item structural
+      coverage, and a 700-item Playwright check were implemented under the
+      separately approved Agent backends v3 / Codex replay plan v2.
+- [ ] Obtain explicit technical approval for plan version 3 before implementing
+      the remaining adapter cache, page-free live refresh, full viewport,
+      bidirectional navigation, and scrollbar milestones.
 
 ## Discoveries and blockers
 
 - Pi `SessionManager` loads and owns the native entry tree and exposes stable entry IDs plus `getBranch()`/`getLeafId()`. The supported SDK does not offer backward page reads from disk. This plan therefore bounds all browser work and caches/reuses adapter translation, but does not claim that opening a native session consumes memory independent of native file length.
-- The current browser ignores live payload content and invalidates the complete snapshot for every recognized frame. The replacement coalesces a parsed bounded latest-page refresh while pinned and a page-free metadata refresh while away from latest, preserving authoritative recovery without a second transcript reducer or a second transcript-page cache owner.
+- The current browser ignores live payload content and invalidates the bounded latest snapshot for every recognized frame. Remaining plan-v3 work coalesces that refresh while pinned and substitutes page-free metadata while away from latest, preserving authoritative recovery without a second transcript reducer or transcript-page cache owner.
 - Pi emits repeated `message_update` events for the stable `streaming-assistant` item without changing active-branch order. The adapter's unchanged-order cache therefore requires its own parsed, bounded mutable projection that is replaced on each update and reconciled away before a persisted final row renders.
 - Item-count limits alone are insufficient because transcript fields are individually large. Page packing therefore uses count and serialized-byte targets with a one-item progress exception.
 - Variable-height virtualization is not required to establish a hard DOM ceiling when the browser retains only five pages. Deferring it avoids dynamic measurement, browser-find, focus, and expanded-tool complexity.
-- No implementation blocker or unresolved product/technical decision remains. Product approval is satisfied, but the material architecture-only plan-v3 revision requires technical approval before implementation may begin.
+- No implementation blocker or unresolved product decision remains. Product approval is satisfied and the bounded foundation is implemented, but the material architecture-only plan-v3 revision still requires technical approval before its remaining work may begin.
 
 ## Decision and revision log
 
@@ -296,4 +314,6 @@ Recorded browser verification uses the deterministic fake runtime and generated 
 
 ## Final outcomes
 
-Not completed. Production implementation has not started.
+Not completed. The shared bounded-page foundation is implemented and verified;
+remaining plan-v3 cache, live-refresh, viewport, bidirectional-navigation, and
+scrollbar work has not started.

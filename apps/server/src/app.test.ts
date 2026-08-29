@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +10,7 @@ import type {
   AgentRuntime,
   OpenRuntimeSession,
   PromptAcceptance,
+  RuntimeSnapshot,
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
@@ -21,7 +23,10 @@ import {
   GitStatusResponseSchema,
   ProjectMutationResponseSchema,
   ProjectsResponseSchema,
+  AgentBackendsResponseSchema,
   StartThreadResponseSchema,
+  ThreadSnapshotSchema,
+  TranscriptPageSchema,
   TerminalServerFrameSchema,
   TerminalsResponseSchema,
   type TerminalServerFrame,
@@ -60,11 +65,7 @@ class FakeRuntime implements AgentRuntime {
 class PromptingSession implements OpenRuntimeSession {
   public readonly id = "10000000-0000-4000-8000-000000000001";
 
-  public snapshot(): Promise<{
-    sessionId: string;
-    transcript: [];
-    diagnostics: [];
-  }> {
+  public snapshot(): Promise<RuntimeSnapshot> {
     return Promise.resolve({
       sessionId: this.id,
       transcript: [],
@@ -140,6 +141,31 @@ class PromptingRuntime implements AgentRuntime {
   }
 }
 
+class HistorySession extends PromptingSession {
+  public override snapshot(): Promise<RuntimeSnapshot> {
+    return Promise.resolve({
+      sessionId: this.id,
+      transcript: Array.from({ length: 250 }, (_, index) => ({
+        id: `message-${String(index)}`,
+        kind: "message" as const,
+        role: "assistant" as const,
+        text: `message ${String(index)}`,
+        timestamp: null,
+      })),
+      diagnostics: [],
+    });
+  }
+}
+
+class HistoryRuntime extends PromptingRuntime {
+  private readonly history = new HistorySession();
+
+  public override open(path: string): Promise<OpenRuntimeSession> {
+    this.openedPath = path;
+    return Promise.resolve(this.history);
+  }
+}
+
 async function directories(): Promise<{ state: string; project: string }> {
   const root = await mkdtemp(join(tmpdir(), "pi-web-http-"));
   roots.push(root);
@@ -154,6 +180,50 @@ const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
 describe("credential-free project API", () => {
+  it("returns one bounded latest page and loads older history by opaque cursor", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new HistoryRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const thread = await server.workspaceContext.workspace.createThread(
+      project.id,
+    );
+
+    const snapshotResponse = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}`,
+      headers: { host },
+    });
+    const snapshot = ThreadSnapshotSchema.parse(snapshotResponse.json());
+    expect(snapshot.version).toBe(2);
+    expect(snapshot.transcriptPage.items).toHaveLength(100);
+    expect(snapshot.transcriptPage.items[0]?.id).toBe("message-150");
+    expect(snapshot.transcriptPage.olderCursor).not.toBeNull();
+    const cursor = snapshot.transcriptPage.olderCursor;
+    if (cursor === null) throw new Error("Expected an older page");
+
+    const olderResponse = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/transcript?cursor=${encodeURIComponent(cursor)}`,
+      headers: { host },
+    });
+    expect(olderResponse.statusCode).toBe(200);
+    const older = TranscriptPageSchema.parse(olderResponse.json());
+    expect(older.items).toHaveLength(100);
+    expect(older.items[0]?.id).toBe("message-50");
+    await server.close();
+  });
+
   it("creates and names a shared thread from its first prompt", async () => {
     const paths = await directories();
     const config = parseConfig({
@@ -1671,6 +1741,135 @@ describe("terminal routes", () => {
     ]);
 
     client.close();
+    await server.close();
+  });
+});
+
+describe("agent backend selection over HTTP", () => {
+  const headers = { host, origin, "x-pi-web-request": "1" };
+
+  async function backendServer(defaultRuntime: string) {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: {
+        PI_WEB_STATE_DIR: paths.state,
+        PI_WEB_DEFAULT_RUNTIME: defaultRuntime,
+      },
+    });
+    const pi = new PromptingRuntime();
+    const codex = new PromptingRuntime();
+    const server = await buildServer({
+      config,
+      runtimes: { pi, codex },
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    return { server, project, pi, codex };
+  }
+
+  function start(
+    server: Awaited<ReturnType<typeof buildServer>>,
+    projectId: string,
+    payload: Record<string, unknown>,
+  ) {
+    return server.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/threads/start`,
+      headers,
+      payload: {
+        prompt: "do the thing",
+        workspace: { mode: "shared" },
+        idempotencyKey: randomUUID(),
+        ...payload,
+      },
+    });
+  }
+
+  it("runs a chat on the configured default when none is requested", async () => {
+    const { server, project } = await backendServer("codex");
+    const response = await start(server, project.id, {});
+    expect(response.statusCode).toBe(200);
+    expect(
+      StartThreadResponseSchema.parse(response.json()).thread.runtime,
+    ).toBe("codex");
+    await server.close();
+  });
+
+  it("honours an explicit backend over the default", async () => {
+    const { server, project } = await backendServer("codex");
+    const response = await start(server, project.id, { runtime: "pi" });
+    expect(
+      StartThreadResponseSchema.parse(response.json()).thread.runtime,
+    ).toBe("pi");
+    await server.close();
+  });
+
+  it("rejects a backend the contract does not define", async () => {
+    const { server, project } = await backendServer("codex");
+    const response = await start(server, project.id, { runtime: "claude" });
+    expect(response.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it("reports the machine default and which backends are usable", async () => {
+    const { server } = await backendServer("pi");
+    const response = await server.inject({
+      method: "GET",
+      url: "/api/agent-backends",
+      headers,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = AgentBackendsResponseSchema.parse(response.json());
+    expect(body.defaultRuntime).toBe("pi");
+    expect(body.backends.map((backend) => backend.kind)).toEqual([
+      "pi",
+      "codex",
+    ]);
+    await server.close();
+  });
+
+  it("leaves no thread behind when the chosen backend is unusable", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: {
+        PI_WEB_STATE_DIR: paths.state,
+        PI_WEB_DEFAULT_RUNTIME: "pi",
+      },
+    });
+    const server = await buildServer({
+      config,
+      runtimes: { pi: new PromptingRuntime() },
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const response = await start(server, project.id, { runtime: "codex" });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+
+    // A failed creation must leave nothing behind, not a half-made chat.
+    expect(
+      server.workspaceContext.store.listThreads(project.id, {
+        includeArchived: true,
+      }),
+    ).toEqual([]);
+
+    // The unavailable backend is reported as such rather than silently absent.
+    const backends = await server.inject({
+      method: "GET",
+      url: "/api/agent-backends",
+      headers,
+    });
+    const parsed = AgentBackendsResponseSchema.parse(backends.json());
+    const codex = parsed.backends.find((entry) => entry.kind === "codex");
+    expect(codex?.available).toBe(false);
+    expect(codex?.reason).toMatch(/Codex/);
     await server.close();
   });
 });

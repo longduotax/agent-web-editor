@@ -17,6 +17,7 @@ import {
   ProjectIdSchema,
   ThreadIdSchema,
   type ProjectId,
+  type RuntimeKind,
   type ThreadId,
 } from "@pi-web/contracts";
 import {
@@ -204,10 +205,12 @@ function Sidebar({
     mutationFn: async ({
       projectId,
       sessionId,
+      runtime,
     }: {
       projectId: ProjectId;
       sessionId: string;
-    }) => await importThread(projectId, sessionId),
+      runtime: RuntimeKind;
+    }) => await importThread(projectId, sessionId, runtime),
     onSuccess: async (result) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["workspace"] }),
@@ -683,7 +686,7 @@ function Sidebar({
                       ))}
                       <ul>
                         {sessions.data?.sessions.map((session) => (
-                          <li key={session.id}>
+                          <li key={`${session.runtime}:${session.id}`}>
                             <span>{session.name ?? session.preview}</span>
                             {session.imported ? (
                               <small>Already imported</small>
@@ -695,6 +698,7 @@ function Sidebar({
                                   importSession.mutate({
                                     projectId: project.id,
                                     sessionId: session.id,
+                                    runtime: session.runtime,
                                   });
                                 }}
                               >

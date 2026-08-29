@@ -10,6 +10,12 @@ export const TerminalIdSchema = uuid.brand<"TerminalId">();
 export const SessionIdSchema = uuid.brand<"SessionId">();
 export const IdempotencyKeySchema = uuid.brand<"IdempotencyKey">();
 export const TimestampSchema = z.iso.datetime({ offset: true });
+// A chat's agent backend. It is chosen once, at creation, and is immutable for
+// the life of the chat: a chat is continued by resuming that backend's own
+// native session, and no transcript or tool history transfers between agents.
+export const RuntimeKindSchema = z.enum(["pi", "codex"]);
+export type RuntimeKind = z.infer<typeof RuntimeKindSchema>;
+
 export const RunStateSchema = z.enum([
   "running",
   "completed",
@@ -98,6 +104,9 @@ export const ThreadSummarySchema = z.object({
   runState: RunStateSchema.nullable(),
   unread: z.boolean(),
   runtimeAvailable: z.boolean(),
+  /** Present when opening this existing backend session is currently unsafe. */
+  runtimeUnavailableReason: z.string().max(500).optional(),
+  runtime: RuntimeKindSchema,
   workspace: ThreadWorkspaceSummarySchema,
 });
 export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
@@ -158,11 +167,37 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
 ]);
 export type TranscriptItem = z.infer<typeof TranscriptItemSchema>;
 
+/**
+ * Runtime-owned, opaque paging position. Browsers may return it only to the
+ * thread endpoint that issued it; they never decode or construct one.
+ */
+export const TranscriptCursorSchema = z
+  .string()
+  .min(16)
+  .max(2_048)
+  .regex(/^[A-Za-z0-9_-]+$/)
+  .brand<"TranscriptCursor">();
+export type TranscriptCursor = z.infer<typeof TranscriptCursorSchema>;
+
+export const TranscriptPageSchema = z
+  .object({
+    items: z.array(TranscriptItemSchema).max(100),
+    olderCursor: TranscriptCursorSchema.nullable(),
+    atLatest: z.boolean(),
+  })
+  .strict();
+export type TranscriptPage = z.infer<typeof TranscriptPageSchema>;
+
+export const TranscriptPageQuerySchema = z
+  .object({ cursor: TranscriptCursorSchema })
+  .strict();
+export type TranscriptPageQuery = z.infer<typeof TranscriptPageQuerySchema>;
+
 export const ThreadSnapshotSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   project: ProjectSchema,
   thread: ThreadSummarySchema,
-  transcript: z.array(TranscriptItemSchema).max(100_000),
+  transcriptPage: TranscriptPageSchema,
   currentRun: RunSchema.nullable(),
   lastRun: RunSchema.nullable(),
   epoch: uuid,
@@ -232,6 +267,7 @@ export const StartThreadRequestSchema = z
   .object({
     prompt: z.string().trim().min(1).max(200_000),
     workspace: ThreadWorkspaceRequestSchema,
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -288,6 +324,7 @@ export const RemoveProjectRequestSchema = z
 export const CreateThreadRequestSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -319,6 +356,7 @@ export const ImportThreadRequestSchema = z
   .object({
     runtimeSessionId: SessionIdSchema,
     title: z.string().trim().min(1).max(200).optional(),
+    runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
@@ -347,7 +385,24 @@ export const SessionDescriptorSchema = z.object({
   messageCount: z.number().int().nonnegative(),
   preview: z.string().max(500),
   imported: z.boolean(),
+  runtime: RuntimeKindSchema,
 });
+export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>;
+
+// The browser needs both halves to render the composer's backend choice: which
+// backend a new chat gets by default (AGB-02), and which are usable on this
+// machine so an unusable one can be shown disabled with its reason (AGB-03).
+export const AgentBackendSchema = z.object({
+  kind: RuntimeKindSchema,
+  available: z.boolean(),
+  reason: z.string().max(300).nullable(),
+});
+export const AgentBackendsResponseSchema = z.object({
+  defaultRuntime: RuntimeKindSchema,
+  backends: z.array(AgentBackendSchema),
+});
+export type AgentBackend = z.infer<typeof AgentBackendSchema>;
+export type AgentBackendsResponse = z.infer<typeof AgentBackendsResponseSchema>;
 export const SessionsResponseSchema = z.object({
   sessions: z.array(SessionDescriptorSchema),
   diagnostics: z.array(z.string()),

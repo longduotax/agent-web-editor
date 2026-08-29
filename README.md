@@ -34,8 +34,42 @@ repository-local file. Application metadata defaults to
 `~/.pi/web-workspace/metadata.sqlite` and can be relocated with an absolute
 `PI_WEB_STATE_DIR`.
 
-Pi tools and the explicit project terminal run with the server user's normal
-permissions. They are not application-approved or OS-sandboxed.
+## Agent backends
+
+A chat runs on either **Pi** or **Codex**. The backend is chosen when the chat
+is created and never changes: a chat is continued by resuming that backend's own
+session, and no history transfers between agents. New chats default to Codex;
+set `PI_WEB_DEFAULT_RUNTIME=pi` to change the machine default, or choose per
+device under Settings. Chats created before this capability shipped are Pi.
+
+Codex requires the [Codex CLI](https://github.com/openai/codex) (0.149.0 or
+compatible) on PATH, or `PI_WEB_CODEX_BIN` pointing at it. When it is missing,
+Codex is reported unavailable with the reason and Pi chats are unaffected.
+
+The two backends do **not** run under the same permissions, deliberately:
+
+- **Pi tools and the explicit project terminal** run with the server user's
+  normal permissions. They are not application-approved or OS-sandboxed.
+- **Codex** runs confined to the chat's execution root with no network access
+  (`PI_WEB_CODEX_SANDBOX=workspace-write`, the default). That boundary also
+  leaves `/tmp` and `$TMPDIR` writable, which Codex treats as workspace scratch
+  space; everything else, including your home directory, is refused. Set it to
+  `danger-full-access` to match Pi's posture, or `read-only` to forbid writes.
+  A command blocked by that boundary appears as a failed command in the
+  transcript; it never stalls the run.
+
+Interactive approvals are disabled for Codex and are not configurable: this
+workspace has no surface for answering a permission prompt, so no run may wait
+on one. Anything Codex would have asked about either proceeds inside the
+boundary above or fails visibly.
+
+Conversation history opens as a bounded latest page and loads earlier pages only
+when requested, so long chats are not transferred or mounted in full in the
+browser. Codex restores historical shell and file activity from the confined
+session file named by app-server. `PI_WEB_CODEX_HOME` can select an absolute
+Codex state root; it otherwise follows `CODEX_HOME` and then `~/.codex`.
+`PI_WEB_CODEX_REPLAY_TOOLS=off` disables private-format replay without disabling
+messages, prompting, or live tools.
 
 See the [documentation front door](docs/README.md),
 [architecture overview](docs/architecture/overview.md), and

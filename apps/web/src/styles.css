@@ -1226,6 +1226,17 @@ a:focus-visible {
   background: var(--hover);
   font-size: 0.72rem;
 }
+/* Which agent runs this chat. Text, never colour alone, and visually quieter
+   than the title so it reads as provenance rather than status. */
+.pane-head .agent-badge {
+  flex: none;
+  padding: 0.125rem 0.44rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+}
 .pane-head .acts {
   display: flex;
   flex: none;
@@ -1584,6 +1595,25 @@ a:focus-visible {
 .transcript-column > * {
   min-width: 0;
   max-width: 100%;
+}
+.history-page-control {
+  display: block;
+  margin: 0 auto 1rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  cursor: pointer;
+}
+.history-page-control:hover,
+.history-page-control:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+.history-page-control:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 .transcript-column :is(details, summary, pre, table) {
   min-width: 0;
@@ -3673,6 +3703,12 @@ a:focus-visible {
   margin: 0 0 1rem;
   color: var(--muted);
   font-size: 0.82rem;
+}
+/* Why a backend cannot be chosen, shown beside the option rather than hidden
+   behind a disabled control with no explanation. */
+.settings-option-note {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 /* Sixteen of the nineteen shortcuts are pane or panel management, and the
    three keys every user needs were the LAST rows of one flat nineteen-row

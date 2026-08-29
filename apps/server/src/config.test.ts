@@ -187,3 +187,95 @@ describe("server configuration", () => {
     ).toThrow(/absolute/);
   });
 });
+
+describe("agent backend configuration", () => {
+  const state = { PI_WEB_STATE_DIR: resolve("tmp-state") };
+
+  it("defaults new chats to Codex, confined and unapproved", () => {
+    const config = parseConfig({ argv: [], environment: state });
+    expect(config.defaultRuntime).toBe("codex");
+    expect(config.codexSandbox).toBe("workspace-write");
+    expect(config.codexCommand).toBe("codex");
+    expect(config.codexHome).toBeUndefined();
+    expect(config.codexReplayTools).toBe(true);
+  });
+
+  it("lets the machine default be set back to Pi", () => {
+    expect(
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_DEFAULT_RUNTIME: "pi" },
+      }).defaultRuntime,
+    ).toBe("pi");
+  });
+
+  it("names the variable when the machine default is not a backend", () => {
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_DEFAULT_RUNTIME: "claude" },
+      }),
+    ).toThrow(/PI_WEB_DEFAULT_RUNTIME/);
+  });
+
+  it("accepts each supported Codex boundary and rejects anything else", () => {
+    for (const sandbox of [
+      "read-only",
+      "workspace-write",
+      "danger-full-access",
+    ])
+      expect(
+        parseConfig({
+          argv: [],
+          environment: { ...state, PI_WEB_CODEX_SANDBOX: sandbox },
+        }).codexSandbox,
+      ).toBe(sandbox);
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_SANDBOX: "wide-open" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_SANDBOX/);
+  });
+
+  it("parses the Codex history root and replay kill switch", () => {
+    const home = resolve("codex-home");
+    const config = parseConfig({
+      argv: [],
+      environment: {
+        ...state,
+        PI_WEB_CODEX_HOME: home,
+        PI_WEB_CODEX_REPLAY_TOOLS: "off",
+      },
+    });
+    expect(config.codexHome).toBe(home);
+    expect(config.codexReplayTools).toBe(false);
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_HOME: "relative" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_HOME/);
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_REPLAY_TOOLS: "maybe" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_REPLAY_TOOLS/);
+  });
+
+  it("allows the Codex executable to be relocated", () => {
+    expect(
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_BIN: "/opt/codex/bin/codex" },
+      }).codexCommand,
+    ).toBe("/opt/codex/bin/codex");
+    expect(() =>
+      parseConfig({
+        argv: [],
+        environment: { ...state, PI_WEB_CODEX_BIN: "" },
+      }),
+    ).toThrow(/PI_WEB_CODEX_BIN/);
+  });
+});

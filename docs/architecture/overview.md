@@ -21,13 +21,15 @@ The browser receives only parsed DTOs and opaque application identifiers.
 | `packages/contracts/`     | Executable wire schemas and inferred DTO types                                          | Zod                                              |
 | `packages/agent-runtime/` | SDK-neutral persistent-session and run interfaces                                       | TypeScript                                       |
 | `packages/pi-adapter/`    | Pi session discovery/opening, transcript translation, and live runtime ownership        | Pi SDK 0.84.2                                    |
+| `packages/codex-adapter/` | Codex session discovery/opening, transcript translation, and live runtime ownership     | Codex app-server protocol (Codex CLI 0.149.0)    |
 
 Dependency direction remains:
 
 ```text
 apps/web -> packages/contracts
-apps/server -> packages/contracts + packages/agent-runtime + packages/pi-adapter
+apps/server -> packages/contracts + packages/agent-runtime + packages/pi-adapter + packages/codex-adapter
 packages/pi-adapter -> packages/agent-runtime + packages/contracts + Pi SDK
+packages/codex-adapter -> packages/agent-runtime + packages/contracts + codex app-server
 packages/agent-runtime -> packages/contracts
 packages/contracts -> no workspace package
 ```
@@ -70,16 +72,24 @@ identities, and transfer tokens without performing Git operations.
 and interrupts unfinished runs during restart reconciliation.
 
 Projects retain a canonical path only in server storage. Removal is a soft
-metadata operation and never deletes workspace or Pi files. Threads point to an
-opaque Pi session UUID; full transcripts stay in native Pi JSONL. Archiving an
-inactive thread is likewise metadata-only: active queries and unread aggregates
-exclude it while its thread, run, receipt, and Pi history remain retained.
+metadata operation and never deletes workspace or native agent files. Threads
+point to an opaque runtime session UUID plus an immutable `pi` or `codex`
+discriminator; full transcripts stay in each backend's native history.
+Archiving an inactive thread is likewise metadata-only: active queries and
+unread aggregates exclude it while its thread, run, receipt, and native history
+remain retained.
 
 ## Runtime and live data flow
 
 `WorkspaceService` resolves project/thread ownership and owns open runtime
 instances. `ThreadExecutionContextResolver` constructs the trusted cwd for each
 thread from either the registered checkout or a verified managed worktree.
+The server holds a `RuntimeRegistry` mapping a thread's persisted `runtime`
+discriminator (`pi` | `codex`) to the adapter that runs it, so both backends
+coexist in one project and the browser never learns backend internals. A
+backend absent from the registry is not installed on this machine, which is an
+ordinary recoverable state rather than an error.
+
 `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;
@@ -99,11 +109,18 @@ An idempotent archive command rejects in-process prompt preflight and persisted
 running work, atomically updates the project's active-thread fallback, then
 releases any inactive open runtime. Archived IDs are rejected by normal
 snapshot, prompt, steering, rename, and viewed routes. HTTP snapshots
-reconstructed from native history plus run metadata are authoritative.
-`LiveBroker` adds process-epoch, monotonic sequence events and a
-bounded replay ring for Origin-permitted WebSocket subscribers. Browser queries
-invalidate and replace snapshots after events or replay gaps; browser stream
-state is never durable truth.
+reconstructed from native history plus run metadata are authoritative, but
+carry only a fixed-limit latest transcript page. Opaque runtime-owned cursors
+fetch older pages; responses are capped at 100 items with a 1 MiB target, and
+one individually schema-bounded oversized item may travel alone. Pi pages are
+packed from its SDK projection. Codex pages combine app-server messages with
+tool activity read backward from the one confined rollout file named by
+`thread/read`; sequential older requests continue the reverse scan, and
+private-format failure degrades to message-only pages. `LiveBroker` adds
+process-epoch, monotonic sequence events and a bounded replay ring for
+Origin-permitted WebSocket subscribers. Browser queries invalidate and replace
+the bounded latest snapshot after events or replay gaps; browser stream state is
+never durable truth.
 
 ## File, Git, and terminal boundaries
 
@@ -141,8 +158,9 @@ selected canonical paths never enter browser state or wire responses. New chat
 uses an inline project, execution-location, starting-state, and branch toolbar
 above the first prompt. Worktree and clean-start are the safe defaults;
 local-change transfer and direct checkout use are explicit. The workspace
-renders a nested project and thread sidebar, Markdown transcript and activity,
-direct active-run steering and stop controls, direct-execution disclosure, the
+renders a nested project and thread sidebar, a bounded Markdown transcript with
+an explicit Load earlier action and a five-page/500-row window, direct
+active-run steering and stop controls, direct-execution disclosure, the
 **workspace panel**, and responsive drawers.
 
 The workspace panel replaces the fixed `Changes | Files | Terminal` inspector

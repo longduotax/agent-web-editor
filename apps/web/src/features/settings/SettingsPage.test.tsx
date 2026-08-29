@@ -10,6 +10,7 @@ import * as axe from "axe-core";
 
 const api = vi.hoisted(() => ({
   getWorkspace: vi.fn(),
+  getAgentBackends: vi.fn(),
 }));
 
 vi.mock("../../api/client.js", async (importOriginal) => {
@@ -23,6 +24,7 @@ import {
   shortcutKeys,
   WORKSPACE_KEYBINDINGS,
 } from "../workspace/keybindings.js";
+import { readBackendChoice } from "./backendPreferences.js";
 import { readThemeChoice } from "./themePreferences.js";
 import { App } from "../../App.js";
 
@@ -43,12 +45,24 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
 });
 
-function renderSettings() {
+function renderSettings(
+  backends: {
+    defaultRuntime: string;
+    backends: { kind: string; available: boolean; reason: string | null }[];
+  } = {
+    defaultRuntime: "codex",
+    backends: [
+      { kind: "pi", available: true, reason: null },
+      { kind: "codex", available: true, reason: null },
+    ],
+  },
+) {
   api.getWorkspace.mockResolvedValue({
     projects: [],
     threads: [],
     diagnostics: [],
   });
+  api.getAgentBackends.mockResolvedValue(backends);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -193,5 +207,54 @@ describe("SettingsPage", () => {
 
     const results = await axe.run(container);
     expect(results.violations).toEqual([]);
+  });
+});
+
+describe("SettingsPage default agent", () => {
+  it("follows the machine default until the user chooses", async () => {
+    stubMatchMedia();
+    renderSettings();
+
+    const group = await screen.findByRole("radiogroup", {
+      name: "Default agent",
+    });
+    expect(group).toBeInTheDocument();
+    expect(
+      await screen.findByRole("radio", {
+        name: /Follow this machine \(Codex\)/,
+      }),
+    ).toBeChecked();
+    expect(readBackendChoice()).toBe("follow-machine");
+  });
+
+  it("persists an explicit choice for this device", async () => {
+    stubMatchMedia();
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("radio", { name: "Pi" }));
+
+    expect(readBackendChoice()).toBe("pi");
+    expect(screen.getByRole("radio", { name: "Pi" })).toBeChecked();
+  });
+
+  it("shows an unusable backend disabled with the reason", async () => {
+    stubMatchMedia();
+    renderSettings({
+      defaultRuntime: "pi",
+      backends: [
+        { kind: "pi", available: true, reason: null },
+        {
+          kind: "codex",
+          available: false,
+          reason: "Codex could not be started.",
+        },
+      ],
+    });
+
+    const codex = await screen.findByRole("radio", {
+      name: /Codex.*could not be started/,
+    });
+    expect(codex).toBeDisabled();
   });
 });

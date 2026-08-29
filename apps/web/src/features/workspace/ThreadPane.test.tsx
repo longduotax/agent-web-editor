@@ -22,6 +22,7 @@ import type {
 } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  getOlderTranscriptPage: vi.fn(),
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
   markViewed: vi.fn(),
@@ -41,10 +42,35 @@ import { ApiClientError } from "../../api/client.js";
 import { isTextEntryTarget } from "./keybindings.js";
 import { ThreadPane } from "./ThreadPane.js";
 
+function localStorageFake(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length(): number {
+      return values.size;
+    },
+    clear(): void {
+      values.clear();
+    },
+    getItem(key: string): string | null {
+      return values.get(key) ?? null;
+    },
+    key(index: number): string | null {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key: string): void {
+      values.delete(key);
+    },
+    setItem(key: string, value: string): void {
+      values.set(key, value);
+    },
+  };
+}
+
 // The pane now asks the workspace listing whether its thread is still there
 // (see the archive derivation in ThreadPane). Every test that is not about
 // archiving wants the ordinary answer: yes.
 beforeEach(() => {
+  vi.stubGlobal("localStorage", localStorageFake());
   api.getWorkspace.mockResolvedValue({
     projects: [],
     threads: [{ id: threadId }],
@@ -61,6 +87,7 @@ afterEach(() => {
   // leaves one behind hands it to the next test's composer, which reads its
   // draft in a `useState` initialiser.
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 // jsdom has no layout, so scrollHeight/clientHeight are always 0 and any
@@ -99,7 +126,7 @@ const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 
 const snapshot: ThreadSnapshot = {
-  version: 1,
+  version: 2,
   project: {
     id: projectId,
     displayName: "Example project",
@@ -120,9 +147,10 @@ const snapshot: ThreadSnapshot = {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared", branchName: null, available: true },
   },
-  transcript: [],
+  transcriptPage: { items: [], olderCursor: null, atLatest: true },
   currentRun: null,
   lastRun: null,
   epoch: "40000000-0000-4000-8000-000000000001",
@@ -240,22 +268,25 @@ describe("ThreadPane", () => {
   it("renders the user turn as a quiet pill and the assistant turn as flowing text without a card", async () => {
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [
-        {
-          id: "u1",
-          kind: "message",
-          role: "user",
-          text: "Ping",
-          timestamp: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "a1",
-          kind: "message",
-          role: "assistant",
-          text: "Pong",
-          timestamp: "2026-01-01T00:00:01.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...snapshot.transcriptPage,
+        items: [
+          {
+            id: "u1",
+            kind: "message",
+            role: "user",
+            text: "Ping",
+            timestamp: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "a1",
+            kind: "message",
+            role: "assistant",
+            text: "Pong",
+            timestamp: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      },
     });
     renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
@@ -267,6 +298,123 @@ describe("ThreadPane", () => {
     const assistantBlock = screen.getByText("Pong").closest(".a-block");
     expect(assistantBlock).not.toBeNull();
     expect(assistantBlock).not.toHaveClass("message");
+  });
+
+  it("loads earlier history explicitly without requesting the complete chat", async () => {
+    const latest = {
+      id: "latest-message",
+      kind: "message" as const,
+      role: "assistant" as const,
+      text: "Latest",
+      timestamp: null,
+    };
+    const older = {
+      id: "older-message",
+      kind: "message" as const,
+      role: "user" as const,
+      text: "Earlier",
+      timestamp: null,
+    };
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: {
+        items: [latest],
+        olderCursor: "abcdefghijklmnop",
+        atLatest: true,
+      },
+    });
+    api.getOlderTranscriptPage.mockResolvedValue({
+      items: [older],
+      olderCursor: null,
+      atLatest: false,
+    });
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByText("Latest");
+    expect(screen.queryByText("Earlier")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Load earlier messages" }),
+    );
+    expect(await screen.findByText("Earlier")).toBeInTheDocument();
+    expect(api.getOlderTranscriptPage).toHaveBeenCalledWith(
+      projectId,
+      threadId,
+      "abcdefghijklmnop",
+    );
+  });
+
+  it("keeps a contiguous five-page history window and can jump back to latest", async () => {
+    const latest = {
+      id: "latest-message",
+      kind: "message" as const,
+      role: "assistant" as const,
+      text: "Latest remains visible",
+      timestamp: null,
+    };
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: {
+        items: [latest],
+        olderCursor: "cursor-0000000001",
+        atLatest: true,
+      },
+    });
+    for (let index = 1; index <= 6; index += 1) {
+      api.getOlderTranscriptPage.mockResolvedValueOnce({
+        items: [
+          {
+            id: `older-${String(index)}`,
+            kind: "message" as const,
+            role: "user" as const,
+            text: `Older ${String(index)}`,
+            timestamp: null,
+          },
+        ],
+        olderCursor: index < 6 ? `cursor-000000000${String(index + 1)}` : null,
+        atLatest: false,
+      });
+    }
+    const user = userEvent.setup();
+    renderPane();
+    await screen.findByText("Latest remains visible");
+
+    for (let index = 0; index < 6; index += 1) {
+      await user.click(
+        screen.getByRole("button", { name: "Load earlier messages" }),
+      );
+      await screen.findByText(`Older ${String(index + 1)}`);
+    }
+
+    // The window is oldest-first in loading order, so after the sixth prepend
+    // it contains 6 through 2 with no missing page in the middle.
+    for (let index = 2; index <= 6; index += 1)
+      expect(screen.getByText(`Older ${String(index)}`)).toBeInTheDocument();
+    expect(screen.queryByText("Older 1")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Latest remains visible"),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Jump to latest" }));
+    expect(
+      await screen.findByText("Latest remains visible"),
+    ).toBeInTheDocument();
+  });
+
+  it("retains an unavailable backend draft without allowing it to submit", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtimeAvailable: false },
+    });
+    const user = userEvent.setup();
+    renderPane();
+    const input = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(input, "Keep this draft");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("Keep this draft");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(api.prompt).not.toHaveBeenCalled();
   });
 
   // Rewritten for UX-4: the pane no longer stacks a second `.thread-header`
@@ -321,7 +469,10 @@ describe("ThreadPane", () => {
       scrollHeight: 2000,
       clientHeight: 400,
     });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { items: [ping], olderCursor: null, atLatest: true },
+    });
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
@@ -333,7 +484,11 @@ describe("ThreadPane", () => {
     geometry.set({ scrollHeight: 3000, clientHeight: 400 });
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [ping, pong],
+      transcriptPage: {
+        items: [ping, pong],
+        olderCursor: null,
+        atLatest: true,
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -403,7 +558,10 @@ describe("ThreadPane", () => {
       scrollHeight: 2000,
       clientHeight: 400,
     });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { items: [ping], olderCursor: null, atLatest: true },
+    });
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
@@ -419,7 +577,11 @@ describe("ThreadPane", () => {
     geometry.set({ scrollHeight: 3000, clientHeight: 400 });
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [ping, pong],
+      transcriptPage: {
+        items: [ping, pong],
+        olderCursor: null,
+        atLatest: true,
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -440,7 +602,10 @@ describe("ThreadPane", () => {
       scrollHeight: 2000,
       clientHeight: 400,
     });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { ...snapshot.transcriptPage, items: [ping] },
+    });
     api.prompt.mockResolvedValue({ run: null });
     const user = userEvent.setup();
     renderPane();
@@ -471,7 +636,10 @@ describe("ThreadPane", () => {
   // the browser — so an explicit way back is not a nicety.
   it("offers a way back to the newest content only while the reader is away from it", async () => {
     stubScrollGeometry({ scrollHeight: 2000, clientHeight: 400 });
-    api.getSnapshot.mockResolvedValue({ ...snapshot, transcript: [ping] });
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      transcriptPage: { ...snapshot.transcriptPage, items: [ping] },
+    });
     const user = userEvent.setup();
     renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
@@ -587,6 +755,59 @@ describe("failed run reporting", () => {
 
     await screen.findByRole("heading", { name: "Example thread" });
     expect(document.querySelector(".run-failure")).toBeNull();
+  });
+});
+
+describe("a continued chat exposes no backend control", () => {
+  // AGB-01: a chat's backend is immutable, and no resuming surface offers to
+  // change it. A regression here would be silent, so it is asserted rather
+  // than left to review.
+  it("offers no agent or provider control anywhere in the pane", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByText("Example thread");
+
+    expect(
+      screen.queryByRole("combobox", { name: /agent/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("radiogroup", { name: /agent/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: /provider|model|backend/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows which agent runs the chat, without offering to change it", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    renderPane();
+    await screen.findByText("Example thread");
+    expect(screen.getByText("Pi")).toBeInTheDocument();
+  });
+
+  it("addresses the composer to the agent that will read it", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtime: "codex" as const },
+    });
+    renderPane();
+    expect(
+      await screen.findByRole("textbox", { name: "Message Codex" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Message Pi" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("describes Codex execution as confined rather than as Pi's", async () => {
+    api.getSnapshot.mockResolvedValue({
+      ...snapshot,
+      thread: { ...snapshot.thread, runtime: "codex" as const },
+    });
+    renderPane();
+    await screen.findByText("Example thread");
+    expect(screen.getAllByText(/Confined execution/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Direct execution/)).not.toBeInTheDocument();
   });
 });
 
@@ -1193,7 +1414,10 @@ describe("live streaming", () => {
       text: "do the thing",
       timestamp: "2026-01-01T00:00:00.000Z",
     } as const;
-    api.getSnapshot.mockResolvedValue({ ...running, transcript: [prompt] });
+    api.getSnapshot.mockResolvedValue({
+      ...running,
+      transcriptPage: { ...running.transcriptPage, items: [prompt] },
+    });
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
     const socket = await connect();
@@ -1216,23 +1440,26 @@ describe("live streaming", () => {
     // so nothing replaces the live turn.
     api.getSnapshot.mockResolvedValue({
       ...running,
-      transcript: [
-        prompt,
-        {
-          id: "pi-answer",
-          kind: "message",
-          role: "assistant",
-          text: "Here is the answer.",
-          timestamp: "2026-01-01T00:00:02.000Z",
-        },
-        {
-          id: "pi-steer",
-          kind: "message",
-          role: "user",
-          text: "also add tests",
-          timestamp: "2026-01-01T00:00:03.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...running.transcriptPage,
+        items: [
+          prompt,
+          {
+            id: "pi-answer",
+            kind: "message",
+            role: "assistant",
+            text: "Here is the answer.",
+            timestamp: "2026-01-01T00:00:02.000Z",
+          },
+          {
+            id: "pi-steer",
+            kind: "message",
+            role: "user",
+            text: "also add tests",
+            timestamp: "2026-01-01T00:00:03.000Z",
+          },
+        ],
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -1414,15 +1641,18 @@ describe("live streaming", () => {
     // The run settles and Pi has now persisted the steer.
     api.getSnapshot.mockResolvedValue({
       ...snapshot,
-      transcript: [
-        {
-          id: "pi-1a2b3c4d",
-          kind: "message",
-          role: "user",
-          text: "Stop and reply BANANA",
-          timestamp: "2026-01-01T00:00:02.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...snapshot.transcriptPage,
+        items: [
+          {
+            id: "pi-1a2b3c4d",
+            kind: "message",
+            role: "user",
+            text: "Stop and reply BANANA",
+            timestamp: "2026-01-01T00:00:02.000Z",
+          },
+        ],
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -1439,22 +1669,25 @@ describe("live streaming", () => {
   it("keeps the echo when an earlier turn in this thread used the same words", async () => {
     const earlier: ThreadSnapshot = {
       ...running,
-      transcript: [
-        {
-          id: "pi-earlier",
-          kind: "message",
-          role: "user",
-          text: "keep going",
-          timestamp: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "pi-answer",
-          kind: "message",
-          role: "assistant",
-          text: "On it.",
-          timestamp: "2026-01-01T00:00:01.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...running.transcriptPage,
+        items: [
+          {
+            id: "pi-earlier",
+            kind: "message",
+            role: "user",
+            text: "keep going",
+            timestamp: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "pi-answer",
+            kind: "message",
+            role: "assistant",
+            text: "On it.",
+            timestamp: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      },
     };
     api.getSnapshot.mockResolvedValue(earlier);
     api.steer.mockResolvedValue({ run: earlier.currentRun });
@@ -1478,16 +1711,19 @@ describe("live streaming", () => {
     // copies must still be on screen.
     api.getSnapshot.mockResolvedValue({
       ...earlier,
-      transcript: [
-        ...earlier.transcript,
-        {
-          id: "pi-progress",
-          kind: "message",
-          role: "assistant",
-          text: "Still working.",
-          timestamp: "2026-01-01T00:00:02.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...earlier.transcriptPage,
+        items: [
+          ...earlier.transcriptPage.items,
+          {
+            id: "pi-progress",
+            kind: "message",
+            role: "assistant",
+            text: "Still working.",
+            timestamp: "2026-01-01T00:00:02.000Z",
+          },
+        ],
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -1527,15 +1763,18 @@ describe("live streaming", () => {
     // running -- this is the ordinary case, not the settled one.
     api.getSnapshot.mockResolvedValue({
       ...running,
-      transcript: [
-        {
-          id: "pi-1a2b3c4d",
-          kind: "message",
-          role: "user",
-          text: "fix the test",
-          timestamp: "2026-01-01T00:00:02.000Z",
-        },
-      ],
+      transcriptPage: {
+        ...running.transcriptPage,
+        items: [
+          {
+            id: "pi-1a2b3c4d",
+            kind: "message",
+            role: "user",
+            text: "fix the test",
+            timestamp: "2026-01-01T00:00:02.000Z",
+          },
+        ],
+      },
     });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
@@ -1630,6 +1869,9 @@ describe("live streaming", () => {
     // Same element, still focused: the box was not rebuilt underneath them.
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toBe(composer);
     expect(composer).toHaveFocus();
+    expect(localStorage.getItem(`pi-draft:${threadId}`)).toBe(
+      "and then\n\nwait, use pnpm",
+    );
   });
 
   // Nit 6. `lost` was filtered to `steer.runId === lastRun.id`, and a fast
@@ -1644,10 +1886,8 @@ describe("live streaming", () => {
     const { queryClient } = renderPane();
     await screen.findByRole("heading", { name: "Example thread" });
 
-    await user.type(
-      await screen.findByRole("textbox", { name: "Message Pi" }),
-      "wait, use pnpm",
-    );
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "wait, use pnpm");
     await user.keyboard("{Enter}");
     await screen.findByText("wait, use pnpm");
 
@@ -1675,6 +1915,7 @@ describe("live streaming", () => {
     // And it says why, although the run it belongs to is no longer the one
     // the pane has an outcome for.
     expect(screen.getByText(/never delivered/)).toBeInTheDocument();
+    expect(composer).toHaveFocus();
   });
 
   // Nit 5. The outcome notice is about the run that just ended; once the user
