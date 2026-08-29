@@ -82,13 +82,34 @@ Creation-operation rows make naming, provisioning, Pi session creation, thread
 insertion, and first-prompt acceptance idempotent across HTTP retries. Migration
 itself performs no Git or model operation.
 
+## Schema v8: same-worktree continuation
+
+Migration v8 removes only the one-thread-per-worktree unique index so several
+independent Pi sessions may share one managed execution root. It adds a durable
+continuation-operation record keyed by project/idempotency identity, a pending
+first-prompt-title bit on continuation threads, and a nullable run worktree ID
+with a partial one-running-run-per-managed-worktree index. Existing threads
+default to non-pending titles; historical run worktree IDs are backfilled from
+their thread relationship. The migration performs no Pi, Git, or filesystem
+operation.
+
+## Schema v9: deferred continuation prompt
+
+Migration v9 preserves every v8 row and extends continuation operations with a
+bounded initial title, stable prompt-command and native-dispatch identities, and
+a run reference. Exact `/new` writes none of these rows; the pending pane is a
+parsed device-local layout-v3 assignment. Its first real prompt reserves the
+operation and recovers title, session, thread, dispatch, receipt, and run effects
+under one request identity. V8-created blank threads retain their pending-title
+compatibility instead of being deleted or reinterpreted.
+
 ## Repository and transaction rules
 
 - Route handlers never consume Drizzle rows directly.
 - A malformed row produces a scoped corrupt-record result. Lists can retain healthy records with explicit diagnostics; they never silently repair or delete data.
 - Project registration canonicalizes before transaction. Re-adding a removed canonical path restores retained metadata.
 - Removal sets `removed_at` and never cascades into workspace or Pi files.
-- Run acceptance writes the receipt/run and acquires the partial unique thread lease atomically. Distinct threads may acquire independent leases even when they share a project.
+- Run acceptance writes the receipt/run and acquires the partial unique thread lease atomically. Managed-worktree threads also acquire the partial unique worktree lease; distinct worktrees and shared-checkout threads remain independent.
 - Completion updates run state, activity, and last-completed marker atomically. Viewing uses compare-and-set against the displayed completion.
 - Archiving is idempotent and metadata-only. Its transaction rejects a persisted running lease, sets `archived_at`, and replaces an archived `last_opened_thread_id` with the most recently active sibling or `NULL`.
 - Active thread reads parse persisted archive timestamps before filtering them. Archived sessions remain included in duplicate-import ownership checks.
@@ -99,8 +120,13 @@ itself performs no Git or model operation.
 - Schema v1 used a partial running-run index on `project_id`. Migration v2 preserves all records while replacing it with the `thread_id` partial index.
 - Migration v3 adds nullable `threads.archived_at` and an archive/activity
   index. Existing rows remain active without a data rewrite.
-- Migrations v4-v6 add managed worktrees, durable creation recovery, and
-  reviewed transfer tokens without changing archived-thread visibility.
+- Migrations v4-v7 add managed worktrees, durable creation recovery, reviewed
+  transfer tokens, and initial-prompt dispatch recovery without changing
+  archived-thread visibility.
+- Migration v8 adds same-worktree continuation metadata and leases without
+  creating a thread, session, branch, or worktree during migration.
+- Migration v9 extends continuation prompt recovery without creating a thread,
+  session, prompt, or run during migration.
 - Migration SQL and Drizzle's migration journal are committed and versioned.
 - Before applying pending migrations to a non-empty database, use SQLite's backup API to create a timestamped sibling backup.
 - Migration application is transactional where SQLite permits. Failure leaves the prior database authoritative.

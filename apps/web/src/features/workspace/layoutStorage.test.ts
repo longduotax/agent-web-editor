@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectId } from "@pi-web/contracts";
+import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import { createInitialLayout, tiledPaneIds } from "./layoutTree.js";
 import type { PaneId, WorkspaceLayout } from "./layoutTree.js";
@@ -140,14 +140,19 @@ describe("workspace layout storage", () => {
     expect(layout.focusedPaneId).toBe("pane-2");
   });
 
-  it("round-trips a v2 payload without migration or data loss", () => {
+  it("migrates a v2 payload into explicit new and thread assignments", () => {
     const removeItem = vi.fn();
     vi.stubGlobal("localStorage", {
       getItem: () =>
         JSON.stringify({
           version: 2,
           root: { type: "pane", id: "pane-1" },
-          panes: { "pane-1": { threadId: null } },
+          panes: {
+            "pane-1": { threadId: null },
+            "pane-2": {
+              threadId: "22222222-2222-4222-8222-222222222222",
+            },
+          },
           focusedPaneId: "pane-1",
           boundPaneId: null,
         }),
@@ -160,9 +165,40 @@ describe("workspace layout storage", () => {
     expect(removeItem).not.toHaveBeenCalled();
     expect(layout).toEqual({
       root: { type: "pane", id: "pane-1" },
-      panes: { "pane-1": { threadId: null } },
+      panes: {
+        "pane-1": { type: "new" },
+        "pane-2": {
+          type: "thread",
+          threadId: "22222222-2222-4222-8222-222222222222",
+        },
+      },
       focusedPaneId: "pane-1",
       boundPaneId: null,
     });
+  });
+
+  it("round-trips a pending continuation without creating a thread assignment", () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: () => undefined,
+    });
+    const sourceThreadId = "33333333-3333-4333-8333-333333333333" as ThreadId;
+    const initial = createInitialLayout(makeId);
+    const paneId = initial.focusedPaneId;
+    if (paneId === null) throw new Error("missing pane");
+    const layout: WorkspaceLayout = {
+      ...initial,
+      panes: {
+        [paneId]: { type: "continuation", sourceThreadId },
+      },
+    };
+
+    writeLayout(PROJECT_ID, layout);
+
+    expect(readLayout(PROJECT_ID, makeId)).toEqual(layout);
   });
 });

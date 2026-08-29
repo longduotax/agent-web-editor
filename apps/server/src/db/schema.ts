@@ -72,6 +72,7 @@ export const threads = sqliteTable(
     lastViewedCompletedRunId: text("last_viewed_completed_run_id"),
     archivedAt: text("archived_at"),
     worktreeId: text("worktree_id").references(() => worktrees.id),
+    initialTitlePending: integer("initial_title_pending").notNull().default(0),
   },
   (table) => [
     uniqueIndex("threads_project_runtime_unique").on(
@@ -88,7 +89,9 @@ export const threads = sqliteTable(
       table.archivedAt,
       table.lastActivityAt,
     ),
-    uniqueIndex("threads_worktree_unique").on(table.worktreeId),
+    index("threads_worktree_idx")
+      .on(table.worktreeId)
+      .where(sql`${table.worktreeId} IS NOT NULL`),
   ],
 );
 
@@ -110,12 +113,65 @@ export const runs = sqliteTable(
     acceptedCommandId: text("accepted_command_id").notNull().unique(),
     failureCode: text("failure_code"),
     failureMessage: text("failure_message"),
+    worktreeId: text("worktree_id").references(() => worktrees.id),
   },
   (table) => [
     index("runs_thread_started_idx").on(table.threadId, table.startedAt),
     uniqueIndex("runs_one_running_per_thread")
       .on(table.threadId)
       .where(sql`${table.state} = 'running'`),
+    uniqueIndex("runs_one_running_per_worktree")
+      .on(table.worktreeId)
+      .where(
+        sql`${table.state} = 'running' AND ${table.worktreeId} IS NOT NULL`,
+      ),
+  ],
+);
+
+export const threadContinuationOperations = sqliteTable(
+  "thread_continuation_operations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    sourceThreadId: text("source_thread_id")
+      .notNull()
+      .references(() => threads.id),
+    worktreeId: text("worktree_id")
+      .notNull()
+      .references(() => worktrees.id),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    state: text("state", {
+      enum: ["creating_session", "session_created", "thread_created", "failed"],
+    }).notNull(),
+    runtimeSessionId: text("runtime_session_id"),
+    threadId: text("thread_id").references(() => threads.id),
+    title: text("title"),
+    promptCommandId: text("prompt_command_id"),
+    initialPromptDispatchId: text("initial_prompt_dispatch_id"),
+    runId: text("run_id").references(() => runs.id),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+  },
+  (table) => [
+    uniqueIndex("thread_continuation_project_key_unique").on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    index("thread_continuation_project_state_idx").on(
+      table.projectId,
+      table.state,
+    ),
+    uniqueIndex("thread_continuation_prompt_command_unique")
+      .on(table.projectId, table.promptCommandId)
+      .where(sql`${table.promptCommandId} IS NOT NULL`),
+    uniqueIndex("thread_continuation_prompt_dispatch_unique")
+      .on(table.initialPromptDispatchId)
+      .where(sql`${table.initialPromptDispatchId} IS NOT NULL`),
   ],
 );
 

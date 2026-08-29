@@ -24,6 +24,7 @@ import {
   getSnapshot,
   getWorkspace,
   markViewed,
+  preflightContinuation,
   prompt,
   steer,
   stop,
@@ -64,6 +65,7 @@ export interface ThreadPaneProps {
   onFocus(): void;
   onClose(): void;
   onSplit(): void;
+  onContinue?(): void;
 }
 
 /**
@@ -463,6 +465,7 @@ export function Composer({
   snapshot,
   onSteered,
   onSent,
+  onContinue,
   restoreDraft,
 }: {
   projectId: ProjectId;
@@ -486,6 +489,8 @@ export function Composer({
     | undefined;
   /** Anything was sent: re-pin the transcript to the bottom. */
   onSent?: (() => void) | undefined;
+  /** Exact `/new` passed preflight and should open a pending sibling pane. */
+  onContinue?: (() => void) | undefined;
   /**
    * A token whose identity changes when the pane has written something back
    * into this thread's draft — an undelivered steer handed back after a
@@ -505,6 +510,14 @@ export function Composer({
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
+  const continuing = useMutation({
+    mutationFn: async () => await preflightContinuation(projectId, threadId),
+    onSuccess: () => {
+      setText("");
+      removeDraft(`pi-draft:${threadId}`);
+      onContinue?.();
+    },
+  });
   // Stop used to be `void stop(...).then(...)` with no rejection handler: a
   // Stop the server refused produced an unhandled promise rejection in the
   // console and NOTHING on screen, so the run went on running under a button
@@ -566,7 +579,12 @@ export function Composer({
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (text.trim() === "") return;
+    const submitted = text.trim();
+    if (submitted === "") return;
+    if (submitted === "/new") {
+      continuing.mutate();
+      return;
+    }
     // Before the request, not after it: sending is the moment the reader
     // expects to be taken to the bottom, and waiting for the response would
     // leave them staring at old history for the length of a round trip.
@@ -581,70 +599,108 @@ export function Composer({
     mutation.error.code === "thread_not_found";
   return (
     <form className={`composer${active ? " steering" : ""}`} onSubmit={submit}>
-      <div className="composer-input">
-        <textarea
-          ref={textareaRef}
-          aria-label="Message Pi"
-          // The mode was previously visible ONLY on the submit button's
-          // aria-label, i.e. after the decision to send had already been
-          // made. Placeholder, hint line and the rule above them now say it
-          // too, so "am I adding to this run or starting a new turn?" is
-          // answerable before the keystroke rather than after it.
-          placeholder={
-            active
-              ? "Steer this run — Pi picks it up mid-task…"
-              : "Ask Pi to work in this project…"
-          }
-          rows={1}
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (isReleaseKey(event)) {
-              event.preventDefault();
-              releaseFocusToPane(event.currentTarget);
-              return;
-            }
-            if (
-              event.key !== "Enter" ||
-              event.shiftKey ||
-              event.nativeEvent.isComposing
-            )
-              return;
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }}
-        />
-        <div className="composer-actions">
-          <span>
-            {active
-              ? "Enter to steer this run · Shift + Enter for a new line · Esc to leave the composer"
-              : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
-          </span>
-          {active && (
-            <button
-              type="button"
-              className="stop"
-              disabled={stopping.isPending}
-              onClick={() => {
-                stopping.mutate();
-              }}
-            >
-              ■ Stop
-            </button>
-          )}
+      <div className="composer-stack">
+        {text.trimStart().startsWith("/") && (
           <button
-            type="submit"
-            className="send"
-            aria-label={active ? "Steer current run" : "Send message"}
-            title={active ? "Steer current run" : "Send message"}
-            disabled={mutation.isPending || text.trim() === ""}
+            type="button"
+            className="composer-command"
+            aria-label="/new — New chat in this worktree"
+            onClick={() => {
+              setText("/new");
+              textareaRef.current?.focus();
+            }}
           >
-            <span aria-hidden="true">↑</span>
+            <code>/new</code> — New chat in this worktree
           </button>
+        )}
+        <div className="composer-input">
+          <textarea
+            ref={textareaRef}
+            aria-label="Message Pi"
+            // The mode was previously visible ONLY on the submit button's
+            // aria-label, i.e. after the decision to send had already been
+            // made. Placeholder, hint line and the rule above them now say it
+            // too, so "am I adding to this run or starting a new turn?" is
+            // answerable before the keystroke rather than after it.
+            placeholder={
+              active
+                ? "Steer this run — Pi picks it up mid-task…"
+                : "Ask Pi to work in this project…"
+            }
+            rows={1}
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (isReleaseKey(event)) {
+                event.preventDefault();
+                releaseFocusToPane(event.currentTarget);
+                return;
+              }
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing
+              )
+                return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
+          />
+          <div className="composer-actions">
+            <span>
+              {active
+                ? "Enter to steer this run · Shift + Enter for a new line · Esc to leave the composer"
+                : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
+            </span>
+            {active && (
+              <button
+                type="button"
+                className="stop"
+                disabled={stopping.isPending}
+                onClick={() => {
+                  stopping.mutate();
+                }}
+              >
+                ■ Stop
+              </button>
+            )}
+            <button
+              type="submit"
+              className="send"
+              aria-label={
+                text.trim() === "/new"
+                  ? "Start new chat in this worktree"
+                  : active
+                    ? "Steer current run"
+                    : "Send message"
+              }
+              title={
+                text.trim() === "/new"
+                  ? "Start new chat in this worktree"
+                  : active
+                    ? "Steer current run"
+                    : "Send message"
+              }
+              disabled={
+                mutation.isPending || continuing.isPending || text.trim() === ""
+              }
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          </div>
         </div>
       </div>
+      {continuing.error !== null && (
+        <ErrorNotice
+          error={continuing.error}
+          context="Could not start a new chat in this worktree"
+          onRetry={() => {
+            continuing.mutate();
+          }}
+        />
+      )}
       {stopping.error !== null && (
         <ErrorNotice
           error={stopping.error}
@@ -1155,6 +1211,9 @@ function ThreadPaneBody(props: ThreadPaneProps) {
               threadId={threadId}
               snapshot={snapshot.data}
               onSteered={onSteered}
+              onContinue={() => {
+                props.onContinue?.();
+              }}
               onSent={() => {
                 setUndelivered(null);
                 // Only a notice that is on screen right now can be dismissed

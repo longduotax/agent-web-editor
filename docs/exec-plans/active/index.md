@@ -86,3 +86,12 @@ superseded, or abandoned.
   projection, append-stable opaque cursors, a bounded browser page window,
   polite live following, latest-edge entry, anchor-preserving older-history
   navigation, and a restrained transcript scrollbar.
+- [Same-worktree new-chat command](2026-08-29-same-worktree-new-chat-command.md) —
+  Active plan version 2, approved by the user on 2026-08-29. The approved version 1
+  immediate-creation implementation exists in this worktree, but the user
+  selected a material deferred-creation revision before promotion: exact `/new`
+  should open a device-local pending same-worktree composer and create no thread
+  or Pi session until its first real prompt. Plan v2 adds a parsed pending-pane
+  layout state, read-only command preflight, recovery-safe first-prompt creation,
+  and forward v9 compatibility while retaining one-to-many worktree ownership,
+  the one-active-sibling-agent lease, panel/terminal scope, and blank context.

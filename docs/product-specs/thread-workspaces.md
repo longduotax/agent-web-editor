@@ -2,23 +2,25 @@
 
 **Current version:** 2
 
-**Proposed version:** None
+**Proposed version:** 4
 
-**Proposal status:** None
+**Proposal status:** Approved
 
-**Implementation status:** Current
+**Implementation status:** In progress
 
-**Product approval:** Not applicable — no proposed revision
+**Product approval:** Approved by the user on 2026-08-29 for specification version 4
 
 **Subsystem:** New-chat creation, thread execution locations, and Git worktrees
 
 **Last verified:** 2026-08-16
 
-**Related ExecPlans:** [Thread workspace and worktree support](../exec-plans/completed/2026-08-16-thread-workspaces.md)
+**Related ExecPlans:** [Thread workspace and worktree support](../exec-plans/completed/2026-08-16-thread-workspaces.md),
+[Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md)
 
 **Related documents:** [Initial agent workspace](initial-workspace.md),
-[architecture overview](../architecture/overview.md), and
-[inspector and terminal boundaries](../design/inspector-and-terminal.md)
+[architecture overview](../architecture/overview.md),
+[inspector and terminal boundaries](../design/inspector-and-terminal.md), and
+[interactive continuation-flow prototype](../design/worktree-chat-continuation-flow.html)
 
 ## Purpose
 
@@ -302,5 +304,173 @@ session because those identities must remain stable after provisioning.
   from accessing paths outside the execution root.
 
 ## Open product questions
+
+- None for the Current version 2 contract.
+
+## Proposed revision v4 — Deferred same-worktree new chat
+
+Version 4 keeps version 3's explicit context-reset workflow but changes when the
+new durable conversation comes into existence. Exact `/new` moves the invoking
+pane into a pending same-worktree composer. The application creates the thread,
+native Pi session, and first run only after the user submits a real task prompt,
+matching the ordinary split/new-chat lifecycle and avoiding abandoned empty
+threads. The Current version 2 behavior above remains authoritative until this
+proposal is approved, implemented, and verified.
+
+### TW-10 — Exact `/new` application command
+
+In an idle isolated-thread composer, entering exactly `/new` after surrounding
+whitespace is trimmed and submitting it invokes an application command. The
+application consumes the command; it never sends `/new` to Pi, records it in the
+old native transcript, or treats it as a prompt, skill, extension command, or
+prompt template.
+
+Typing a slash exposes a compact command suggestion that identifies `/new` as
+“New chat in this worktree.” The command has no arguments in version 4:
+`/new anything` remains an ordinary Pi input rather than silently discarding or
+moving the additional text. No equivalent header, sidebar, or confirmation
+button is added.
+
+The application verifies that the source has an available managed worktree and
+no active sibling agent before leaving the source chat. When that check fails,
+the user stays in the original chat, the command remains available to retry, and
+a scoped explanation is shown. Every other composer submission, including every
+other slash-prefixed value, retains Current Pi behavior.
+
+### TW-11 — Pending chat first; durable chat on first prompt
+
+A successful `/new` replaces the source chat in the invoking pane with a blank,
+focused, pending same-worktree composer titled `New chat`. At command time the
+application creates no thread, native Pi session, transcript, run, sidebar row,
+or unread state. If the user never submits a task, no server-side conversation
+artifact exists.
+
+The pending pane retains only the source thread's opaque identity, first-prompt
+creation identity, and its own unsent draft in parsed device-local browser
+storage. It never retains or receives an
+absolute path. Reloading the same browser may restore that pending pane, but it
+is not a server-backed conversation and does not appear in thread navigation.
+Closing the pane or replacing it with another thread discards the pending state
+and its draft without archiving or deleting any server object.
+
+The source thread, native session, transcript, runs, title, and unread state
+remain untouched and reopenable through normal thread navigation. Submitting the
+first ordinary prompt re-resolves the source's managed worktree server-side and
+creates exactly one new persistent application thread and one new native Pi
+session whose working directory is that same verified execution root.
+
+`/new` is unavailable in a Local checkout/shared thread in version 4. The
+application consumes the exact command there too, but returns a visible
+“managed worktree required” explanation rather than passing it to Pi or silently
+creating a different kind of chat.
+
+### TW-12 — Files are continuity; conversation context is not
+
+Entering the pending chat and submitting its first prompt perform no Git
+checkout, branch, commit, stash, reset, clean, patch, copy, or file transfer. The
+managed worktree, branch, index, tracked files, untracked files, and ignored
+files stay byte-for-byte/status unchanged. A dirty worktree is allowed without
+confirmation because the flow reuses those exact files rather than transferring
+an inferred snapshot.
+
+The new native session contains no messages, summary, generated handoff,
+selected transcript excerpts, or hidden prompt from the source chat. Its only
+initial conversation input is the task the user explicitly submits in the
+pending composer. The user may ask the old agent to write a handoff and paste it
+themselves, but the application does not generate or attach one.
+
+### TW-13 — One active agent per reused managed worktree
+
+The application refuses `/new` while the source thread or any sibling thread in
+the same managed worktree has a running or prompt-preflight agent operation. It
+checks the same condition again when the pending composer submits its first
+prompt, because work may have started after the pane became pending. A busy,
+missing, moved, non-ready, or repository-mismatched worktree leaves the pending
+prompt retryable and creates no second run or fallback chat.
+
+After continuation chats exist, at most one of their agent runs may be in
+preflight or running at once. This worktree-scoped lease is limited to threads
+that share one managed worktree. Current concurrency remains unchanged for
+threads in distinct managed worktrees and for shared Local checkout threads,
+which continue to use their existing thread-scoped run leases.
+
+A terminal is not an agent run and does not block `/new` or a later prompt.
+Existing terminals and panel tabs remain bound to the same execution scope and
+are not restarted, retargeted, or closed by the pending transition or first
+prompt.
+
+### TW-14 — First-prompt creation, naming, idempotency, and recovery
+
+The first ordinary prompt is the creation boundary. One submission creates or
+recovers the new native session and application thread, derives the initial
+title from that prompt under TW-09, accepts the prompt as the first run, and
+replaces the pending pane with the resulting durable thread. There is no
+server-side placeholder thread to rename before that submission. Naming never
+renames or moves the reused worktree, branch, directory, or source native
+session.
+
+Duplicate submission, HTTP retry, browser reconnection, or server restart
+creates at most one continuation thread, native session, accepted first prompt,
+and run for one first-prompt creation identity. If failure occurs after native
+session or thread allocation, retry recovers that same operation rather than
+allocating another. A thread allocated after an explicit first-prompt attempt
+may remain available if native prompt acceptance fails, consistent with TW-05;
+the no-empty-thread guarantee applies to abandoning `/new` before any task is
+submitted.
+
+### Proposed acceptance criteria
+
+1. In an idle isolated chat, typing exact `/new` and pressing Enter focuses a
+   blank pending composer in the same pane and execution scope without creating
+   a thread, Pi session, run, transcript, or sidebar row.
+2. Closing or replacing an unused pending pane leaves no server-side artifact;
+   its device-local pending state and draft are discarded, while a same-browser
+   reload may restore them.
+3. The exact command is absent from the old Pi transcript and every other slash
+   input retains native Pi handling; `/new anything` is not intercepted.
+4. The source chat remains reopenable with its complete history after the
+   pending pane replaces it and after the continuation thread is eventually
+   created.
+5. The first ordinary prompt creates one durable thread and distinct native
+   session at the source thread's verified execution root, starts the first run,
+   and derives the initial title without a placeholder-thread phase.
+6. Clean, staged, unstaged, untracked, and ignored worktree state is exactly
+   unchanged by both `/new` and the first prompt, with no confirmation or
+   transfer operation.
+7. The new session receives no copied or generated conversation context; its
+   only initial input is the user's first ordinary prompt.
+8. `/new` in a shared Local checkout chat, or `/new`/first-prompt creation
+   against an unavailable or busy managed worktree, fails visibly, never falls
+   back, and preserves the appropriate source or pending composer for retry.
+9. Two continuation siblings cannot enter prompt preflight or run concurrently;
+   distinct managed worktrees and Local checkout threads retain Current
+   concurrency behavior.
+10. Existing terminals and panel tabs continue to identify the reused worktree
+    as one execution scope across source, pending, and durable continuation
+    states and remain alive and correctly labelled.
+11. Duplicate/retried first-prompt submissions and interruption between native
+    session creation, metadata attachment, prompt dispatch, and run acceptance
+    recover to at most one continuation thread, session, accepted prompt, and
+    run.
+
+### Proposed non-goals
+
+- Automatic context rollover based on token usage, conversation length, commits,
+  or any other heuristic.
+- Generated handoffs, transcript summaries, hidden prompts, copied messages, or
+  automatic context selection.
+- Arguments or an initial task on the `/new` line; the command is exact and
+  opens a blank pending composer.
+- A new-chat button, confirmation dialog, or workspace picker for this flow.
+- A server-backed empty continuation thread before the first task prompt.
+- Cross-device pending-pane synchronization or a sidebar entry for pending
+  chats.
+- Reusing a different thread's worktree, selecting from existing worktrees, or
+  attaching an externally managed worktree.
+- Running two agents concurrently in one reused managed worktree.
+- Committing, cleaning, or otherwise preparing the worktree automatically.
+- Same-checkout continuation from a shared Local checkout thread in version 4.
+
+### Proposed open product questions
 
 - None.

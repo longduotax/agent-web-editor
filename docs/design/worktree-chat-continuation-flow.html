@@ -1,0 +1,1514 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pi — New chat in the same worktree</title>
+    <style>
+      :root,
+      :root[data-theme="light"] {
+        --page: #f6f7f8;
+        --surface: #ffffff;
+        --surface-2: #fafafa;
+        --surface-3: #f1f2f3;
+        --text: #1e2024;
+        --text-2: #4d5158;
+        --muted: #777c85;
+        --faint: #a3a7ae;
+        --line: #e4e5e7;
+        --line-strong: #d6d8db;
+        --accent: #2563eb;
+        --accent-soft: #edf3ff;
+        --green: #238636;
+        --green-soft: #eef8f0;
+        --amber: #a15c00;
+        --amber-soft: #fff7e8;
+        --red: #cf3f36;
+        --red-soft: #fff0ef;
+        --shadow: 0 12px 40px rgba(20, 24, 32, 0.1);
+        --shadow-small: 0 2px 8px rgba(20, 24, 32, 0.06);
+      }
+
+      :root[data-theme="dark"] {
+        --page: #101114;
+        --surface: #17191d;
+        --surface-2: #1c1e23;
+        --surface-3: #24272d;
+        --text: #f0f1f2;
+        --text-2: #c4c7cc;
+        --muted: #91959d;
+        --faint: #666b74;
+        --line: rgba(255, 255, 255, 0.08);
+        --line-strong: rgba(255, 255, 255, 0.14);
+        --accent: #71a0ff;
+        --accent-soft: rgba(63, 113, 220, 0.17);
+        --green: #60c878;
+        --green-soft: rgba(53, 151, 76, 0.14);
+        --amber: #e3a548;
+        --amber-soft: rgba(190, 125, 29, 0.14);
+        --red: #ef746c;
+        --red-soft: rgba(194, 64, 55, 0.14);
+        --shadow: 0 14px 46px rgba(0, 0, 0, 0.42);
+        --shadow-small: 0 2px 8px rgba(0, 0, 0, 0.24);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--page);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        font-size: 14px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+        outline-offset: 2px;
+      }
+
+      code,
+      .mono {
+        font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      }
+
+      .prototype-bar {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: grid;
+        grid-template-columns: minmax(210px, 1fr) auto minmax(210px, 1fr);
+        align-items: center;
+        gap: 20px;
+        min-height: 58px;
+        padding: 8px 18px;
+        background: color-mix(in srgb, var(--surface) 91%, transparent);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(16px);
+      }
+
+      .prototype-title {
+        min-width: 0;
+      }
+
+      .prototype-title strong {
+        display: block;
+        overflow: hidden;
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .prototype-title span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+
+      .flow-nav,
+      .segmented {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface-3);
+      }
+
+      .flow-nav button,
+      .segmented button {
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .flow-nav button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+
+      .flow-nav button .number {
+        display: grid;
+        width: 18px;
+        height: 18px;
+        place-items: center;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--muted) 16%, transparent);
+        font-size: 10.5px;
+        font-weight: 700;
+      }
+
+      .flow-nav button[aria-current="step"],
+      .segmented button[aria-pressed="true"] {
+        color: var(--text);
+        background: var(--surface);
+        box-shadow: var(--shadow-small);
+      }
+
+      .flow-nav button[aria-current="step"] .number {
+        color: white;
+        background: var(--accent);
+      }
+
+      .prototype-controls {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .segmented button {
+        padding: 6px 9px;
+        font-size: 11.5px;
+      }
+
+      .scenario-label {
+        align-self: center;
+        color: var(--faint);
+        font-size: 11px;
+      }
+
+      .shell-wrap {
+        padding: 18px;
+      }
+
+      .shell {
+        position: relative;
+        display: grid;
+        grid-template-columns: 250px minmax(460px, 1fr) 300px;
+        width: min(1440px, 100%);
+        height: calc(100vh - 95px);
+        min-height: 650px;
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: var(--shadow-small);
+      }
+
+      .sidebar {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        border-right: 1px solid var(--line);
+        background: var(--surface-2);
+      }
+
+      .sidebar-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .logo {
+        font-size: 16px;
+        font-weight: 720;
+      }
+
+      .project-switcher {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        font-weight: 620;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chevron {
+        color: var(--muted);
+      }
+
+      .sidebar-scroll {
+        flex: 1;
+        overflow: auto;
+        padding: 12px 9px;
+      }
+
+      .section-label {
+        display: flex;
+        align-items: center;
+        padding: 5px 8px 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .section-label span:first-child {
+        flex: 1;
+      }
+
+      .tiny-add,
+      .icon-button {
+        display: grid;
+        border: 0;
+        border-radius: 7px;
+        place-items: center;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .tiny-add {
+        width: 22px;
+        height: 22px;
+        font-size: 18px;
+      }
+
+      .tiny-add:hover,
+      .icon-button:hover {
+        color: var(--text);
+        background: var(--surface-3);
+      }
+
+      .workspace {
+        margin-bottom: 8px;
+        overflow: hidden;
+        border: 1px solid transparent;
+        border-radius: 10px;
+      }
+
+      .workspace.active {
+        border-color: var(--line);
+        background: var(--surface);
+      }
+
+      .workspace-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 7px;
+        padding: 9px 8px;
+      }
+
+      .branch-icon {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .workspace-name {
+        overflow: hidden;
+        font-size: 12.5px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-state {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      .workspace-state.dirty {
+        background: var(--amber);
+      }
+
+      .workspace-state.busy {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .chat-list {
+        margin: 0;
+        padding: 0 5px 6px 29px;
+        list-style: none;
+      }
+
+      .chat-item {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        padding: 6px 8px;
+        border-radius: 7px;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .chat-item.active {
+        color: var(--text);
+        background: var(--surface-3);
+      }
+
+      .chat-item .chat-title {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chat-item .chat-state {
+        color: var(--green);
+        font-size: 10px;
+      }
+
+      .chat-item.pending {
+        color: var(--accent);
+      }
+
+      .new-chat-row {
+        display: none;
+      }
+
+      body[data-step="creating"] .new-chat-row,
+      body[data-step="fresh"] .new-chat-row {
+        display: flex;
+      }
+
+      body[data-step="fresh"] .old-chat-row {
+        color: var(--muted);
+        background: transparent;
+      }
+
+      body[data-step="fresh"] .new-chat-row {
+        color: var(--text);
+        background: var(--surface-3);
+      }
+
+      .local-workspace {
+        opacity: 0.7;
+      }
+
+      .sidebar-foot {
+        padding: 10px 12px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11.5px;
+        line-height: 1.45;
+      }
+
+      .main {
+        position: relative;
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex-direction: column;
+        background: var(--surface);
+      }
+
+      .chat-head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 54px;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .chat-heading {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .chat-heading strong {
+        display: block;
+        overflow: hidden;
+        font-size: 13.5px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chat-heading span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 230px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--text-2);
+        background: var(--surface-2);
+        font-size: 11px;
+      }
+
+      .pill code {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      .dot.busy {
+        background: var(--accent);
+      }
+
+      .icon-button {
+        width: 32px;
+        height: 32px;
+        font-size: 18px;
+      }
+
+      .transcript {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 22px clamp(24px, 7vw, 92px) 28px;
+      }
+
+      .user-row {
+        display: flex;
+        justify-content: flex-end;
+        margin: 12px 0 20px;
+      }
+
+      .user-message {
+        max-width: 80%;
+        padding: 9px 12px;
+        border-radius: 15px;
+        background: var(--surface-3);
+        line-height: 1.45;
+      }
+
+      .assistant-message {
+        color: var(--text-2);
+        line-height: 1.62;
+      }
+
+      .assistant-message strong {
+        color: var(--text);
+      }
+
+      .assistant-message ul {
+        margin: 8px 0;
+        padding-left: 20px;
+      }
+
+      .assistant-message li {
+        margin: 4px 0;
+      }
+
+      .checkpoint {
+        margin-top: 18px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--surface-2);
+      }
+
+      .checkpoint-head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        font-weight: 650;
+      }
+
+      .checkpoint-icon {
+        display: grid;
+        width: 25px;
+        height: 25px;
+        place-items: center;
+        border-radius: 7px;
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .checkpoint-grid {
+        display: grid;
+        grid-template-columns: 95px 1fr;
+        gap: 7px 12px;
+        padding: 11px 12px;
+        font-size: 12px;
+      }
+
+      .checkpoint-grid dt {
+        color: var(--muted);
+      }
+
+      .checkpoint-grid dd {
+        min-width: 0;
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .composer-wrap {
+        padding: 11px 16px 15px;
+        border-top: 1px solid var(--line);
+      }
+
+      .composer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 5px 5px 5px 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 13px;
+        background: var(--surface);
+        box-shadow: var(--shadow-small);
+      }
+
+      .composer input {
+        min-width: 0;
+        flex: 1;
+        padding: 6px 0;
+        border: 0;
+        outline: 0;
+        color: var(--text);
+        background: transparent;
+      }
+
+      .composer input::placeholder {
+        color: var(--faint);
+      }
+
+      .send {
+        display: grid;
+        width: 29px;
+        height: 29px;
+        border: 0;
+        border-radius: 50%;
+        place-items: center;
+        color: var(--surface);
+        background: var(--text);
+        cursor: pointer;
+      }
+
+      .current-view {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+      }
+
+      .fresh-view,
+      .creating-view {
+        display: none;
+        min-height: 0;
+        flex: 1;
+      }
+
+      body[data-step="fresh"] .current-view,
+      body[data-step="creating"] .current-view {
+        display: none;
+      }
+
+      body[data-step="fresh"] .fresh-view {
+        display: flex;
+        flex-direction: column;
+      }
+
+      body[data-step="creating"] .creating-view {
+        display: grid;
+        place-items: center;
+      }
+
+      .creating-card {
+        width: min(430px, calc(100% - 40px));
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: var(--surface-2);
+        box-shadow: var(--shadow-small);
+      }
+
+      .creating-card h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .creating-card > p {
+        margin: 6px 0 20px;
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.5;
+      }
+
+      .progress-row {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 10px;
+        align-items: start;
+        margin: 12px 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .progress-row strong {
+        display: block;
+        color: var(--text-2);
+        font-weight: 620;
+      }
+
+      .progress-row span:last-child {
+        display: block;
+        margin-top: 2px;
+      }
+
+      .progress-mark {
+        display: grid;
+        width: 20px;
+        height: 20px;
+        place-items: center;
+        border-radius: 50%;
+        color: var(--green);
+        background: var(--green-soft);
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .spinner {
+        width: 18px;
+        height: 18px;
+        margin: 1px;
+        border: 2px solid var(--line-strong);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .fresh-empty {
+        display: grid;
+        min-height: 0;
+        flex: 1;
+        place-items: center;
+        padding: 28px;
+      }
+
+      .fresh-card {
+        width: min(560px, 100%);
+        text-align: center;
+      }
+
+      .fresh-symbol {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 14px;
+        border-radius: 14px;
+        place-items: center;
+        color: var(--accent);
+        background: var(--accent-soft);
+        font-size: 23px;
+      }
+
+      .fresh-card h2 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+
+      .fresh-card > p {
+        max-width: 470px;
+        margin: 8px auto 18px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .identity-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 7px;
+        margin-bottom: 18px;
+      }
+
+      .identity-chip {
+        padding: 6px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--text-2);
+        background: var(--surface-2);
+        font-size: 11.5px;
+      }
+
+      .fresh-note {
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 11px 13px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        text-align: left;
+        background: var(--surface-2);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .fresh-note strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .fresh-note span {
+        color: var(--muted);
+      }
+
+      .spec-rail {
+        min-width: 0;
+        overflow: auto;
+        border-left: 1px solid var(--line);
+        background: var(--surface-2);
+      }
+
+      .rail-head {
+        padding: 14px 15px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .rail-head strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .rail-head span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .rail-section {
+        padding: 14px 15px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .rail-section h3 {
+        margin: 0 0 9px;
+        color: var(--muted);
+        font-size: 10.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .guarantee {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 7px;
+        margin: 9px 0;
+        color: var(--text-2);
+        font-size: 11.5px;
+        line-height: 1.4;
+      }
+
+      .guarantee .check {
+        color: var(--green);
+        font-weight: 800;
+      }
+
+      .decision {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 9px 0;
+        font-size: 11.5px;
+        line-height: 1.4;
+      }
+
+      .decision-label {
+        flex: none;
+        padding: 2px 5px;
+        border-radius: 5px;
+        color: var(--accent);
+        background: var(--accent-soft);
+        font-size: 9.5px;
+        font-weight: 750;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .rail-callout {
+        margin: 13px 15px;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        color: var(--muted);
+        background: var(--surface);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .command-menu {
+        display: none;
+        max-width: 760px;
+        margin: 0 auto 8px;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: var(--shadow-small);
+      }
+
+      body[data-step="command"] .command-menu {
+        display: block;
+      }
+
+      .command-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 11px;
+      }
+
+      .command-name {
+        padding: 4px 7px;
+        border-radius: 6px;
+        color: var(--accent);
+        background: var(--accent-soft);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .command-copy strong {
+        display: block;
+        font-size: 12px;
+      }
+
+      .command-copy span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .command-enter {
+        color: var(--faint);
+        font-size: 10.5px;
+      }
+
+      .command-status {
+        display: none;
+        padding: 8px 11px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      body[data-scenario="dirty"] .command-status.dirty {
+        display: block;
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      body[data-scenario="busy"] .command-status.busy {
+        display: block;
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .scenario-clean,
+      .scenario-dirty,
+      .scenario-busy {
+        display: none;
+      }
+
+      body[data-scenario="clean"] .scenario-clean,
+      body[data-scenario="dirty"] .scenario-dirty,
+      body[data-scenario="busy"] .scenario-busy {
+        display: inline;
+      }
+
+      body[data-scenario="dirty"] .workspace-state {
+        background: var(--amber);
+      }
+
+      body[data-scenario="busy"] .workspace-state {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .mobile-warning {
+        display: none;
+        padding: 10px 14px;
+        color: var(--muted);
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+        font-size: 11px;
+      }
+
+      @media (max-width: 1120px) {
+        .prototype-bar {
+          grid-template-columns: 1fr auto;
+        }
+
+        .flow-nav {
+          grid-column: 1 / -1;
+          grid-row: 2;
+          justify-self: center;
+        }
+
+        .shell {
+          height: calc(100vh - 143px);
+          grid-template-columns: 220px minmax(430px, 1fr);
+        }
+
+        .spec-rail {
+          display: none;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .prototype-bar {
+          position: static;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .prototype-title {
+          flex: 1 1 100%;
+        }
+
+        .flow-nav {
+          order: 3;
+          width: 100%;
+          overflow: auto;
+          justify-content: flex-start;
+        }
+
+        .prototype-controls {
+          flex-wrap: wrap;
+          justify-content: flex-start;
+        }
+
+        .shell-wrap {
+          padding: 0;
+        }
+
+        .mobile-warning {
+          display: block;
+        }
+
+        .shell {
+          display: block;
+          width: 100%;
+          height: 720px;
+          min-height: 0;
+          border-width: 0;
+          border-radius: 0;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .main {
+          height: 100%;
+        }
+
+        .chat-head .pill {
+          display: none;
+        }
+
+        .transcript {
+          padding: 18px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation: none;
+          border-color: var(--accent);
+        }
+      }
+    </style>
+  </head>
+  <body data-step="current" data-scenario="clean">
+    <header class="prototype-bar">
+      <div class="prototype-title">
+        <strong>New chat in the same worktree</strong>
+        <span>Interactive product-flow prototype · not implemented</span>
+      </div>
+
+      <nav class="flow-nav" aria-label="Prototype step">
+        <button type="button" data-step-button="current" aria-current="step">
+          <span class="number">1</span> Checkpoint
+        </button>
+        <button type="button" data-step-button="command">
+          <span class="number">2</span> Type /new
+        </button>
+        <button type="button" data-step-button="creating">
+          <span class="number">3</span> Create
+        </button>
+        <button type="button" data-step-button="fresh">
+          <span class="number">4</span> New chat
+        </button>
+      </nav>
+
+      <div class="prototype-controls">
+        <span class="scenario-label">Scenario</span>
+        <div class="segmented" aria-label="Workspace scenario">
+          <button type="button" data-scenario-button="clean" aria-pressed="true">
+            Clean
+          </button>
+          <button type="button" data-scenario-button="dirty" aria-pressed="false">
+            Uncommitted
+          </button>
+          <button type="button" data-scenario-button="busy" aria-pressed="false">
+            Agent running
+          </button>
+        </div>
+        <div class="segmented" aria-label="Theme">
+          <button type="button" data-theme-button="light" aria-pressed="true">
+            Light
+          </button>
+          <button type="button" data-theme-button="dark" aria-pressed="false">
+            Dark
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="mobile-warning">
+      This flow is shown without the workspace navigation on narrow screens.
+    </div>
+
+    <div class="shell-wrap">
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <span class="logo">π</span>
+            <span class="project-switcher">pi-web-app</span>
+            <span class="chevron">⌄</span>
+          </div>
+
+          <div class="sidebar-scroll">
+            <div class="section-label">
+              <span>Workspaces</span>
+              <button class="tiny-add" type="button" title="Create workspace">+</button>
+            </div>
+
+            <section class="workspace active">
+              <div class="workspace-row">
+                <span class="branch-icon">⑂</span>
+                <span class="workspace-name">pi/auth-refresh-4f9a</span>
+                <span class="workspace-state" aria-label="Workspace status"></span>
+              </div>
+              <ul class="chat-list">
+                <li class="chat-item old-chat-row active">
+                  <span class="chat-title">Implement token refresh</span>
+                  <span class="chat-state scenario-clean scenario-dirty">✓</span>
+                  <span class="chat-state scenario-busy">●</span>
+                </li>
+                <li class="chat-item new-chat-row pending">
+                  <span class="chat-title">New chat</span>
+                  <span>✦</span>
+                </li>
+              </ul>
+            </section>
+
+            <section class="workspace">
+              <div class="workspace-row">
+                <span class="branch-icon">⑂</span>
+                <span class="workspace-name">pi/panel-tabs-19d2</span>
+                <span class="workspace-state"></span>
+              </div>
+              <ul class="chat-list">
+                <li class="chat-item">
+                  <span class="chat-title">Build terminal tabs</span>
+                  <span class="chat-state">✓</span>
+                </li>
+              </ul>
+            </section>
+
+            <section class="workspace local-workspace">
+              <div class="workspace-row">
+                <span class="branch-icon">⌂</span>
+                <span class="workspace-name">Local checkout · main</span>
+                <span class="workspace-state"></span>
+              </div>
+              <ul class="chat-list">
+                <li class="chat-item">
+                  <span class="chat-title">Investigate flaky test</span>
+                </li>
+              </ul>
+            </section>
+          </div>
+
+          <div class="sidebar-foot">
+            A workspace is one checkout and branch. It can retain several agent
+            chats over the life of a feature.
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="current-view">
+            <header class="chat-head">
+              <div class="chat-heading">
+                <strong>Implement token refresh</strong>
+                <span>
+                  <span class="scenario-clean scenario-dirty">Completed</span>
+                  <span class="scenario-busy">Working · 2m 14s</span>
+                </span>
+              </div>
+              <span class="pill">
+                <span class="dot scenario-clean scenario-dirty"></span>
+                <span class="dot busy scenario-busy"></span>
+                <code>pi/auth-refresh-4f9a</code>
+              </span>
+              <button class="icon-button" type="button" aria-label="More actions">⋯</button>
+            </header>
+
+            <div class="transcript">
+              <div class="user-row">
+                <div class="user-message">
+                  Implement refresh-token rotation and add the database migration.
+                </div>
+              </div>
+
+              <div class="assistant-message">
+                <p>
+                  <strong>Implemented refresh-token rotation.</strong> The server now
+                  stores token families, rejects replayed refresh tokens, and revokes
+                  the family when reuse is detected.
+                </p>
+                <ul>
+                  <li>Added the forward-only token-family migration.</li>
+                  <li>Added request-boundary parsing and replay tests.</li>
+                  <li>Updated the authentication design notes.</li>
+                </ul>
+                <p>
+                  The focused tests and type checks pass. I committed the checkpoint
+                  so the next phase can begin from a clean state.
+                </p>
+              </div>
+
+              <section class="checkpoint">
+                <div class="checkpoint-head">
+                  <span class="checkpoint-icon">✓</span>
+                  <span>Feature checkpoint</span>
+                </div>
+                <dl class="checkpoint-grid">
+                  <dt>Commit</dt>
+                  <dd><code>a41d2e8 · feat: add refresh-token rotation</code></dd>
+                  <dt>Verification</dt>
+                  <dd>84 tests passed · typecheck passed</dd>
+                  <dt>Working tree</dt>
+                  <dd>
+                    <span class="scenario-clean">Clean</span>
+                    <span class="scenario-dirty">3 uncommitted files</span>
+                    <span class="scenario-busy">Agent is still modifying files</span>
+                  </dd>
+                </dl>
+              </section>
+            </div>
+
+            <div class="composer-wrap">
+              <div class="command-menu" aria-label="Application command">
+                <div class="command-row">
+                  <code class="command-name">/new</code>
+                  <span class="command-copy">
+                    <strong>New chat in this worktree</strong>
+                    <span>Blank conversation · same files, branch, and commits</span>
+                  </span>
+                  <span class="command-enter">Press Enter</span>
+                </div>
+                <div class="command-status dirty">
+                  The new chat will see the 3 uncommitted files exactly as they are.
+                </div>
+                <div class="command-status busy">
+                  Wait for or stop the active agent before starting another chat here.
+                </div>
+              </div>
+              <form class="composer" id="currentComposerForm">
+                <input
+                  id="currentComposer"
+                  aria-label="Message"
+                  autocomplete="off"
+                  placeholder="Continue this conversation…"
+                />
+                <button class="send" type="submit" aria-label="Send">↑</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="creating-view">
+            <section class="creating-card">
+              <h2>Checking the worktree</h2>
+              <p>
+                The existing worktree stays in place. No checkout, copy, stash, or Git
+                mutation is needed.
+              </p>
+              <div class="progress-row">
+                <span class="progress-mark">✓</span>
+                <span>
+                  <strong>Verified workspace</strong>
+                  <span>Ready · <code>pi/auth-refresh-4f9a</code></span>
+                </span>
+              </div>
+              <div class="progress-row">
+                <span class="spinner" aria-hidden="true"></span>
+                <span>
+                  <strong>Opening a pending composer</strong>
+                  <span>No thread or Pi session is created yet</span>
+                </span>
+              </div>
+              <div class="progress-row">
+                <span class="progress-mark" style="color: var(--faint); background: var(--surface-3)">3</span>
+                <span>
+                  <strong style="color: var(--muted)">Waiting for the first task</strong>
+                  <span>The previous chat remains available</span>
+                </span>
+              </div>
+            </section>
+          </div>
+
+          <div class="fresh-view">
+            <header class="chat-head">
+              <div class="chat-heading">
+                <strong>New chat</strong>
+                <span>Pending chat · No session yet</span>
+              </div>
+              <span class="pill">
+                <span class="dot"></span>
+                <code>pi/auth-refresh-4f9a</code>
+              </span>
+              <button class="icon-button" type="button" aria-label="More actions">⋯</button>
+            </header>
+
+            <div class="fresh-empty">
+              <div class="fresh-card">
+                <div class="fresh-symbol">✦</div>
+                <h2>New chat, same worktree</h2>
+                <p>
+                  This pending composer is bound to the feature worktree but has no
+                  server thread or Pi session yet. The first real task creates the
+                  fresh session against its current files, branch, and commits.
+                </p>
+                <div class="identity-row">
+                  <span class="identity-chip">⑂ <code>pi/auth-refresh-4f9a</code></span>
+                  <span class="identity-chip">Commit <code>a41d2e8</code></span>
+                  <span class="identity-chip">
+                    <span class="scenario-clean">✓ Clean</span>
+                    <span class="scenario-dirty">● 3 uncommitted files</span>
+                    <span class="scenario-busy">Workspace available</span>
+                  </span>
+                </div>
+
+                <div class="fresh-note">
+                  <strong>No conversation context was copied</strong>
+                  <span>
+                    The code and Git history are the source of truth. The user can ask
+                    directly for the next task without mentioning a path.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="composer-wrap">
+              <div class="composer">
+                <input
+                  id="freshComposer"
+                  aria-label="First message"
+                  placeholder="What should the new agent do next?"
+                />
+                <button class="send" type="button" aria-label="Send">↑</button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="spec-rail">
+          <div class="rail-head">
+            <strong>Proposed MVP contract</strong>
+            <span>What this flow is intended to mean</span>
+          </div>
+
+          <section class="rail-section">
+            <h3>Core guarantees</h3>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span><code>/new</code> creates no server thread or session until the first task.</span>
+            </div>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span>The first task creates the session in the selected worktree automatically.</span>
+            </div>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span>The browser never supplies or receives its absolute path.</span>
+            </div>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span>The old chat and its transcript remain available.</span>
+            </div>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span>No Git operation or file transfer occurs during creation.</span>
+            </div>
+            <div class="guarantee">
+              <span class="check">✓</span>
+              <span><code>/new</code> is consumed by the app and never sent to Pi.</span>
+            </div>
+          </section>
+
+          <section class="rail-section">
+            <h3>Recommended decisions</h3>
+            <div class="decision">
+              <span class="decision-label">Trigger</span>
+              <span>Type the exact app command <code>/new</code> and press Enter.</span>
+            </div>
+            <div class="decision">
+              <span class="decision-label">Context</span>
+              <span>No prior messages are copied and no handoff is generated.</span>
+            </div>
+            <div class="decision">
+              <span class="decision-label">Dirty</span>
+              <span>Allowed; the command menu notes that current files remain.</span>
+            </div>
+            <div class="decision">
+              <span class="decision-label">Busy</span>
+              <span>Blocked while another agent is running in the workspace.</span>
+            </div>
+            <div class="decision">
+              <span class="decision-label">Identity</span>
+              <span>Chats share one opaque workspace identity, not a path.</span>
+            </div>
+          </section>
+
+          <div class="rail-callout">
+            Use the scenario controls above to compare the clean, dirty, and active-run
+            behavior before turning this prototype into a product specification.
+          </div>
+        </aside>
+
+      </div>
+    </div>
+
+    <script>
+      const body = document.body;
+      const root = document.documentElement;
+      const currentComposer = document.querySelector("#currentComposer");
+      let completionTimer = null;
+
+      function setStep(step, automatic = false) {
+        if (!automatic && completionTimer !== null) {
+          window.clearTimeout(completionTimer);
+          completionTimer = null;
+        }
+        body.dataset.step = step;
+        for (const button of document.querySelectorAll("[data-step-button]")) {
+          if (button.dataset.stepButton === step) {
+            button.setAttribute("aria-current", "step");
+          } else {
+            button.removeAttribute("aria-current");
+          }
+        }
+        if (step === "command") {
+          window.setTimeout(() => currentComposer?.focus(), 0);
+        } else if (step === "fresh") {
+          window.setTimeout(() => document.querySelector("#freshComposer")?.focus(), 0);
+        }
+      }
+
+      function createNewChat() {
+        if (body.dataset.scenario === "busy") {
+          setStep("command");
+          return;
+        }
+        setStep("creating");
+        completionTimer = window.setTimeout(() => {
+          completionTimer = null;
+          setStep("fresh", true);
+        }, 1100);
+      }
+
+      for (const button of document.querySelectorAll("[data-step-button]")) {
+        button.addEventListener("click", () => {
+          const step = button.dataset.stepButton;
+          if (step === "command" && currentComposer !== null) {
+            currentComposer.value = "/new";
+          } else if (step === "current" && currentComposer !== null) {
+            currentComposer.value = "";
+          }
+          setStep(step);
+        });
+      }
+
+      for (const button of document.querySelectorAll("[data-scenario-button]")) {
+        button.addEventListener("click", () => {
+          body.dataset.scenario = button.dataset.scenarioButton;
+          for (const peer of document.querySelectorAll("[data-scenario-button]")) {
+            peer.setAttribute("aria-pressed", String(peer === button));
+          }
+        });
+      }
+
+      for (const button of document.querySelectorAll("[data-theme-button]")) {
+        button.addEventListener("click", () => {
+          root.dataset.theme = button.dataset.themeButton;
+          for (const peer of document.querySelectorAll("[data-theme-button]")) {
+            peer.setAttribute("aria-pressed", String(peer === button));
+          }
+        });
+      }
+
+      currentComposer?.addEventListener("input", () => {
+        const nextStep = currentComposer.value.trimStart().startsWith("/")
+          ? "command"
+          : "current";
+        setStep(nextStep);
+      });
+
+      document.querySelector("#currentComposerForm")?.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (currentComposer?.value.trim() === "/new") createNewChat();
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && body.dataset.step === "command") {
+          if (currentComposer !== null) currentComposer.value = "";
+          setStep("current");
+        }
+      });
+    </script>
+  </body>
+</html>

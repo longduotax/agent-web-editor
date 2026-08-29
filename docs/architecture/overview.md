@@ -61,9 +61,14 @@ local backend, frontend, and state-directory settings.
 migrations create projects, threads, runs, command receipts, and ownership
 constraints; migration v2 replaces the original project-wide running-run index
 with a partial one-running-run-per-thread index. Migration v3 adds nullable
-thread archive timestamps, while migrations v4-v6 add durable thread-creation
+thread archive timestamps, while migrations v4-v7 add durable thread-creation
 operations, managed worktrees, nullable thread/worktree associations, recovery
-identities, and transfer tokens without performing Git operations.
+identities, transfer tokens, and prompt-dispatch recovery without performing Git
+operations. Migration v8 permits several threads to share one managed worktree,
+adds durable same-worktree continuation operations and pending first-prompt
+titles, and persists the managed-worktree run lease. Migration v9 extends
+continuation recovery through title generation, prompt dispatch, and run
+attachment so server allocation can wait for the pending pane's first task.
 `MetadataStore` opens
 `metadata.sqlite` under `PI_WEB_STATE_DIR` or
 `~/.pi/web-workspace`, enables foreign keys and WAL, parses every selected row,
@@ -83,11 +88,13 @@ thread from either the registered checkout or a verified managed worktree.
 `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;
-deterministic local naming is the non-blocking fallback. Prompt
-preflight acceptance precedes atomic run/receipt creation. A thread-level
-in-process preflight lease and SQLite partial unique index prevent simultaneous
-runs in one thread while allowing independent Pi sessions in distinct threads
-of the same project to run concurrently. Shared sessions use the registered working directory; isolated sessions use
+deterministic local naming is the non-blocking fallback. Prompt preflight
+acceptance precedes atomic run/receipt creation. A thread-level in-process
+preflight lease and SQLite partial unique index prevent simultaneous runs in one
+thread. Threads that explicitly share one managed worktree through `/new` also
+share an in-process preflight lease and persisted running-run constraint;
+distinct worktrees and Local checkout threads retain independent concurrency.
+Shared sessions use the registered working directory; isolated sessions use
 their own worktree. A panel tab and a terminal resolve the same root as the Pi
 session of the thread the tab was opened against. Project removal first
 fences new prompt acceptance, then interrupts or cancels already-started
@@ -132,12 +139,20 @@ The route is the selected-thread authority:
 - `/projects/:projectId`
 - `/projects/:projectId/new`
 - `/projects/:projectId/threads/:threadId`
+- `/projects/:projectId/threads/:threadId/new`
 
 TanStack Query owns parsed server state. The project sidebar uses one Browse
 control backed by a request-policy-protected browse-and-register mutation;
 selected canonical paths never enter browser state or wire responses. New chat
 uses an inline project, execution-location, starting-state, and branch toolbar
-above the first prompt. Worktree and clean-start are the safe defaults;
+above the first prompt. In an idle managed-worktree chat, exact `/new` is
+consumed by the application after a read-only server preflight and replaces the
+invoking pane with a parsed, device-local pending continuation; it creates no
+thread or Pi session and is never sent to Pi. Workspace layout v3 persists that
+pending source binding and its draft/creation identity. The first real prompt
+revalidates the worktree and recovery-safely creates the titled thread, blank Pi
+session, prompt, and run at the same verified root without copying conversation
+context. Worktree and clean-start are the safe defaults;
 local-change transfer and direct checkout use are explicit. The workspace
 renders a nested project and thread sidebar, Markdown transcript and activity,
 direct active-run steering and stop controls, direct-execution disclosure, the

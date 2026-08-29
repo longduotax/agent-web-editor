@@ -330,6 +330,83 @@ describe("metadata persistence", () => {
     store.close();
   });
 
+  it("creates idempotent sibling chats in one managed worktree", async () => {
+    const state = await stateDirectory();
+    const store = await MetadataStore.open({
+      stateDirectory: state,
+      id: ids(),
+    });
+    const project = store.registerProject("/tmp/project");
+    const root = join(store.stateDirectory, "worktrees", project.id, "shared");
+    const worktree = store.setWorktreeState(
+      store.reserveWorktree({
+        projectId: project.id,
+        executionRoot: root,
+        worktreeRoot: root,
+        gitCommonDir: "/tmp/.git",
+        projectSubpath: "",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        branchName: "pi/shared",
+        transferToken: null,
+      }).id,
+      "ready",
+    );
+    const source = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000001",
+      "Source",
+      worktree.id,
+    );
+    const key = "20000000-0000-4000-8000-000000000001";
+    const operation = store.reserveContinuation({
+      projectId: project.id,
+      sourceThreadId: source.id,
+      worktreeId: worktree.id,
+      idempotencyKey: key,
+      requestHash: "a".repeat(64),
+    });
+    store.nameContinuation(project.id, key, "Continue implementation");
+    store.attachContinuationSession(
+      project.id,
+      key,
+      "30000000-0000-4000-8000-000000000001",
+    );
+    const first = store.finishContinuation(project.id, key);
+    const replay = store.finishContinuation(project.id, key);
+
+    expect(first.id).toBe(replay.id);
+    expect(first.worktree_id).toBe(source.worktree_id);
+    expect(first.title).toBe("Continue implementation");
+    expect(first.initial_title_pending).toBe(0);
+    expect(operation.worktree_id).toBe(worktree.id);
+
+    const unrelated = store.createThread(
+      project.id,
+      "10000000-0000-4000-8000-000000000009",
+      "Unrelated",
+      worktree.id,
+    );
+    const unrelatedRun = store.createRun(
+      project.id,
+      unrelated.id,
+      "30000000-0000-4000-8000-000000000009",
+    );
+    expect(() =>
+      store.attachContinuationRun(project.id, key, unrelatedRun.id),
+    ).toThrow("continuation_run_mismatch");
+    store.settleRun(unrelatedRun.id, "completed");
+    const run = store.createRun(
+      project.id,
+      first.id,
+      "30000000-0000-4000-8000-000000000010",
+    );
+    expect(store.attachContinuationRun(project.id, key, run.id).run_id).toBe(
+      run.id,
+    );
+    store.close();
+  });
+
   it("quarantines malformed persisted worktree paths and identities", async () => {
     const state = await stateDirectory();
     let store = await MetadataStore.open({ stateDirectory: state, id: ids() });
@@ -388,7 +465,7 @@ describe("metadata persistence", () => {
 
     const before = new Database(join(state, "metadata.sqlite"));
     before.exec(
-      "DROP TABLE thread_creation_operations; DROP INDEX threads_worktree_unique; ALTER TABLE threads DROP COLUMN worktree_id; DROP TABLE worktrees; DROP INDEX threads_project_archive_activity_idx; ALTER TABLE threads DROP COLUMN archived_at; DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
+      "DROP TABLE thread_continuation_operations; DROP INDEX runs_one_running_per_worktree; ALTER TABLE runs DROP COLUMN worktree_id; DROP TABLE thread_creation_operations; DROP INDEX threads_worktree_idx; ALTER TABLE threads DROP COLUMN initial_title_pending; ALTER TABLE threads DROP COLUMN worktree_id; DROP TABLE worktrees; DROP INDEX threads_project_archive_activity_idx; ALTER TABLE threads DROP COLUMN archived_at; DROP INDEX runs_one_running_per_thread; CREATE UNIQUE INDEX runs_one_running_per_project ON runs(project_id) WHERE state = 'running'; PRAGMA user_version = 1;",
     );
     expect(before.pragma("user_version", { simple: true })).toBe(1);
     before.close();
@@ -402,7 +479,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(join(state, "metadata.sqlite"));
-    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(9);
     expect(
       migrated
         .prepare(
@@ -510,7 +587,7 @@ describe("metadata persistence", () => {
     const state = await stateDirectory();
     const databasePath = join(state, "metadata.sqlite");
     const newer = new Database(databasePath);
-    newer.pragma("user_version = 8");
+    newer.pragma("user_version = 10");
     newer.close();
 
     await expect(MetadataStore.open({ stateDirectory: state })).rejects.toThrow(
@@ -518,7 +595,7 @@ describe("metadata persistence", () => {
     );
 
     const unchanged = new Database(databasePath);
-    expect(unchanged.pragma("user_version", { simple: true })).toBe(8);
+    expect(unchanged.pragma("user_version", { simple: true })).toBe(10);
     unchanged.close();
   });
 
@@ -639,7 +716,7 @@ describe("metadata persistence", () => {
     store.close();
 
     const migrated = new Database(databasePath);
-    expect(migrated.pragma("user_version", { simple: true })).toBe(7);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(9);
     expect(
       migrated
         .prepare(

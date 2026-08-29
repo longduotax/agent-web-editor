@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ThreadId } from "@pi-web/contracts";
 import {
   assignThread,
+  beginContinuation,
   closePane,
   createInitialLayout,
   focusPane,
@@ -25,7 +26,20 @@ describe("layoutTree", () => {
     const l = createInitialLayout(ids());
     expect(tiledPaneIds(l)).toEqual(["pane-1"]);
     expect(l.focusedPaneId).toBe("pane-1");
-    expect(l.panes["pane-1"]?.threadId).toBeNull();
+    expect(l.panes["pane-1"]).toEqual({ type: "new" });
+  });
+
+  it("replaces only the addressed thread pane with a pending continuation", () => {
+    const source = "11111111-1111-1111-1111-111111111111" as ThreadId;
+    let l = createInitialLayout(ids());
+    l = assignThread(l, "pane-1", source);
+
+    l = beginContinuation(l, "pane-1", source);
+
+    expect(l.panes["pane-1"]).toEqual({
+      type: "continuation",
+      sourceThreadId: source,
+    });
   });
 
   it("splits right into a focused new pane", () => {
@@ -68,7 +82,7 @@ describe("layoutTree", () => {
     // Simulate a v1-style docked pane that was removed from the tree but
     // kept in `panes`.
     const beforeRoot = l.root;
-    l = { ...l, panes: { ...l.panes, "pane-docked": { threadId: null } } };
+    l = { ...l, panes: { ...l.panes, "pane-docked": { type: "new" } } };
 
     l = restoreIntoTree(l, "pane-docked");
 
@@ -98,7 +112,7 @@ describe("layoutTree", () => {
     l = {
       ...l,
       focusedPaneId: splitId,
-      panes: { ...l.panes, "pane-docked": { threadId: null } },
+      panes: { ...l.panes, "pane-docked": { type: "new" } },
     };
 
     l = restoreIntoTree(l, "pane-docked");
@@ -115,7 +129,7 @@ describe("layoutTree", () => {
     l = closePane(l, "pane-1");
     expect(l.root).toBeNull();
 
-    l = { ...l, panes: { ...l.panes, "pane-docked": { threadId: null } } };
+    l = { ...l, panes: { ...l.panes, "pane-docked": { type: "new" } } };
     l = restoreIntoTree(l, "pane-docked");
 
     expect(l.root).toEqual({ type: "pane", id: "pane-docked" });
@@ -138,7 +152,7 @@ describe("layoutTree", () => {
       "pane-1",
       "t1" as ThreadId,
     );
-    expect(l.panes["pane-1"]?.threadId).toBe("t1");
+    expect(l.panes["pane-1"]).toEqual({ type: "thread", threadId: "t1" });
   });
 
   describe("moveFocus", () => {

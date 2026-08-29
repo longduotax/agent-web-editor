@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
   startThread: vi.fn(),
+  continueThread: vi.fn(),
 }));
 
 vi.mock("../../api/client.js", async (importOriginal) => {
@@ -19,7 +20,11 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
-import { newChatDraftKey, readDraft } from "./drafts.js";
+import {
+  continuationCreationKey,
+  newChatDraftKey,
+  readDraft,
+} from "./drafts.js";
 import {
   NewChatPane,
   partitionBranches,
@@ -37,7 +42,10 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function renderNewChat(preflight: Record<string, unknown> = {}) {
+function renderNewChat(
+  preflight: Record<string, unknown> = {},
+  continuationSourceThreadId: ThreadId | null = null,
+) {
   api.getWorkspace.mockResolvedValue({
     projects: [
       {
@@ -74,6 +82,7 @@ function renderNewChat(preflight: Record<string, unknown> = {}) {
         <NewChatPane
           projectId={projectId}
           paneId={paneId}
+          continuationSourceThreadId={continuationSourceThreadId}
           focused
           onFocus={onFocus}
           onClose={vi.fn()}
@@ -85,6 +94,69 @@ function renderNewChat(preflight: Record<string, unknown> = {}) {
   );
   return { onThreadStarted, onFocus };
 }
+
+describe("pending same-worktree continuation", () => {
+  it("reuses the persisted first-prompt identity after a pending-page reload", async () => {
+    const persistedKey = "90000000-0000-4000-8000-000000000090";
+    localStorage.setItem(
+      continuationCreationKey(projectId, paneId),
+      persistedKey,
+    );
+    localStorage.setItem(
+      newChatDraftKey(projectId, paneId),
+      "Continue after reload",
+    );
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    renderNewChat({}, threadId);
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Continue after reload",
+        persistedKey,
+      );
+    });
+  });
+
+  it("creates the durable thread only when its first real prompt is submitted", async () => {
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    const { onThreadStarted } = renderNewChat({}, threadId);
+
+    expect(
+      await screen.findByText("Same managed worktree"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Execution location"),
+    ).not.toBeInTheDocument();
+    expect(api.continueThread).not.toHaveBeenCalled();
+
+    const composer = screen.getByRole("textbox", { name: "First message" });
+    await user.type(composer, "Continue implementation");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Continue implementation",
+        expect.any(String),
+      );
+    });
+    expect(api.startThread).not.toHaveBeenCalled();
+    expect(onThreadStarted).toHaveBeenCalledWith(threadId);
+  });
+});
 
 // F7. Starting the first thread creates a git worktree, measured at 1.6-2.6s.
 // For all of that time the typed text sat in the composer, the header still

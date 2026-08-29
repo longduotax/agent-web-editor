@@ -4,6 +4,8 @@ import {
   ArchiveThreadResponseSchema,
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
+  ContinueThreadPreflightResponseSchema,
+  ContinueThreadResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -229,6 +231,32 @@ export async function startThread(
     },
   );
 }
+export async function preflightContinuation(
+  projectId: ProjectId,
+  threadId: ThreadId,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/continue/preflight`,
+    ContinueThreadPreflightResponseSchema,
+  );
+}
+
+export async function continueThread(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  prompt: string,
+  idempotencyKey: string,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/continue`,
+    ContinueThreadResponseSchema,
+    {
+      method: "POST",
+      body: body({ prompt, idempotencyKey }),
+    },
+  );
+}
+
 export async function archiveThread(projectId: ProjectId, threadId: ThreadId) {
   return await request(
     `/api/projects/${projectId}/threads/${threadId}/archive`,

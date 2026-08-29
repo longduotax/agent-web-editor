@@ -5,15 +5,15 @@ permissions, acceptance criteria, and important edge cases. They are organized
 by stable capability rather than task. Temporary implementation steps do not
 belong here.
 
-| Capability                                                        | Current version | Proposed version | Proposal | Implementation | Related open plan                                                                                 |
-| ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | ------------------------------------------------------------------------------------------------- |
-| [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)             |
-| [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md) |
-| [Thread management](thread-management.md)                         | 2               | 3                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Thread workspaces](thread-workspaces.md)                         | 2               | None             | None     | Current        | —                                                                                                 |
-| [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)           |
-| [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)       |
-| [Workspace panel](workspace-panel.md)                             | None            | 2                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                             |
+| Capability                                                        | Current version | Proposed version | Proposal | Implementation | Related open plan                                                                                   |
+| ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | --------------------------------------------------------------------------------------------------- |
+| [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)               |
+| [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md)   |
+| [Thread management](thread-management.md)                         | 2               | 3                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)         |
+| [Thread workspaces](thread-workspaces.md)                         | 2               | 4                | Approved | In progress    | [Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md) |
+| [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)             |
+| [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)         |
+| [Workspace panel](workspace-panel.md)                             | None            | 2                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                               |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
@@ -22,6 +22,15 @@ version 2 on 2026-08-16; the concurrency slice is implemented and verified
 while the broader initial-workspace plan remains in progress. Thread workspaces
 version 2 is Current and provides per-chat source-checkout or isolated-worktree
 execution while preserving the merged per-thread concurrency behavior.
+Proposed version 3 was approved and implemented in this worktree but not
+promoted. The user then selected deferred first-prompt creation so an abandoned
+exact `/new` leaves no empty server thread or Pi session. That material revision
+is Draft version 4: `/new` opens a device-local pending same-worktree composer,
+and its first real prompt recovery-safely creates the titled thread, session,
+prompt, and run. One-to-many managed-worktree ownership, one active sibling
+agent, no copied context/Git operation, and Local checkout exclusion remain.
+The user approved product version 4 and plan version 2 on 2026-08-29;
+refactoring is active.
 
 Scalable conversation history is a separate Approved capability for bounded
 latest pages, progressive older-history navigation, polite live following, and

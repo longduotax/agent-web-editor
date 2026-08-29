@@ -29,7 +29,7 @@ No Pi class, event, content block, path, or generic SDK type crosses the adapter
 
 ## Pi sessions and import
 
-- New threads use `SessionManager.create(canonicalProjectPath)` and record the resulting Pi session UUID. Pi SDK 0.84.2 normally defers its first JSONL write until an assistant message exists, so the adapter validates the new manager's public header, initial session-info entry, UUID, cwd, and target path, then atomically materializes that initial JSONL with exclusive creation. This makes an unprompted application thread reopenable after a server restart without overwriting an existing native session.
+- New threads use `SessionManager.create(canonicalProjectPath)` and record the resulting Pi session UUID. Exact `/new` itself performs no runtime creation; its pending pane's first real prompt passes the reverified managed execution root and a durable creation identity, so retry discovers the same newly allocated session without moving or copying native history. Pi SDK 0.84.2 normally defers its first JSONL write until an assistant message exists, so the adapter validates the new manager's public header, initial session-info entry, UUID, cwd, and target path, then atomically materializes that initial JSONL with exclusive creation. This also keeps retained v8 unprompted threads reopenable after a server restart without overwriting an existing native session.
 - Discovery uses `SessionManager.list(canonicalProjectPath)`. The adapter parses descriptors, confirms cwd ownership, and omits native paths from returned DTOs.
 - Opening resolves the stored UUID against a fresh authorized listing before passing the private path to Pi.
 - Import adds application metadata pointing to that UUID without opening for rewrite, renaming, or copying JSONL.
@@ -61,7 +61,7 @@ enter Git paths/refs.
 
 ## Run lifecycle
 
-- Each thread owns an independent Pi runtime session. A thread-scoped preflight lease and database constraint permit one running run per thread while allowing distinct threads in the same project to run concurrently.
+- Each durable thread owns an independent Pi runtime session. A pending `/new` pane owns none. A thread-scoped preflight lease and database constraint permit one running run per thread. Continuation threads created by the pending pane's first prompt retain independent sessions but share their managed worktree, so they also share one worktree-scoped preflight lease and persisted running-run constraint. Distinct managed worktrees and shared Local checkout threads retain concurrent runs.
 - Pi `prompt()` begins with `preflightResult`; adapter events are buffered until acceptance is known.
 - On acceptance, the server atomically persists the command receipt and `running` run before publishing buffered events. Rejection creates no run.
 - Project removal synchronously fences new prompt acceptance, then interrupts

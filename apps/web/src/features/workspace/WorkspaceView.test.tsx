@@ -198,6 +198,10 @@ function renderWorkspace(
             element={<WorkspaceView projectId={projectId} />}
           />
           <Route
+            path="/projects/:projectId/threads/:threadId/new"
+            element={<WorkspaceView projectId={projectId} />}
+          />
+          <Route
             path="/projects/:projectId/threads/:threadId"
             element={<WorkspaceView projectId={projectId} />}
           />
@@ -218,6 +222,44 @@ function renderWorkspace(
 }
 
 describe("WorkspaceView", () => {
+  it("reconstructs the pending composer from its route when local layout is absent", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}/new`);
+
+    expect(
+      await screen.findByRole("heading", { name: "New chat" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Same managed worktree")).toBeInTheDocument();
+  });
+
+  it("restores a pending same-worktree composer instead of reopening its source thread", async () => {
+    renderWorkspace(`/projects/${projectId}/threads/${threadId}/new`, {
+      seedStore: (store) => {
+        store.set(
+          `pi-workspace:layout:${projectId}`,
+          JSON.stringify({
+            version: 3,
+            root: { type: "pane", id: "pending-pane" },
+            panes: {
+              "pending-pane": {
+                type: "continuation",
+                sourceThreadId: threadId,
+              },
+            },
+            focusedPaneId: "pending-pane",
+            boundPaneId: null,
+          }),
+        );
+      },
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "New chat" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Same managed worktree")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Example thread" }),
+    ).not.toBeInTheDocument();
+  });
   it("dispatches a split command on the split-right keychord and prevents the browser default", async () => {
     stubMacPlatform();
     renderWorkspace(`/projects/${projectId}`);

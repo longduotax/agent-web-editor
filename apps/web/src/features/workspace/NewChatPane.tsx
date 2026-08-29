@@ -1,9 +1,14 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import {
+  IdempotencyKeySchema,
+  type ProjectId,
+  type ThreadId,
+} from "@pi-web/contracts";
 
 import {
   commandId,
+  continueThread,
   getWorkspace,
   getWorkspacePreflight,
   startThread,
@@ -12,6 +17,7 @@ import { ActivityStep } from "../../components/Activity.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Markdown } from "../../components/Markdown.js";
 import {
+  continuationCreationKey,
   newChatDraftKey,
   readDraft,
   removeDraft,
@@ -159,6 +165,7 @@ function BranchOptions({
 export interface NewChatPaneProps {
   projectId: ProjectId;
   paneId: PaneId;
+  continuationSourceThreadId?: ThreadId | null;
   focused: boolean;
   onFocus(): void;
   onClose(): void;
@@ -168,7 +175,18 @@ export interface NewChatPaneProps {
 
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
+  const continuationSourceThreadId = props.continuationSourceThreadId ?? null;
   const draftKey = newChatDraftKey(projectId, paneId);
+  const creationStorageKey = continuationCreationKey(projectId, paneId);
+  const initialCreationKey = () => {
+    if (continuationSourceThreadId !== null) {
+      const stored = IdempotencyKeySchema.safeParse(
+        readDraft(creationStorageKey),
+      );
+      if (stored.success) return stored.data;
+    }
+    return commandId();
+  };
   const queryClient = useQueryClient();
   const workspace = useQuery({
     queryKey: ["workspace"],
@@ -177,13 +195,14 @@ export function NewChatPane(props: NewChatPaneProps) {
   const preflight = useQuery({
     queryKey: ["workspace-preflight", projectId],
     queryFn: () => getWorkspacePreflight(projectId),
+    enabled: continuationSourceThreadId === null,
   });
   const [mode, setMode] = useState<"worktree" | "shared">("worktree");
   const [sourceChanges, setSourceChanges] = useState<
     "none" | "tracked_and_untracked"
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
-  const [creationKey, setCreationKey] = useState(commandId);
+  const [creationKey, setCreationKey] = useState(initialCreationKey);
   const [text, setText] = useState(() => readDraft(draftKey));
   // The prompt the user has already committed to but that has no thread yet.
   // Starting the first thread creates a git worktree, which takes 1.6-2.6s;
@@ -195,10 +214,14 @@ export function NewChatPane(props: NewChatPaneProps) {
     setMode("worktree");
     setSourceChanges("none");
     setBaseBranch("");
-    setCreationKey(commandId());
+    setCreationKey(initialCreationKey());
     setSentPrompt(null);
     setText(readDraft(newChatDraftKey(projectId, paneId)));
-  }, [paneId, projectId]);
+  }, [continuationSourceThreadId, paneId, projectId]);
+  useEffect(() => {
+    if (continuationSourceThreadId === null) removeDraft(creationStorageKey);
+    else writeDraft(creationStorageKey, creationKey);
+  }, [continuationSourceThreadId, creationKey, creationStorageKey]);
   useEffect(() => {
     if (preflight.data?.currentBranch !== null && baseBranch === "")
       setBaseBranch(preflight.data?.currentBranch ?? "");
@@ -215,26 +238,34 @@ export function NewChatPane(props: NewChatPaneProps) {
   }, [draftKey, sentPrompt, text]);
   const create = useMutation({
     mutationFn: async (promptText: string) =>
-      await startThread(
-        projectId,
-        promptText,
-        mode === "shared"
-          ? { mode: "shared" }
-          : {
-              mode: "worktree",
-              baseBranch,
-              sourceChanges,
-              ...(sourceChanges === "tracked_and_untracked" &&
-              preflight.data?.changes !== null &&
-              preflight.data?.changes !== undefined
-                ? { sourceStateToken: preflight.data.changes.token }
-                : {}),
-            },
-        creationKey,
-      ),
+      continuationSourceThreadId === null
+        ? await startThread(
+            projectId,
+            promptText,
+            mode === "shared"
+              ? { mode: "shared" }
+              : {
+                  mode: "worktree",
+                  baseBranch,
+                  sourceChanges,
+                  ...(sourceChanges === "tracked_and_untracked" &&
+                  preflight.data?.changes !== null &&
+                  preflight.data?.changes !== undefined
+                    ? { sourceStateToken: preflight.data.changes.token }
+                    : {}),
+                },
+            creationKey,
+          )
+        : await continueThread(
+            projectId,
+            continuationSourceThreadId,
+            promptText,
+            creationKey,
+          ),
     onSuccess: async (result) => {
       setSentPrompt(null);
       removeDraft(draftKey);
+      removeDraft(creationStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       props.onThreadStarted(result.thread.id);
     },
@@ -256,7 +287,8 @@ export function NewChatPane(props: NewChatPaneProps) {
     if (create.isPending) return;
     if (
       value.trim() === "" ||
-      (mode === "worktree" &&
+      (continuationSourceThreadId === null &&
+        mode === "worktree" &&
         (!preflight.data?.worktreeAvailable || baseBranch === ""))
     )
       return;
@@ -297,7 +329,9 @@ export function NewChatPane(props: NewChatPaneProps) {
         focused={focused}
         detail={
           <span className="pane-meta">
-            Pick where Pi runs, then describe the work.
+            {continuationSourceThreadId === null
+              ? "Pick where Pi runs, then describe the work."
+              : "Same managed worktree · fresh conversation"}
           </span>
         }
         onSplit={() => {
@@ -308,7 +342,7 @@ export function NewChatPane(props: NewChatPaneProps) {
         }}
       />
       <main className="center new-chat">
-        {sentPrompt === null && (
+        {sentPrompt === null && continuationSourceThreadId === null && (
           // ~450px of empty white sat here: a header, a composer, and nothing
           // in between, on the screen where a first-time user decides what
           // this tool is. Two things fill it, and both are things the pane
@@ -420,9 +454,11 @@ export function NewChatPane(props: NewChatPaneProps) {
               label={{
                 action: "Preparing",
                 target:
-                  mode === "worktree"
-                    ? "new git worktree"
-                    : (project?.displayPath ?? "local checkout"),
+                  continuationSourceThreadId !== null
+                    ? "same managed worktree"
+                    : mode === "worktree"
+                      ? "new git worktree"
+                      : (project?.displayPath ?? "local checkout"),
                 meta: "naming the thread",
               }}
               status="running"
@@ -447,165 +483,183 @@ export function NewChatPane(props: NewChatPaneProps) {
           </div>
         )}
         <form className="new-chat-card" onSubmit={submit}>
-          <div className="new-chat-toolbar" aria-label="New chat configuration">
-            <label>
-              <span className="sr-only">Execution location</span>
-              <select
-                aria-label="Execution location"
-                value={mode}
-                onChange={(event) => {
-                  setMode(
-                    event.target.value === "shared" ? "shared" : "worktree",
-                  );
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                <option
-                  value="worktree"
-                  disabled={preflight.data?.worktreeAvailable === false}
+          {continuationSourceThreadId !== null ? (
+            <div
+              className="new-chat-toolbar"
+              aria-label="Same-worktree chat configuration"
+            >
+              <span>Same managed worktree</span>
+            </div>
+          ) : (
+            <div
+              className="new-chat-toolbar"
+              aria-label="New chat configuration"
+            >
+              <label>
+                <span className="sr-only">Execution location</span>
+                <select
+                  aria-label="Execution location"
+                  value={mode}
+                  onChange={(event) => {
+                    setMode(
+                      event.target.value === "shared" ? "shared" : "worktree",
+                    );
+                    setSourceChanges("none");
+                    setCreationKey(commandId());
+                  }}
                 >
-                  New worktree
-                </option>
-                <option value="shared">Local checkout</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Starting state</span>
-              <select
-                aria-label="Starting state"
-                value={mode === "shared" ? "current" : sourceChanges}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setSourceChanges(
-                    event.target.value === "tracked_and_untracked"
-                      ? "tracked_and_untracked"
-                      : "none",
-                  );
-                  setCreationKey(commandId());
-                }}
-              >
-                {mode === "shared" && (
-                  <option value="current">Current local files</option>
-                )}
-                {mode === "worktree" && (
-                  <>
-                    <option value="none">Clean start</option>
-                    <option
-                      value="tracked_and_untracked"
-                      disabled={
-                        baseBranch !==
-                          (preflight.data === undefined
-                            ? null
-                            : preflight.data.currentBranch) ||
-                        (preflight.data?.changes?.files.length ?? 0) === 0
-                      }
-                    >
-                      Include local changes
-                    </option>
-                  </>
-                )}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Base branch</span>
-              <select
-                aria-label="Base branch"
-                // In shared mode this control does not apply, and a greyed
-                // select still DISPLAYING a branch reads as "it will use
-                // master" rather than "branch does not apply". The shared
-                // option states the fact instead: whatever is checked out
-                // now is what Pi works on, and it is not a choice made here.
-                value={mode === "shared" ? "current" : baseBranch}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setBaseBranch(event.target.value);
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                {mode === "shared" ? (
-                  <option value="current">
-                    {currentBranch === null
-                      ? "Whatever is checked out"
-                      : `Already on ${currentBranch}`}
+                  <option
+                    value="worktree"
+                    disabled={preflight.data?.worktreeAvailable === false}
+                  >
+                    New worktree
                   </option>
-                ) : (
-                  <>
-                    <BranchOptions
-                      branches={branchGroups.project}
-                      labels={branchLabelsByBranch}
-                    />
-                    {branchGroups.generated.length > 0 && (
-                      // Grouped, not hidden: these are real branches a user
-                      // may legitimately want to branch from again. They just
-                      // must not bury the handful of branches a person named.
-                      <optgroup label="Previous Pi runs">
-                        <BranchOptions
-                          branches={branchGroups.generated}
-                          labels={branchLabelsByBranch}
-                        />
-                      </optgroup>
-                    )}
-                  </>
-                )}
-              </select>
-            </label>
-          </div>
-          {mode === "worktree" &&
-            preflight.data?.worktreeAvailable === false && (
-              <p className="new-chat-note" role="alert">
-                {preflight.data.unavailableReason}
-              </p>
-            )}
-          {mode === "worktree" && sourceChanges === "none" && (
-            <p className="new-chat-note">
-              Starts from committed {baseBranch || "HEAD"}. Local changes are
-              not copied.
-            </p>
-          )}
-          {mode === "worktree" && sourceChanges === "tracked_and_untracked" && (
-            <div className="new-chat-note warning">
-              <p>
-                Including {String(preflight.data?.changes?.files.length ?? 0)}{" "}
-                local changes. Ignored files are excluded.
-              </p>
-              <details>
-                <summary>Review files</summary>
-                <ul>
-                  {preflight.data?.changes?.files.map((path) => (
-                    <li key={path}>{path}</li>
-                  ))}
-                </ul>
-              </details>
+                  <option value="shared">Local checkout</option>
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Starting state</span>
+                <select
+                  aria-label="Starting state"
+                  value={mode === "shared" ? "current" : sourceChanges}
+                  disabled={mode === "shared"}
+                  onChange={(event) => {
+                    setSourceChanges(
+                      event.target.value === "tracked_and_untracked"
+                        ? "tracked_and_untracked"
+                        : "none",
+                    );
+                    setCreationKey(commandId());
+                  }}
+                >
+                  {mode === "shared" && (
+                    <option value="current">Current local files</option>
+                  )}
+                  {mode === "worktree" && (
+                    <>
+                      <option value="none">Clean start</option>
+                      <option
+                        value="tracked_and_untracked"
+                        disabled={
+                          baseBranch !==
+                            (preflight.data === undefined
+                              ? null
+                              : preflight.data.currentBranch) ||
+                          (preflight.data?.changes?.files.length ?? 0) === 0
+                        }
+                      >
+                        Include local changes
+                      </option>
+                    </>
+                  )}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Base branch</span>
+                <select
+                  aria-label="Base branch"
+                  // In shared mode this control does not apply, and a greyed
+                  // select still DISPLAYING a branch reads as "it will use
+                  // master" rather than "branch does not apply". The shared
+                  // option states the fact instead: whatever is checked out
+                  // now is what Pi works on, and it is not a choice made here.
+                  value={mode === "shared" ? "current" : baseBranch}
+                  disabled={mode === "shared"}
+                  onChange={(event) => {
+                    setBaseBranch(event.target.value);
+                    setSourceChanges("none");
+                    setCreationKey(commandId());
+                  }}
+                >
+                  {mode === "shared" ? (
+                    <option value="current">
+                      {currentBranch === null
+                        ? "Whatever is checked out"
+                        : `Already on ${currentBranch}`}
+                    </option>
+                  ) : (
+                    <>
+                      <BranchOptions
+                        branches={branchGroups.project}
+                        labels={branchLabelsByBranch}
+                      />
+                      {branchGroups.generated.length > 0 && (
+                        // Grouped, not hidden: these are real branches a user
+                        // may legitimately want to branch from again. They just
+                        // must not bury the handful of branches a person named.
+                        <optgroup label="Previous Pi runs">
+                          <BranchOptions
+                            branches={branchGroups.generated}
+                            labels={branchLabelsByBranch}
+                          />
+                        </optgroup>
+                      )}
+                    </>
+                  )}
+                </select>
+              </label>
             </div>
           )}
-          {mode === "shared" && (
-            // The old note read "Pi will work directly in the existing
-            // checkout and see its current files." Every word of that was
-            // about READING. Verified against the server: a shared thread
-            // resolves its execution root to the project's own canonical
-            // path (ThreadExecutionContextResolver.resolve, worktree_id
-            // null) and Pi's tools run there with the user's permissions,
-            // no approval step and no sandbox -- so it edits, creates and
-            // deletes files in the directory the user has open, on whatever
-            // branch is checked out, with their uncommitted work in place.
-            // That is the defining property of the mode and the one
-            // irreversible choice on this screen, so it is what the note
-            // says first.
-            // `status`, not `alert`: it appears in response to the user's own
-            // choice, so it should be announced, but politely -- and not
-            // `note`, which is silent on appearance.
-            <p className="new-chat-note warning" role="status">
-              <strong>Pi writes to your project directory.</strong> It edits,
-              creates and deletes files in{" "}
-              {project?.displayPath ?? "this project"}
-              {currentBranch === null
-                ? ""
-                : ` on your current branch, ${currentBranch},`}{" "}
-              alongside your uncommitted changes. Nothing is copied first and
-              there is no undo.
-            </p>
+          {continuationSourceThreadId === null && (
+            <>
+              {mode === "worktree" &&
+                preflight.data?.worktreeAvailable === false && (
+                  <p className="new-chat-note" role="alert">
+                    {preflight.data.unavailableReason}
+                  </p>
+                )}
+              {mode === "worktree" && sourceChanges === "none" && (
+                <p className="new-chat-note">
+                  Starts from committed {baseBranch || "HEAD"}. Local changes
+                  are not copied.
+                </p>
+              )}
+              {mode === "worktree" &&
+                sourceChanges === "tracked_and_untracked" && (
+                  <div className="new-chat-note warning">
+                    <p>
+                      Including{" "}
+                      {String(preflight.data?.changes?.files.length ?? 0)} local
+                      changes. Ignored files are excluded.
+                    </p>
+                    <details>
+                      <summary>Review files</summary>
+                      <ul>
+                        {preflight.data?.changes?.files.map((path) => (
+                          <li key={path}>{path}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                )}
+              {mode === "shared" && (
+                // The old note read "Pi will work directly in the existing
+                // checkout and see its current files." Every word of that was
+                // about READING. Verified against the server: a shared thread
+                // resolves its execution root to the project's own canonical
+                // path (ThreadExecutionContextResolver.resolve, worktree_id
+                // null) and Pi's tools run there with the user's permissions,
+                // no approval step and no sandbox -- so it edits, creates and
+                // deletes files in the directory the user has open, on whatever
+                // branch is checked out, with their uncommitted work in place.
+                // That is the defining property of the mode and the one
+                // irreversible choice on this screen, so it is what the note
+                // says first.
+                // `status`, not `alert`: it appears in response to the user's own
+                // choice, so it should be announced, but politely -- and not
+                // `note`, which is silent on appearance.
+                <p className="new-chat-note warning" role="status">
+                  <strong>Pi writes to your project directory.</strong> It
+                  edits, creates and deletes files in{" "}
+                  {project?.displayPath ?? "this project"}
+                  {currentBranch === null
+                    ? ""
+                    : ` on your current branch, ${currentBranch},`}{" "}
+                  alongside your uncommitted changes. Nothing is copied first
+                  and there is no undo.
+                </p>
+              )}
+            </>
           )}
           <div className="composer-input new-chat-input">
             <textarea

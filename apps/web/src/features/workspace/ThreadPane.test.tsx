@@ -24,6 +24,8 @@ import type {
 const api = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   getWorkspace: vi.fn(),
+  continueThread: vi.fn(),
+  preflightContinuation: vi.fn(),
   markViewed: vi.fn(),
   prompt: vi.fn(),
   steer: vi.fn(),
@@ -134,6 +136,7 @@ function renderPane(
     onFocus?: () => void;
     onClose?: () => void;
     onSplit?: () => void;
+    onContinue?: () => void;
   } = {},
 ) {
   const queryClient = new QueryClient({
@@ -142,6 +145,7 @@ function renderPane(
   const onFocus = overrides.onFocus ?? vi.fn();
   const onClose = overrides.onClose ?? vi.fn();
   const onSplit = overrides.onSplit ?? vi.fn();
+  const onContinue = overrides.onContinue ?? vi.fn();
   const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
@@ -152,11 +156,19 @@ function renderPane(
           onFocus={onFocus}
           onClose={onClose}
           onSplit={onSplit}
+          onContinue={onContinue}
         />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onFocus, onClose, onSplit, queryClient, container: view.container };
+  return {
+    onFocus,
+    onClose,
+    onSplit,
+    onContinue,
+    queryClient,
+    container: view.container,
+  };
 }
 
 describe("ThreadPane", () => {
@@ -171,6 +183,73 @@ describe("ThreadPane", () => {
     expect(
       screen.getByRole("textbox", { name: "Message Pi" }),
     ).toBeInTheDocument();
+  });
+
+  it("consumes exact /new into a pending pane without creating a thread", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.preflightContinuation.mockResolvedValue({ available: true });
+    const user = userEvent.setup();
+    const { onContinue } = renderPane();
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "/new");
+    const commandHint = screen.getByText(/New chat in this worktree/);
+    expect(commandHint).toBeVisible();
+    expect(
+      commandHint.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(commandHint.parentElement).toBe(
+      composer.closest(".composer-input")?.parentElement,
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.preflightContinuation).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+      );
+    });
+    expect(api.continueThread).not.toHaveBeenCalled();
+    expect(api.prompt).not.toHaveBeenCalled();
+    expect(api.steer).not.toHaveBeenCalled();
+    expect(onContinue).toHaveBeenCalledWith();
+  });
+
+  it("fills the composer when the /new command suggestion is clicked", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    const user = userEvent.setup();
+    renderPane();
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "/");
+    await user.click(
+      screen.getByRole("button", { name: "/new — New chat in this worktree" }),
+    );
+
+    expect(composer).toHaveValue("/new");
+    expect(composer).toHaveFocus();
+    expect(api.preflightContinuation).not.toHaveBeenCalled();
+  });
+
+  it("leaves argument-bearing /new input on the ordinary Pi prompt path", async () => {
+    api.getSnapshot.mockResolvedValue(snapshot);
+    api.prompt.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPane();
+
+    const composer = await screen.findByRole("textbox", { name: "Message Pi" });
+    await user.type(composer, "/new continue the task");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.prompt).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "/new continue the task",
+      );
+    });
+    expect(api.continueThread).not.toHaveBeenCalled();
   });
 
   it("invokes onClose from the pane header, without changing behavior otherwise", async () => {

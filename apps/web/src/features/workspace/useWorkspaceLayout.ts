@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import {
+  assignNew,
   assignThread,
+  beginContinuation,
   bindPane,
   closePane,
   focusPane,
   moveFocus,
+  restoreContinuation,
   setSplitSizes,
   splitPane,
 } from "./layoutTree.js";
@@ -46,6 +49,10 @@ export interface WorkspaceLayoutController {
   // autofocus to behave normally.
   paneFocusIntent: PaneFocusIntent;
   assignThreadToPane(paneId: PaneId, threadId: ThreadId): void;
+  beginContinuationInPane(paneId: PaneId, sourceThreadId: ThreadId): void;
+  restoreContinuationInPane(paneId: PaneId, sourceThreadId: ThreadId): void;
+  newContinuationPane(sourceThreadId: ThreadId): void;
+  resetPaneToNew(paneId: PaneId): void;
   newPane(): void;
   focus(paneId: PaneId): void;
   bind(paneId: PaneId): void;
@@ -183,6 +190,55 @@ export function useWorkspaceLayout(
     [],
   );
 
+  const beginContinuationInPane = useCallback(
+    (paneId: PaneId, sourceThreadId: ThreadId) => {
+      setLayout((current) =>
+        beginContinuation(current, paneId, sourceThreadId),
+      );
+    },
+    [],
+  );
+
+  const restoreContinuationInPane = useCallback(
+    (paneId: PaneId, sourceThreadId: ThreadId) => {
+      setLayout((current) =>
+        restoreContinuation(current, paneId, sourceThreadId),
+      );
+    },
+    [],
+  );
+
+  const newContinuationPane = useCallback((sourceThreadId: ThreadId) => {
+    setLayout((current) => {
+      if (current.root === null) {
+        const id = makePaneId();
+        return {
+          ...current,
+          root: { type: "pane", id },
+          panes: {
+            ...current.panes,
+            [id]: { type: "continuation", sourceThreadId },
+          },
+          focusedPaneId: id,
+        };
+      }
+      if (current.focusedPaneId === null) return current;
+      const split = splitPane(
+        current,
+        current.focusedPaneId,
+        "row",
+        makePaneId,
+      );
+      return split.focusedPaneId === null
+        ? split
+        : restoreContinuation(split, split.focusedPaneId, sourceThreadId);
+    });
+  }, []);
+
+  const resetPaneToNew = useCallback((paneId: PaneId) => {
+    setLayout((current) => assignNew(current, paneId));
+  }, []);
+
   const newPane = useCallback(() => {
     setLayout((current) => {
       if (current.root === null) {
@@ -190,7 +246,7 @@ export function useWorkspaceLayout(
         return {
           ...current,
           root: { type: "pane", id },
-          panes: { ...current.panes, [id]: { threadId: null } },
+          panes: { ...current.panes, [id]: { type: "new" } },
           focusedPaneId: id,
         };
       }
@@ -244,6 +300,10 @@ export function useWorkspaceLayout(
     registerPaneElement,
     paneFocusIntent,
     assignThreadToPane,
+    beginContinuationInPane,
+    restoreContinuationInPane,
+    newContinuationPane,
+    resetPaneToNew,
     newPane,
     focus,
     bind,

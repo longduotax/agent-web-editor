@@ -52,6 +52,7 @@ const threadRowSchema = z.object({
   last_viewed_completed_run_id: RunIdSchema.nullable(),
   archived_at: TimestampSchema.nullable(),
   worktree_id: WorktreeIdSchema.nullable(),
+  initial_title_pending: z.union([z.literal(0), z.literal(1)]),
 });
 const worktreeRowSchema = z.object({
   id: WorktreeIdSchema,
@@ -184,7 +185,63 @@ const runRowSchema = z.object({
   ended_at: TimestampSchema.nullable(),
   failure_code: z.string().max(80).nullable(),
   failure_message: z.string().max(500).nullable(),
+  worktree_id: WorktreeIdSchema.nullable(),
 });
+const continuationRowSchema = z
+  .object({
+    id: z.uuid(),
+    project_id: ProjectIdSchema,
+    source_thread_id: ThreadIdSchema,
+    worktree_id: WorktreeIdSchema,
+    idempotency_key: z.uuid(),
+    request_hash: z.string().length(64),
+    state: z.enum([
+      "creating_session",
+      "session_created",
+      "thread_created",
+      "failed",
+    ]),
+    runtime_session_id: z.uuid().nullable(),
+    thread_id: ThreadIdSchema.nullable(),
+    title: z.string().trim().min(1).max(200).nullable(),
+    prompt_command_id: z.uuid().nullable(),
+    initial_prompt_dispatch_id: z.uuid().nullable(),
+    run_id: RunIdSchema.nullable(),
+    created_at: TimestampSchema,
+    updated_at: TimestampSchema,
+    failure_code: z.string().max(80).nullable(),
+    failure_message: z.string().max(500).nullable(),
+  })
+  .superRefine((row, context) => {
+    const hasSession = row.runtime_session_id !== null;
+    const hasThread = row.thread_id !== null;
+    if (
+      ["session_created", "thread_created"].includes(row.state) !== hasSession
+    )
+      context.addIssue({
+        code: "custom",
+        message: "continuation session state is inconsistent",
+      });
+    if ((row.state === "thread_created") !== hasThread)
+      context.addIssue({
+        code: "custom",
+        message: "continuation thread state is inconsistent",
+      });
+    const named = row.title !== null;
+    if (
+      named !== (row.prompt_command_id !== null) ||
+      named !== (row.initial_prompt_dispatch_id !== null)
+    )
+      context.addIssue({
+        code: "custom",
+        message: "continuation prompt identity is inconsistent",
+      });
+    if (row.run_id !== null && (!named || !hasThread))
+      context.addIssue({
+        code: "custom",
+        message: "continuation run state is inconsistent",
+      });
+  });
 const receiptRowSchema = z.object({
   operation: z.string(),
   request_hash: z.string(),
@@ -200,6 +257,7 @@ export type ThreadRecord = z.infer<typeof threadRowSchema>;
 export type RunRecord = z.infer<typeof runRowSchema>;
 export type WorktreeRecord = z.infer<typeof worktreeRowSchema>;
 export type ThreadCreationRecord = z.infer<typeof creationRowSchema>;
+export type ThreadContinuationRecord = z.infer<typeof continuationRowSchema>;
 export type ListReadResult<T> =
   | { readonly record: T; readonly diagnostic: null }
   | { readonly record: null; readonly diagnostic: string };
@@ -375,7 +433,7 @@ export class MetadataStore {
       const schemaVersion = sqliteSchemaVersionSchema.parse(
         sqlite.pragma("user_version", { simple: true }),
       );
-      if (schemaVersion > 7)
+      if (schemaVersion > 9)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
@@ -483,6 +541,32 @@ export class MetadataStore {
         sqlite.transaction(() => {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 7");
+        })();
+        migratedSchemaVersion = 7;
+      }
+      if (migratedSchemaVersion < 8) {
+        if (schemaVersion >= 7) await backupBefore(8);
+        const migrationPath = new URL(
+          "../../migrations/0008_worktree_continuations.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 8");
+        })();
+        migratedSchemaVersion = 8;
+      }
+      if (migratedSchemaVersion < 9) {
+        if (schemaVersion >= 8) await backupBefore(9);
+        const migrationPath = new URL(
+          "../../migrations/0009_deferred_continuations.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        sqlite.transaction(() => {
+          sqlite.exec(sql);
+          sqlite.pragma("user_version = 9");
         })();
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
@@ -693,13 +777,14 @@ export class MetadataStore {
     runtimeSessionId: string,
     title?: string,
     worktreeId: WorktreeId | null = null,
+    initialTitlePending = false,
   ): ThreadRecord {
     const id = ThreadIdSchema.parse(this.id());
     const now = this.now();
     this.sqlite.transaction(() => {
       this.sqlite
         .prepare(
-          "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, worktree_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+          "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, worktree_id, initial_title_pending) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         )
         .run(
           id,
@@ -709,6 +794,7 @@ export class MetadataStore {
           now,
           now,
           worktreeId,
+          initialTitlePending ? 1 : 0,
         );
       this.sqlite
         .prepare("UPDATE projects SET last_opened_thread_id = ? WHERE id = ?")
@@ -746,12 +832,24 @@ export class MetadataStore {
     // has learned should survive it.
     this.sqlite
       .prepare(
-        "UPDATE threads SET title = ? WHERE id = ? AND project_id = ? AND archived_at IS NULL",
+        "UPDATE threads SET title = ?, initial_title_pending = 0 WHERE id = ? AND project_id = ? AND archived_at IS NULL",
       )
       .run(title, threadId, projectId);
     const thread = this.getThread(projectId, threadId);
     if (thread === null) throw new Error("thread_not_found");
     return thread;
+  }
+
+  public applyInitialTitle(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    title: string,
+  ): void {
+    this.sqlite
+      .prepare(
+        "UPDATE threads SET title = ?, initial_title_pending = 0 WHERE id = ? AND project_id = ? AND initial_title_pending = 1 AND archived_at IS NULL",
+      )
+      .run(title, threadId, projectId);
   }
 
   public archiveThread(projectId: ProjectId, threadId: ThreadId): boolean {
@@ -806,7 +904,7 @@ export class MetadataStore {
   public latestRun(threadId: ThreadId): RunRecord | null {
     const row = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1",
       )
       .get(threadId);
     return row === undefined
@@ -818,7 +916,7 @@ export class MetadataStore {
     const parsedId = RunIdSchema.parse(id);
     const row = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE id = ?",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE id = ?",
       )
       .get(parsedId);
     return row === undefined
@@ -829,7 +927,7 @@ export class MetadataStore {
   public runningRunForThread(threadId: ThreadId): RunRecord | null {
     const row = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE thread_id = ? AND state = 'running'",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE thread_id = ? AND state = 'running'",
       )
       .get(threadId);
     return row === undefined
@@ -837,10 +935,21 @@ export class MetadataStore {
       : parseRow(runRowSchema, row, "run", threadId);
   }
 
+  public runningRunForWorktree(worktreeId: WorktreeId): RunRecord | null {
+    const row = this.sqlite
+      .prepare(
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE worktree_id = ? AND state = 'running'",
+      )
+      .get(worktreeId);
+    return row === undefined
+      ? null
+      : parseRow(runRowSchema, row, "run", worktreeId);
+  }
+
   public runningRunsForProject(projectId: ProjectId): RunRecord[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE project_id = ? AND state = 'running' ORDER BY started_at, id",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE project_id = ? AND state = 'running' ORDER BY started_at, id",
       )
       .all(projectId);
     return rows.map((row, index) =>
@@ -869,7 +978,7 @@ export class MetadataStore {
     return this.sqlite.transaction((): RunRecord | null => {
       const inserted = this.sqlite
         .prepare(
-          "INSERT INTO runs (id, thread_id, project_id, state, started_at, ended_at, accepted_command_id, failure_code, failure_message) SELECT ?, t.id, p.id, 'running', ?, NULL, ?, NULL, NULL FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL AND t.archived_at IS NULL",
+          "INSERT INTO runs (id, thread_id, project_id, state, started_at, ended_at, accepted_command_id, failure_code, failure_message, worktree_id) SELECT ?, t.id, p.id, 'running', ?, NULL, ?, NULL, NULL, t.worktree_id FROM threads t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.project_id = ? AND p.removed_at IS NULL AND t.archived_at IS NULL",
         )
         .run(id, now, acceptedCommandId, threadId, projectId);
       if (inserted.changes === 0) return null;
@@ -880,7 +989,7 @@ export class MetadataStore {
         .run(now, threadId, projectId);
       const row = this.sqlite
         .prepare(
-          "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE id = ?",
+          "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE id = ?",
         )
         .get(id);
       return parseRow(runRowSchema, row, "run", id);
@@ -916,7 +1025,7 @@ export class MetadataStore {
     })();
     const row = this.sqlite
       .prepare(
-        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message FROM runs WHERE id = ?",
+        "SELECT id, thread_id, project_id, state, started_at, ended_at, failure_code, failure_message, worktree_id FROM runs WHERE id = ?",
       )
       .get(runId);
     return parseRow(runRowSchema, row, "run", runId);
@@ -974,6 +1083,205 @@ export class MetadataStore {
     return row === undefined
       ? null
       : parseWorktreeRecord(row, this.stateDirectory, parsedId);
+  }
+
+  public getContinuation(
+    projectId: ProjectId,
+    idempotencyKey: string,
+  ): ThreadContinuationRecord | null {
+    const row = this.sqlite
+      .prepare(
+        "SELECT * FROM thread_continuation_operations WHERE project_id = ? AND idempotency_key = ?",
+      )
+      .get(projectId, idempotencyKey);
+    return row === undefined
+      ? null
+      : parseRow(
+          continuationRowSchema,
+          row,
+          "thread continuation",
+          idempotencyKey,
+        );
+  }
+
+  public reserveContinuation(input: {
+    projectId: ProjectId;
+    sourceThreadId: ThreadId;
+    worktreeId: WorktreeId;
+    idempotencyKey: string;
+    requestHash: string;
+  }): ThreadContinuationRecord {
+    const existing = this.getContinuation(
+      input.projectId,
+      input.idempotencyKey,
+    );
+    if (existing !== null) {
+      if (existing.request_hash !== input.requestHash)
+        throw new ReceiptConflictError();
+      return existing;
+    }
+    const id = z.uuid().parse(this.id());
+    const now = this.now();
+    this.sqlite
+      .prepare(
+        "INSERT INTO thread_continuation_operations (id, project_id, source_thread_id, worktree_id, idempotency_key, request_hash, state, runtime_session_id, thread_id, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, ?, ?, 'creating_session', NULL, NULL, ?, ?, NULL, NULL)",
+      )
+      .run(
+        id,
+        input.projectId,
+        input.sourceThreadId,
+        input.worktreeId,
+        input.idempotencyKey,
+        input.requestHash,
+        now,
+        now,
+      );
+    return requireRecord(
+      this.getContinuation(input.projectId, input.idempotencyKey),
+      "continuation_insert_failed",
+    );
+  }
+
+  public nameContinuation(
+    projectId: ProjectId,
+    idempotencyKey: string,
+    title: string,
+  ): ThreadContinuationRecord {
+    const operation = requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
+    if (operation.title !== null) return operation;
+    const promptCommandId = z.uuid().parse(this.id());
+    const dispatchId = z.uuid().parse(this.id());
+    this.sqlite
+      .prepare(
+        "UPDATE thread_continuation_operations SET title = ?, prompt_command_id = ?, initial_prompt_dispatch_id = ?, updated_at = ? WHERE project_id = ? AND idempotency_key = ? AND title IS NULL",
+      )
+      .run(
+        title,
+        promptCommandId,
+        dispatchId,
+        this.now(),
+        projectId,
+        idempotencyKey,
+      );
+    return requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
+  }
+
+  public attachContinuationSession(
+    projectId: ProjectId,
+    idempotencyKey: string,
+    sessionId: string,
+  ): ThreadContinuationRecord {
+    this.sqlite
+      .prepare(
+        "UPDATE thread_continuation_operations SET state = 'session_created', runtime_session_id = ?, updated_at = ?, failure_code = NULL, failure_message = NULL WHERE project_id = ? AND idempotency_key = ? AND state IN ('creating_session', 'failed')",
+      )
+      .run(sessionId, this.now(), projectId, idempotencyKey);
+    return requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
+  }
+
+  public finishContinuation(
+    projectId: ProjectId,
+    idempotencyKey: string,
+  ): ThreadRecord {
+    const operation = requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
+    if (operation.thread_id !== null) {
+      const existing = this.getThread(projectId, operation.thread_id);
+      if (existing === null) throw new Error("thread_not_found");
+      return existing;
+    }
+    if (operation.runtime_session_id === null)
+      throw new Error("continuation_session_missing");
+    const existing = this.getThreadByRuntimeSession(
+      projectId,
+      operation.runtime_session_id,
+    );
+    const thread =
+      existing ??
+      this.createThread(
+        projectId,
+        operation.runtime_session_id,
+        operation.title ?? "New chat",
+        operation.worktree_id,
+        operation.title === null,
+      );
+    this.sqlite
+      .prepare(
+        "UPDATE thread_continuation_operations SET state = 'thread_created', thread_id = ?, updated_at = ? WHERE project_id = ? AND idempotency_key = ? AND state = 'session_created'",
+      )
+      .run(thread.id, this.now(), projectId, idempotencyKey);
+    return thread;
+  }
+
+  public acceptRecoveredContinuationPrompt(
+    projectId: ProjectId,
+    idempotencyKey: string,
+    threadId: ThreadId,
+  ): RunRecord {
+    return this.sqlite.transaction(() => {
+      const operation = requireRecord(
+        this.getContinuation(projectId, idempotencyKey),
+        "continuation_not_found",
+      );
+      if (operation.run_id !== null)
+        return requireRecord(this.getRun(operation.run_id), "run_not_found");
+      if (operation.prompt_command_id === null)
+        throw new Error("continuation_prompt_missing");
+      if (operation.thread_id !== threadId)
+        throw new Error("continuation_thread_mismatch");
+      const run = requireRecord(
+        this.createRunIfProjectActive(
+          projectId,
+          threadId,
+          operation.prompt_command_id,
+        ),
+        "thread_not_found",
+      );
+      this.sqlite
+        .prepare(
+          "UPDATE thread_continuation_operations SET run_id = ?, updated_at = ? WHERE project_id = ? AND idempotency_key = ? AND run_id IS NULL",
+        )
+        .run(run.id, this.now(), projectId, idempotencyKey);
+      return run;
+    })();
+  }
+
+  public attachContinuationRun(
+    projectId: ProjectId,
+    idempotencyKey: string,
+    runId: RunId,
+  ): ThreadContinuationRecord {
+    const operation = requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
+    const run = requireRecord(this.getRun(runId), "run_not_found");
+    if (
+      operation.thread_id === null ||
+      run.project_id !== projectId ||
+      run.thread_id !== operation.thread_id
+    )
+      throw new Error("continuation_run_mismatch");
+    this.sqlite
+      .prepare(
+        "UPDATE thread_continuation_operations SET run_id = ?, updated_at = ? WHERE project_id = ? AND idempotency_key = ? AND run_id IS NULL",
+      )
+      .run(runId, this.now(), projectId, idempotencyKey);
+    return requireRecord(
+      this.getContinuation(projectId, idempotencyKey),
+      "continuation_not_found",
+    );
   }
 
   public reserveWorktree(input: {

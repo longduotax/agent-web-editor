@@ -2054,6 +2054,11 @@ a:focus-visible {
 .composer.steering .composer-actions > span:first-child {
   color: var(--run-ink);
 }
+.composer-stack {
+  width: 100%;
+  max-width: var(--surface-measure);
+  margin-inline: auto;
+}
 .composer-input {
   width: 100%;
   max-width: var(--surface-measure);
@@ -2139,6 +2144,28 @@ a:focus-visible {
   color: var(--muted);
   background: var(--hover);
   cursor: not-allowed;
+}
+.composer-command {
+  width: 100%;
+  margin: 0 0 0.4rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  background: var(--card);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-command:hover,
+.composer-command:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  background: var(--hover);
+}
+.composer-command code {
+  color: var(--accent);
+  font-weight: 650;
 }
 /* The panel is elevated above the chat surface it is docked against: its
    leading edge carries a soft shadow as well as the hairline. Scoped to this
