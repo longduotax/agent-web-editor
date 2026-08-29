@@ -401,9 +401,13 @@ export class WorkspaceService {
       record.worktree_id === null
         ? null
         : this.store.getWorktree(record.worktree_id);
-    const runtimeUnavailableReason = this.runtimeUnavailableReasons.get(
-      record.id,
-    );
+    const backendStatus = this.adapters.status(record.runtime);
+    const runtimeUnavailableReason =
+      this.runtimeUnavailableReasons.get(record.id) ??
+      (backendStatus.available
+        ? undefined
+        : (backendStatus.reason ??
+          `${record.runtime} is not available on this machine.`));
     return ThreadSummarySchema.parse({
       id: record.id,
       projectId: record.project_id,
@@ -437,6 +441,10 @@ export class WorkspaceService {
     threads: ThreadSummary[];
     diagnostics: string[];
   }> {
+    // Probe once per backend, not once per thread, before persisted thread
+    // summaries are constructed. This makes the first response after restart
+    // honest even when an external runtime disappeared while the server was down.
+    await this.adapters.availability();
     const projectResults = this.store.listProjectResults();
     const threadResults = this.store.listThreadResults();
     const projectRecords = projectResults.flatMap((result) =>
@@ -720,6 +728,7 @@ export class WorkspaceService {
           }
         }
         if (run === null) throw new Error("run_not_found");
+        await this.adapters.refresh(thread.runtime);
         return StartThreadResponseSchema.parse({
           thread: this.threadDto(this.requireThread(projectId, thread.id)),
           run: runDto(run),
@@ -1080,11 +1089,13 @@ export class WorkspaceService {
           hash,
           ThreadIdSchema,
         );
-        if (prior !== null)
+        if (prior !== null) {
+          await this.adapters.refresh(runtime);
           return this.threadDto(this.requireThread(projectId, prior));
-        const created = await this.adapters
-          .get(runtime)
-          .create(await this.requireProjectRoot(projectId));
+        }
+        const created = await (
+          await this.adapters.usable(runtime)
+        ).create(await this.requireProjectRoot(projectId));
         const receipt = this.store.withReceipt(
           projectId,
           idempotencyKey,
@@ -1109,9 +1120,9 @@ export class WorkspaceService {
     title?: string,
     runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
-    const created = await this.adapters
-      .get(runtime)
-      .create(await this.requireProjectRoot(projectId));
+    const created = await (
+      await this.adapters.usable(runtime)
+    ).create(await this.requireProjectRoot(projectId));
     return this.threadDto(
       this.store.createThread(projectId, runtime, created.sessionId, title),
     );
@@ -1146,11 +1157,13 @@ export class WorkspaceService {
             hash,
             ThreadIdSchema,
           );
-          if (prior !== null)
+          if (prior !== null) {
+            await this.adapters.refresh(runtime);
             return this.threadDto(this.requireThread(projectId, prior));
-          const sessions = await this.adapters
-            .get(runtime)
-            .discover(await this.requireProjectRoot(projectId));
+          }
+          const sessions = await (
+            await this.adapters.usable(runtime)
+          ).discover(await this.requireProjectRoot(projectId));
           const descriptor = sessions.sessions.find(
             (session) => session.id === sessionId,
           );
@@ -1177,9 +1190,9 @@ export class WorkspaceService {
         },
       );
     }
-    const sessions = await this.adapters
-      .get(runtime)
-      .discover(await this.requireProjectRoot(projectId));
+    const sessions = await (
+      await this.adapters.usable(runtime)
+    ).discover(await this.requireProjectRoot(projectId));
     const descriptor = sessions.sessions.find(
       (session) => session.id === sessionId,
     );
@@ -1303,15 +1316,21 @@ export class WorkspaceService {
 
   // Archived threads are hidden from every other listing, so restoring one
   // needs its own read path. Ordered like the sidebar's live list.
-  public listArchivedThreads(projectId: ProjectId): ThreadSummary[] {
+  public async listArchivedThreads(
+    projectId: ProjectId,
+  ): Promise<ThreadSummary[]> {
     this.requireProject(projectId);
-    return this.store
+    const archived = this.store
       .listThreadResults(projectId, { includeArchived: true })
       .flatMap((result) =>
-        result.record?.archived_at == null
-          ? []
-          : [this.threadDto(result.record)],
+        result.record?.archived_at == null ? [] : [result.record],
       );
+    await Promise.all(
+      [...new Set(archived.map((thread) => thread.runtime))].map(
+        async (runtime) => await this.adapters.refresh(runtime),
+      ),
+    );
+    return archived.map((thread) => this.threadDto(thread));
   }
 
   // The inverse of archiveThread, and the reason archive is no longer a
@@ -1410,9 +1429,9 @@ export class WorkspaceService {
     const context = await this.executionContexts.resolve(thread);
     let runtime: OpenRuntimeSession;
     try {
-      runtime = await this.adapters
-        .get(thread.runtime)
-        .open(context.executionRoot, thread.runtime_session_id);
+      runtime = await (
+        await this.adapters.usable(thread.runtime)
+      ).open(context.executionRoot, thread.runtime_session_id);
     } catch (error) {
       this.runtimeUnavailableReasons.set(
         thread.id,
@@ -1492,6 +1511,8 @@ export class WorkspaceService {
         diagnostics.push(...native.diagnostics);
       }
       this.transcriptPages.set(threadId, transcriptPage);
+      this.runtimeUnavailableReasons.delete(threadId);
+      this.adapters.recordAvailable(thread.runtime);
     } catch (error) {
       transcriptPage = this.transcriptPages.get(threadId) ?? transcriptPage;
       const reason =
@@ -1531,14 +1552,18 @@ export class WorkspaceService {
   ): Promise<TranscriptPage> {
     const thread = this.requireThread(projectId, threadId);
     const runtime = await this.openRuntime(thread);
-    if (runtime.olderTranscriptPage !== undefined)
-      return TranscriptPageSchema.parse(
-        await runtime.olderTranscriptPage(cursor),
-      );
-    const native = await runtime.snapshot();
-    return TranscriptPageSchema.parse(
-      this.fallbackPager(threadId).older(native.transcript, cursor),
-    );
+    const page =
+      runtime.olderTranscriptPage !== undefined
+        ? TranscriptPageSchema.parse(await runtime.olderTranscriptPage(cursor))
+        : TranscriptPageSchema.parse(
+            this.fallbackPager(threadId).older(
+              (await runtime.snapshot()).transcript,
+              cursor,
+            ),
+          );
+    this.runtimeUnavailableReasons.delete(threadId);
+    this.adapters.recordAvailable(thread.runtime);
+    return page;
   }
 
   private fallbackPager(threadId: ThreadId): TranscriptPager {

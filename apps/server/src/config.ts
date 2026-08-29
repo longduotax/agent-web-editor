@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { CodexSandbox } from "@pi-web/codex-adapter";
-import type { RuntimeKind } from "@pi-web/contracts";
+import { RuntimeKindSchema, type RuntimeKind } from "@pi-web/contracts";
 import { z } from "zod";
 
 const namingModelTextSchema = z
@@ -28,7 +28,6 @@ export function parseNamingModelSelector(
   };
 }
 
-const runtimeKindTextSchema = z.enum(["pi", "codex"]);
 const codexSandboxTextSchema = z.enum([
   "read-only",
   "workspace-write",
@@ -137,7 +136,7 @@ export function parseConfig(options: ParseConfigOptions = {}): ServerConfig {
   const devPort = parsePort(environment.PI_WEB_DEV_PORT ?? "5173");
   const namingModel = parseNamingModelSelector(environment.PI_WEB_NAMING_MODEL);
   const defaultRuntime = parseEnum(
-    runtimeKindTextSchema,
+    RuntimeKindSchema,
     environment.PI_WEB_DEFAULT_RUNTIME,
     "codex",
     "PI_WEB_DEFAULT_RUNTIME",

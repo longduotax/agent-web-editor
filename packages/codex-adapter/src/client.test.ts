@@ -79,6 +79,19 @@ class FakeTransport implements CodexTransport {
   }
 }
 
+/** Replays a process exit as soon as the supervisor begins listening. */
+class PreExitedTransport extends FakeTransport {
+  public override onExit(
+    listener: (info: {
+      code: number | null;
+      signal: string | null;
+      error?: Error;
+    }) => void,
+  ): void {
+    listener({ code: 127, signal: null });
+  }
+}
+
 function client(transport: FakeTransport) {
   return new CodexClient({ connect: () => Promise.resolve(transport) });
 }
@@ -231,6 +244,19 @@ describe("CodexClient process supervision", () => {
     await codex.dispose();
   });
 
+  it("fails promptly when the transport exited before the handshake", async () => {
+    const transport = new PreExitedTransport();
+    const codex = client(transport);
+    const ready = codex.ready();
+
+    await expect(ready).rejects.toBeInstanceOf(RuntimeFailure);
+    await expect(ready).rejects.toMatchObject({ code: "unavailable" });
+    await expect(ready).rejects.toThrow("exit code 127");
+    expect(transport.sent).toEqual([]);
+    expect(transport.closed).toBe(true);
+    await codex.dispose();
+  });
+
   it("fails in-flight requests when the app-server exits", async () => {
     const transport = new FakeTransport();
     const codex = client(transport);
@@ -259,6 +285,45 @@ describe("CodexClient process supervision", () => {
     await vi.waitFor(() => {
       expect(second.sent.length).toBeGreaterThan(0);
     });
+    expect(handed).toBe(2);
+    await codex.dispose();
+  });
+
+  it("does not attach a request to a session that dies before its await resumes", async () => {
+    const first = new FakeTransport();
+    const second = new FakeTransport();
+    let handed = 0;
+    const codex = new CodexClient({
+      connect: () => Promise.resolve(handed++ === 0 ? first : second),
+      restartDelayMs: 0,
+    });
+    await codex.ready();
+
+    const pending = codex.request("thread/list", { cwd: "/project" });
+    // request() is currently awaiting the already-resolved first session. Its
+    // continuation must observe this exit and acquire a new session instead.
+    first.exit(1);
+
+    await vi.waitFor(() => {
+      expect(
+        second.sent.some(
+          (line) =>
+            (JSON.parse(line) as { method?: string }).method === "thread/list",
+        ),
+      ).toBe(true);
+    });
+    const request = second.sent
+      .map((line) => JSON.parse(line) as { id?: number; method?: string })
+      .find((frame) => frame.method === "thread/list");
+    second.reply(request?.id ?? 0, { data: [], nextCursor: null });
+
+    await expect(pending).resolves.toEqual({ data: [], nextCursor: null });
+    expect(
+      first.sent.some(
+        (line) =>
+          (JSON.parse(line) as { method?: string }).method === "thread/list",
+      ),
+    ).toBe(false);
     expect(handed).toBe(2);
     await codex.dispose();
   });

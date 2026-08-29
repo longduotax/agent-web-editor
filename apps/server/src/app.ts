@@ -608,9 +608,9 @@ export async function buildServer(
   );
   // Deliberately not `/threads/archived`: that would sit under the
   // `:threadId` param route and depend on segment-priority rules to resolve.
-  server.get("/api/projects/:projectId/archived-threads", (request) => {
+  server.get("/api/projects/:projectId/archived-threads", async (request) => {
     const params = projectParamsSchema.parse(request.params);
-    return { threads: workspace.listArchivedThreads(params.projectId) };
+    return { threads: await workspace.listArchivedThreads(params.projectId) };
   });
   server.get("/api/projects/:projectId/threads/:threadId", async (request) => {
     const params = threadParamsSchema.parse(request.params);

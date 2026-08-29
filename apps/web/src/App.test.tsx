@@ -678,6 +678,16 @@ describe("safe and accessible workspace rendering", () => {
           runtime: "codex" as const,
           imported: false,
         },
+        {
+          id: "50000000-0000-4000-8000-000000000001",
+          name: "Existing Pi session",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          modifiedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 1,
+          preview: "Existing Pi work",
+          runtime: "pi" as const,
+          imported: false,
+        },
       ],
       diagnostics: ["One session could not be read."],
     });
@@ -771,6 +781,7 @@ describe("safe and accessible workspace rendering", () => {
         mutations: { retry: false },
       },
     });
+    const consoleError = vi.spyOn(console, "error");
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
@@ -785,14 +796,20 @@ describe("safe and accessible workspace rendering", () => {
       }),
     );
     expect(
-      await screen.findByRole("button", { name: "Import" }),
-    ).toBeInTheDocument();
+      await screen.findAllByRole("button", { name: "Import" }),
+    ).toHaveLength(2);
     expect(api.discoverSessions).toHaveBeenCalledWith(projectId);
     expect(
       screen.getByText("One session could not be read."),
     ).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join(" ")).not.toContain(
+      "Encountered two children with the same key",
+    );
+    consoleError.mockRestore();
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    const [codexImport] = screen.getAllByRole("button", { name: "Import" });
+    if (codexImport === undefined) throw new Error("Codex import is missing");
+    await user.click(codexImport);
     await waitFor(() => {
       expect(api.importThread).toHaveBeenCalledWith(
         projectId,
@@ -800,6 +817,22 @@ describe("safe and accessible workspace rendering", () => {
         "codex",
       );
       expect(api.getSnapshot).toHaveBeenCalledWith(projectId, importedThreadId);
+    });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Import an existing session into Example project",
+      }),
+    );
+    await screen.findAllByRole("button", { name: "Import" });
+    const [, piImport] = screen.getAllByRole("button", { name: "Import" });
+    if (piImport === undefined) throw new Error("Pi import is missing");
+    await user.click(piImport);
+    await waitFor(() => {
+      expect(api.importThread).toHaveBeenCalledWith(
+        projectId,
+        "50000000-0000-4000-8000-000000000001",
+        "pi",
+      );
     });
     expect(
       await screen.findByRole("heading", { name: "Existing session" }),

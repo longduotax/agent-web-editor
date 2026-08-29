@@ -689,7 +689,7 @@ function Sidebar({
                       ))}
                       <ul>
                         {sessions.data?.sessions.map((session) => (
-                          <li key={session.id}>
+                          <li key={`${session.runtime}:${session.id}`}>
                             <span>{session.name ?? session.preview}</span>
                             {session.imported ? (
                               <small>Already imported</small>

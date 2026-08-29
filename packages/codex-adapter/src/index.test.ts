@@ -274,14 +274,20 @@ describe("CodexAgentRuntime.create", () => {
 });
 
 describe("CodexOpenSession", () => {
-  async function opened(answers: Record<string, unknown> = {}) {
+  async function opened(
+    answers: Record<string, unknown> = {},
+    options: Omit<CodexAgentRuntimeOptions, "connect" | "sandbox"> = {},
+  ) {
     const server = new ScriptedServer({
       "thread/resume": { thread: thread() },
       "thread/read": { thread: thread() },
       "thread/unsubscribe": {},
       ...answers,
     });
-    const session = await runtimeOver(server).open("/repo", THREAD);
+    const session = await runtimeOver(server, undefined, options).open(
+      "/repo",
+      THREAD,
+    );
     return { server, session };
   }
 
@@ -499,6 +505,99 @@ describe("CodexOpenSession", () => {
     const older = await session.olderTranscriptPage(cursor);
     expect(older.items[0]).toMatchObject({ id: "assistant-0" });
     expect(older.olderCursor).toBeNull();
+    await session.dispose();
+  });
+
+  it("replays an older cursor identically after its rollout data is released", async () => {
+    const home = await mkdtemp(join(tmpdir(), "codex-cursor-replay-"));
+    temporaryRoots.push(home);
+    const directory = join(home, "sessions", "2026", "08", "23");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "rollout-test.jsonl");
+    const metadata = { turn_id: "r1", create_time: 1 };
+    const line = (type: string, payload: unknown) =>
+      JSON.stringify({
+        timestamp: "2026-08-23T00:00:00.000Z",
+        type,
+        payload,
+      });
+    await writeFile(
+      path,
+      `${[
+        line("event_msg", { type: "task_started", turn_id: "r1" }),
+        line("response_item", {
+          type: "message",
+          id: "u1",
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "custom_tool_call",
+          id: "tool-1",
+          call_id: "tool-1",
+          name: "exec",
+          input: 'tools.exec_command({"cmd":"printf ok","workdir":"/repo"})',
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "custom_tool_call_output",
+          call_id: "tool-1",
+          output: '{"exit_code":0,"output":"ok"}',
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("response_item", {
+          type: "message",
+          id: "a1",
+          internal_chat_message_metadata_passthrough: metadata,
+        }),
+        line("event_msg", { type: "task_complete", turn_id: "r1" }),
+      ].join("\n")}\n`,
+    );
+    const turns = [
+      {
+        id: "r1",
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "userMessage",
+            id: "u1",
+            content: [{ type: "text", text: "go" }],
+          },
+          { type: "agentMessage", id: "a1", text: "done" },
+        ],
+      },
+      ...Array.from({ length: 101 }, (_, index) => ({
+        id: `r${String(index + 2)}`,
+        status: "completed",
+        error: null,
+        items: [
+          {
+            type: "agentMessage",
+            id: `assistant-${String(index + 2)}`,
+            text: `message ${String(index + 2)}`,
+          },
+        ],
+      })),
+    ];
+    const { session } = await opened(
+      {
+        "thread/read": { thread: thread({ path, turns }) },
+      },
+      { codexHome: home },
+    );
+    if (
+      session.latestTranscriptPage === undefined ||
+      session.olderTranscriptPage === undefined
+    )
+      throw new Error("Expected paged history");
+    const latest = await session.latestTranscriptPage();
+    if (latest.olderCursor === null) throw new Error("Expected an older page");
+    const first = await session.olderTranscriptPage(latest.olderCursor);
+    const replay = await session.olderTranscriptPage(latest.olderCursor);
+    expect(first.items).toContainEqual(
+      expect.objectContaining({ id: "tool-1" }),
+    );
+    expect(replay).toEqual(first);
     await session.dispose();
   });
 

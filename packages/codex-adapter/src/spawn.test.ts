@@ -108,6 +108,31 @@ describe("spawnCodexTransport", () => {
     transport.close();
   });
 
+  it("reports a closed stdin pipe instead of emitting an unhandled EPIPE", async () => {
+    const transport = await spawnCodexTransport(
+      "node",
+      [
+        "-e",
+        "process.stdin.destroy(); setTimeout(() => process.exit(0), 1000)",
+      ],
+      {},
+    );
+    const exits: { error?: Error }[] = [];
+    transport.onExit((info) => exits.push(info));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    for (let index = 0; index < 8; index += 1)
+      transport.send("x".repeat(128 * 1024));
+
+    await vi.waitFor(
+      () => {
+        expect(exits[0]?.error).toBeInstanceOf(Error);
+      },
+      { timeout: 4000 },
+    );
+    transport.close();
+  });
+
   it("writes each frame as its own line", async () => {
     const script = `
       let seen = 0;

@@ -73,6 +73,7 @@ interface Session {
   transport: CodexTransport;
   pending: Map<string, Pending>;
   alive: boolean;
+  disconnectReason?: string;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -120,23 +121,57 @@ export class CodexClient {
   }
 
   public async request(method: string, params: unknown): Promise<unknown> {
-    const session = await this.session0();
-    const id = this.nextId++;
-    return await new Promise<unknown>((resolve, reject) => {
-      session.pending.set(String(id), { resolve, reject });
-      session.transport.send(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-      );
-    });
+    for (;;) {
+      const session = await this.session0();
+      // The process can exit after session0 resolves but before this await
+      // continuation runs. Reconnect before assigning an id or sending bytes.
+      if (!session.alive) continue;
+      const id = this.nextId++;
+      return await new Promise<unknown>((resolve, reject) => {
+        session.pending.set(String(id), { resolve, reject });
+        try {
+          session.transport.send(
+            JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+          );
+        } catch (error) {
+          session.pending.delete(String(id));
+          const cause =
+            error instanceof Error ? error : new Error(String(error));
+          const failure = new RuntimeFailure(
+            "unavailable",
+            `The Codex app-server transport failed (${cause.message}).`,
+            { cause },
+          );
+          reject(failure);
+          this.dropSession(session, failure.message);
+        }
+      });
+    }
   }
 
   public async notify(method: string, params?: unknown): Promise<void> {
-    const session = await this.session0();
-    session.transport.send(
-      params === undefined
-        ? JSON.stringify({ jsonrpc: "2.0", method })
-        : JSON.stringify({ jsonrpc: "2.0", method, params }),
-    );
+    for (;;) {
+      const session = await this.session0();
+      if (!session.alive) continue;
+      try {
+        session.transport.send(
+          params === undefined
+            ? JSON.stringify({ jsonrpc: "2.0", method })
+            : JSON.stringify({ jsonrpc: "2.0", method, params }),
+        );
+      } catch (error) {
+        const cause = error instanceof Error ? error : new Error(String(error));
+        const failure = new RuntimeFailure(
+          "unavailable",
+          `The Codex app-server transport failed (${cause.message}).`,
+          { cause },
+        );
+        this.dropSession(session, failure.message);
+        throw failure;
+      }
+      this.assertAlive(session);
+      return;
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -197,6 +232,10 @@ export class CodexClient {
   }
 
   private async handshake(session: Session): Promise<void> {
+    // onExit may synchronously replay a process exit that happened before its
+    // listener was registered. Do not leave an initialize request waiting on
+    // that already-dead transport.
+    this.assertAlive(session);
     const id = this.nextId++;
     const timeoutMs = this.options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     const answered = new Promise<unknown>((resolve, reject) => {
@@ -231,9 +270,19 @@ export class CodexClient {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
+    this.assertAlive(session);
     session.transport.send(
       JSON.stringify({ jsonrpc: "2.0", method: "initialized" }),
     );
+    this.assertAlive(session);
+  }
+
+  private assertAlive(session: Session): void {
+    if (!session.alive)
+      throw new RuntimeFailure(
+        "unavailable",
+        session.disconnectReason ?? "The Codex app-server stopped.",
+      );
   }
 
   private receive(session: Session, line: string): void {
@@ -304,6 +353,7 @@ export class CodexClient {
   private dropSession(session: Session, reason: string): void {
     if (!session.alive) return;
     session.alive = false;
+    session.disconnectReason = reason;
     // A dead process cannot answer anything still in flight; fail those now
     // rather than leaving a run hanging on a promise that can never settle.
     const failure = new RuntimeFailure("unavailable", reason);

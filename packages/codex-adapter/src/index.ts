@@ -377,6 +377,8 @@ interface CodexPagePosition {
 interface StoredCodexPagePosition {
   position: CodexPagePosition;
   boundaryTurnId: string | null;
+  page?: TranscriptPage;
+  pageLoad?: Promise<TranscriptPage>;
 }
 
 const PAGE_ITEM_LIMIT = 100;
@@ -471,7 +473,17 @@ class CodexOpenSession implements OpenRuntimeSession {
     const currentBoundary = this.turns[stored.position.turnEnd - 1]?.id ?? null;
     if (currentBoundary !== stored.boundaryTurnId)
       throw new RuntimeFailure("rejected", "The transcript position is stale.");
-    return await this.buildPage(stored.position, false);
+    if (stored.page !== undefined) return stored.page;
+    if (stored.pageLoad !== undefined) return await stored.pageLoad;
+    const pageLoad = this.buildPage(stored.position, false);
+    stored.pageLoad = pageLoad;
+    try {
+      const page = await pageLoad;
+      stored.page = page;
+      return page;
+    } finally {
+      delete stored.pageLoad;
+    }
   }
 
   private async readThread(): Promise<

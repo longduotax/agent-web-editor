@@ -8,6 +8,7 @@ import type {
   PromptAcceptance,
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
+import type { SessionDescriptor } from "@pi-web/contracts";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -45,8 +46,12 @@ class ControlledSession implements OpenRuntimeSession {
     ((stopCount: number) => Promise<void> | undefined) | undefined;
   public disposeGate: Promise<void> | undefined;
   public unavailable = false;
+  public snapshotFailure: Error | undefined;
   private readonly unavailableListeners = new Set<(reason: string) => void>();
   public snapshot() {
+    const failure = this.snapshotFailure;
+    this.snapshotFailure = undefined;
+    if (failure !== undefined) return Promise.reject(failure);
     return Promise.resolve({
       sessionId: this.id,
       transcript: [],
@@ -114,6 +119,9 @@ class ControlledRuntime implements AgentRuntime {
   public createFailure: Error | undefined;
   public openFailure: Error | undefined;
   public openCount = 0;
+  public probeAvailable = true;
+  public probeReason: string | undefined;
+  public discoveredSessions: SessionDescriptor[] = [];
 
   public get session(): ControlledSession {
     const session = this.sessions.values().next().value;
@@ -125,8 +133,17 @@ class ControlledRuntime implements AgentRuntime {
     if (session === undefined) throw new Error("controlled session not found");
     return session;
   }
+  public probe() {
+    return Promise.resolve({
+      available: this.probeAvailable,
+      ...(this.probeReason === undefined ? {} : { reason: this.probeReason }),
+    });
+  }
   public discover() {
-    return Promise.resolve({ sessions: [], diagnostics: [] });
+    return Promise.resolve({
+      sessions: this.discoveredSessions,
+      diagnostics: [],
+    });
   }
   public create() {
     if (this.createFailure !== undefined)
@@ -242,6 +259,127 @@ describe("run coordination", () => {
     context.store.close();
   });
 
+  it("reports an existing Codex thread unavailable immediately after restart", async () => {
+    const context = await fixture();
+    const codex = await context.service.createThread(
+      context.project.id,
+      "Codex after restart",
+      undefined,
+      "codex",
+    );
+    await context.service.close();
+
+    const unavailableCodex = new ControlledRuntime();
+    unavailableCodex.probeAvailable = false;
+    unavailableCodex.probeReason = "Codex CLI is unavailable.";
+    const restarted = new WorkspaceService(
+      context.store,
+      new RuntimeRegistry(
+        { pi: context.runtime, codex: unavailableCodex },
+        "pi",
+      ),
+      new LiveBroker(),
+    );
+
+    const listed = await restarted.list();
+    expect(listed.threads).toContainEqual(
+      expect.objectContaining({
+        id: codex.id,
+        runtime: "codex",
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "Codex CLI is unavailable.",
+      }),
+    );
+    expect(unavailableCodex.openCount).toBe(0);
+
+    await restarted.close();
+    context.store.close();
+  });
+
+  it("reports successful Codex imports and archived listings available after a fresh start", async () => {
+    const context = await fixture();
+    const sessionId = "10000000-0000-4000-8000-000000000099";
+    const codex = new ControlledRuntime();
+    codex.discoveredSessions = [
+      {
+        id: sessionId,
+        name: "Imported Codex session",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        modifiedAt: "2026-01-01T00:00:00.000Z",
+        messageCount: 1,
+        preview: "Imported work",
+        imported: false,
+        runtime: "codex",
+      },
+    ];
+    const importKey = "10000000-0000-4000-8000-000000000100";
+    const importedService = new WorkspaceService(
+      context.store,
+      new RuntimeRegistry({ pi: new ControlledRuntime(), codex }, "pi"),
+      new LiveBroker(),
+    );
+    const imported = await importedService.importThread(
+      context.project.id,
+      sessionId,
+      undefined,
+      importKey,
+      "codex",
+    );
+    expect(imported).toMatchObject({
+      runtime: "codex",
+      runtimeAvailable: true,
+    });
+
+    const replayService = new WorkspaceService(
+      context.store,
+      new RuntimeRegistry(
+        { pi: new ControlledRuntime(), codex: new ControlledRuntime() },
+        "pi",
+      ),
+      new LiveBroker(),
+    );
+    await expect(
+      replayService.importThread(
+        context.project.id,
+        sessionId,
+        undefined,
+        importKey,
+        "codex",
+      ),
+    ).resolves.toMatchObject({ runtimeAvailable: true });
+
+    await replayService.archiveThread(
+      context.project.id,
+      imported.id,
+      "10000000-0000-4000-8000-000000000101",
+    );
+    const archivedService = new WorkspaceService(
+      context.store,
+      new RuntimeRegistry(
+        { pi: new ControlledRuntime(), codex: new ControlledRuntime() },
+        "pi",
+      ),
+      new LiveBroker(),
+    );
+    await expect(
+      archivedService.listArchivedThreads(context.project.id),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        id: imported.id,
+        runtime: "codex",
+        runtimeAvailable: true,
+      }),
+    );
+
+    await Promise.all([
+      importedService.close(),
+      replayService.close(),
+      archivedService.close(),
+      context.service.close(),
+    ]);
+    context.store.close();
+  });
+
   it("keeps an existing Codex transcript readable when its runtime becomes unavailable", async () => {
     const context = await fixture();
     const codex = await context.service.createThread(
@@ -280,6 +418,37 @@ describe("run coordination", () => {
         runtimeUnavailableReason: "Codex CLI is unavailable.",
       }),
     );
+
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("restores availability after a cached runtime recovers from a page read failure", async () => {
+    const context = await fixture();
+    const codex = await context.service.createThread(
+      context.project.id,
+      "Codex transient read",
+      undefined,
+      "codex",
+    );
+    sessionFor(context, codex.id).snapshotFailure = new Error(
+      "Codex history read failed.",
+    );
+
+    const failed = await context.service.snapshot(context.project.id, codex.id);
+    expect(failed.thread.runtimeAvailable).toBe(false);
+    expect(failed.capabilities.prompt).toBe(false);
+
+    const recovered = await context.service.snapshot(
+      context.project.id,
+      codex.id,
+    );
+    expect(recovered.thread).toMatchObject({
+      id: codex.id,
+      runtimeAvailable: true,
+    });
+    expect(recovered.thread.runtimeUnavailableReason).toBeUndefined();
+    expect(recovered.capabilities.prompt).toBe(true);
 
     await context.service.close();
     context.store.close();
@@ -494,9 +663,9 @@ describe("run coordination", () => {
       archiveKey,
     );
     expect(
-      context.service
-        .listArchivedThreads(context.project.id)
-        .map((thread) => thread.id),
+      (await context.service.listArchivedThreads(context.project.id)).map(
+        (thread) => thread.id,
+      ),
     ).toEqual([context.first.id]);
 
     await expect(
@@ -514,7 +683,9 @@ describe("run coordination", () => {
         restoreKey,
       ),
     ).resolves.toEqual({ archived: false });
-    expect(context.service.listArchivedThreads(context.project.id)).toEqual([]);
+    await expect(
+      context.service.listArchivedThreads(context.project.id),
+    ).resolves.toEqual([]);
     expect(
       (await context.service.list()).threads.map((thread) => thread.id),
     ).toContain(context.first.id);

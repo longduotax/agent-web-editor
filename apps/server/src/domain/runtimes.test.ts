@@ -53,15 +53,28 @@ describe("RuntimeRegistry", () => {
     );
   });
 
-  it("refuses a registered backend whose probe reports unavailable", async () => {
+  it("retains a probed status for synchronous thread summaries", async () => {
     const codex = {
       ...stub("codex"),
       probe: () =>
         Promise.resolve({ available: false, reason: "Codex missing" }),
     };
-    await expect(
-      new RuntimeRegistry({ pi: stub("pi"), codex }, "pi").usable("codex"),
-    ).rejects.toMatchObject({ code: "unavailable", message: "Codex missing" });
+    const registry = new RuntimeRegistry({ pi: stub("pi"), codex }, "pi");
+
+    expect(registry.status("codex")).toEqual({
+      kind: "codex",
+      available: false,
+      reason: "Codex availability has not been checked.",
+    });
+    await expect(registry.usable("codex")).rejects.toMatchObject({
+      code: "unavailable",
+      message: "Codex missing",
+    });
+    expect(registry.status("codex")).toEqual({
+      kind: "codex",
+      available: false,
+      reason: "Codex missing",
+    });
   });
 
   it("closes each registered external runtime once", async () => {

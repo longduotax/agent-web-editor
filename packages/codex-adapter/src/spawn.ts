@@ -33,14 +33,20 @@ export async function spawnCodexTransport(
         error?: Error;
       }) => void)
     | undefined;
-  let settled = false;
+  let exitInfo:
+    | {
+        code: number | null;
+        signal: string | null;
+        error?: Error;
+      }
+    | undefined;
   const announceExit = (info: {
     code: number | null;
     signal: string | null;
     error?: Error;
   }): void => {
-    if (settled) return;
-    settled = true;
+    if (exitInfo !== undefined) return;
+    exitInfo = info;
     exitListener?.(info);
   };
 
@@ -57,12 +63,14 @@ export async function spawnCodexTransport(
     }
   });
 
-  // A failed spawn emits "error", never "exit"; both must reach the same
-  // listener or a missing binary would hang instead of failing.
   // A failed spawn emits "error", never "exit". Carrying the error through is
   // what lets a missing binary be reported as such rather than as a mysterious
-  // stop with an unknown exit code.
+  // stop with an unknown exit code. Stdin errors (notably EPIPE during an exit
+  // race) use the same path so they cannot become unhandled process errors.
   child.on("error", (error: Error) => {
+    announceExit({ code: null, signal: null, error });
+  });
+  child.stdin.on("error", (error: Error) => {
     announceExit({ code: null, signal: null, error });
   });
   child.on("exit", (code, signal) => {
@@ -71,7 +79,27 @@ export async function spawnCodexTransport(
 
   return await Promise.resolve({
     send(line: string): void {
-      if (child.stdin.writable) child.stdin.write(`${line}\n`);
+      if (exitInfo !== undefined) return;
+      if (!child.stdin.writable) {
+        announceExit({
+          code: null,
+          signal: null,
+          error: new Error("Codex app-server stdin is not writable."),
+        });
+        return;
+      }
+      try {
+        child.stdin.write(`${line}\n`, (error) => {
+          if (error !== null && error !== undefined)
+            announceExit({ code: null, signal: null, error });
+        });
+      } catch (error) {
+        announceExit({
+          code: null,
+          signal: null,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
     },
     onLine(listener: (line: string) => void): void {
       lineListener = listener;
@@ -84,6 +112,7 @@ export async function spawnCodexTransport(
       }) => void,
     ): void {
       exitListener = listener;
+      if (exitInfo !== undefined) listener(exitInfo);
     },
     close(): void {
       if (!child.killed) child.kill();

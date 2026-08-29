@@ -115,8 +115,18 @@ export function useStickToBottom<T extends HTMLElement>(
         setStuck(isAtBottom(node));
       };
       node.addEventListener("scroll", onScroll, { passive: true });
+      const observer =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => {
+              if (stuck.current) scrollToBottom(node);
+            });
+      observer?.observe(node);
+      if (node.firstElementChild !== null)
+        observer?.observe(node.firstElementChild);
       release.current = () => {
         node.removeEventListener("scroll", onScroll);
+        observer?.disconnect();
       };
       // A container that has only just appeared starts on its newest content,
       // which is what opening a thread should land on.

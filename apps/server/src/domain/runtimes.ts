@@ -25,6 +25,8 @@ const ORDER: RuntimeKind[] = ["pi", "codex"];
  * backend rather than an internal error (AGB-08).
  */
 export class RuntimeRegistry {
+  private readonly statuses = new Map<RuntimeKind, AgentBackend>();
+
   public constructor(
     private readonly adapters: Partial<Record<RuntimeKind, AgentRuntime>>,
     public readonly defaultKind: RuntimeKind,
@@ -33,6 +35,25 @@ export class RuntimeRegistry {
       throw new Error(
         `${LABELS[defaultKind]} is configured as the default agent backend but is not available.`,
       );
+    for (const kind of ORDER) {
+      const adapter = adapters[kind];
+      this.statuses.set(
+        kind,
+        adapter === undefined
+          ? {
+              kind,
+              available: false,
+              reason: `${LABELS[kind]} is not configured on this machine.`,
+            }
+          : (adapter as ProbeableRuntime).probe === undefined
+            ? { kind, available: true, reason: null }
+            : {
+                kind,
+                available: false,
+                reason: `${LABELS[kind]} availability has not been checked.`,
+              },
+      );
+    }
   }
 
   public available(kind: RuntimeKind): boolean {
@@ -44,45 +65,21 @@ export class RuntimeRegistry {
   }
 
   /**
-   * Asks each backend whether it can actually run, so the composer can show an
-   * unusable one disabled with its reason instead of failing at create time.
+   * Asks each backend whether it can actually run, so the composer and every
+   * persisted thread agree about availability before a thread is opened.
    */
   public async availability(): Promise<AgentBackend[]> {
     const backends: AgentBackend[] = [];
-    for (const kind of ORDER) {
-      const adapter = this.adapters[kind];
-      if (adapter === undefined) {
-        backends.push({
-          kind,
-          available: false,
-          reason: `${LABELS[kind]} is not configured on this machine.`,
-        });
-        continue;
-      }
-      const probe = (adapter as ProbeableRuntime).probe;
-      if (probe === undefined) {
-        backends.push({ kind, available: true, reason: null });
-        continue;
-      }
-      try {
-        const result = await probe.call(adapter);
-        backends.push({
-          kind,
-          available: result.available,
-          reason: result.reason ?? null,
-        });
-      } catch (error) {
-        backends.push({
-          kind,
-          available: false,
-          reason:
-            error instanceof Error
-              ? error.message
-              : `${LABELS[kind]} could not be reached.`,
-        });
-      }
-    }
+    for (const kind of ORDER) backends.push(await this.refresh(kind));
     return backends;
+  }
+
+  /** Returns the latest parsed/probed status without starting another probe. */
+  public status(kind: RuntimeKind): AgentBackend {
+    const status = this.statuses.get(kind);
+    if (status === undefined)
+      throw new Error(`No availability status exists for ${kind}.`);
+    return status;
   }
 
   public get(kind: RuntimeKind): AgentRuntime {
@@ -97,25 +94,61 @@ export class RuntimeRegistry {
 
   /** Returns a selected adapter only after its optional availability probe passes. */
   public async usable(kind: RuntimeKind): Promise<AgentRuntime> {
-    const adapter = this.get(kind);
-    const probe = (adapter as ProbeableRuntime).probe;
-    if (probe === undefined) return adapter;
-    try {
-      const result = await probe.call(adapter);
-      if (result.available) return adapter;
+    const status = await this.refresh(kind);
+    if (!status.available)
       throw new RuntimeFailure(
         "unavailable",
-        result.reason ?? `${LABELS[kind]} is not available on this machine.`,
+        status.reason ?? `${LABELS[kind]} is not available on this machine.`,
       );
-    } catch (error) {
-      if (error instanceof RuntimeFailure) throw error;
-      throw new RuntimeFailure(
-        "unavailable",
-        error instanceof Error
-          ? error.message
-          : `${LABELS[kind]} could not be reached.`,
-      );
+    return this.get(kind);
+  }
+
+  /** Refreshes one backend's availability without requiring it to be usable. */
+  public async refresh(kind: RuntimeKind): Promise<AgentBackend> {
+    return await this.inspect(kind);
+  }
+
+  /** Records direct successful use as stronger evidence than an older probe. */
+  public recordAvailable(kind: RuntimeKind): void {
+    if (this.adapters[kind] === undefined) return;
+    this.statuses.set(kind, { kind, available: true, reason: null });
+  }
+
+  private async inspect(kind: RuntimeKind): Promise<AgentBackend> {
+    const adapter = this.adapters[kind];
+    let status: AgentBackend;
+    if (adapter === undefined) {
+      status = {
+        kind,
+        available: false,
+        reason: `${LABELS[kind]} is not configured on this machine.`,
+      };
+    } else {
+      const probe = (adapter as ProbeableRuntime).probe;
+      if (probe === undefined) {
+        status = { kind, available: true, reason: null };
+      } else {
+        try {
+          const result = await probe.call(adapter);
+          status = {
+            kind,
+            available: result.available,
+            reason: result.reason ?? null,
+          };
+        } catch (error) {
+          status = {
+            kind,
+            available: false,
+            reason:
+              error instanceof Error
+                ? error.message
+                : `${LABELS[kind]} could not be reached.`,
+          };
+        }
+      }
     }
+    this.statuses.set(kind, status);
+    return status;
   }
 
   /** Shuts down each registered external runtime once during server teardown. */

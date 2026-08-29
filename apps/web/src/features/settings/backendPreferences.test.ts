@@ -13,6 +13,12 @@ afterEach(() => {
 });
 
 describe("backendPreferences", () => {
+  it("keeps jsdom Storage available in the isolated test runtime", () => {
+    expect(process.env.NODE_ENV).toBe("test");
+    localStorage.setItem(BACKEND_PREFERENCE_KEY, "stored");
+    expect(localStorage.getItem(BACKEND_PREFERENCE_KEY)).toBe("stored");
+  });
+
   it("follows the machine default until the user chooses otherwise", () => {
     expect(readBackendChoice()).toBe("follow-machine");
   });
