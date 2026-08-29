@@ -44,7 +44,10 @@ function fileLabel(file: File, source: "drop" | "picker" | "paste", n: number) {
   return `Pasted image ${String(n)}`;
 }
 
-export function useChatAttachments(capability: ImageInputCapability) {
+export function useChatAttachments(
+  capability: ImageInputCapability,
+  onDropClaimed?: () => void,
+) {
   const [images, setImages] = useState<PendingChatImage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -139,7 +142,9 @@ export function useChatAttachments(capability: ImageInputCapability) {
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const imageFiles = [...event.clipboardData.items]
         .filter(
-          (item) => item.kind === "file" && item.type.startsWith("image/"),
+          (item) =>
+            item.kind === "file" &&
+            (item.type.startsWith("image/") || item.type === ""),
         )
         .map((item) => item.getAsFile())
         .filter((file): file is File => file !== null);
@@ -173,9 +178,10 @@ export function useChatAttachments(capability: ImageInputCapability) {
       event.preventDefault();
       event.stopPropagation();
       setDragging(false);
+      onDropClaimed?.();
       addFiles([...event.dataTransfer.files], "drop");
     },
-    [addFiles],
+    [addFiles, onDropClaimed],
   );
 
   return {
@@ -197,13 +203,16 @@ export function ChatAttachmentStrip({
   onRemove,
   onAdd,
   disabled,
+  unavailableExplanation,
 }: {
   images: readonly PendingChatImage[];
   error: string | null;
   onRemove: (id: string) => void;
   onAdd: (files: readonly File[]) => void;
   disabled: boolean;
+  unavailableExplanation?: string | undefined;
 }) {
+  const explanationId = "chat-attachment-unavailable";
   return (
     <>
       {images.length > 0 && (
@@ -253,6 +262,9 @@ export function ChatAttachmentStrip({
           accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
           multiple
           disabled={disabled}
+          aria-describedby={
+            unavailableExplanation === undefined ? undefined : explanationId
+          }
           onChange={(event) => {
             const files = [...(event.currentTarget.files ?? [])];
             event.currentTarget.value = "";
@@ -260,6 +272,11 @@ export function ChatAttachmentStrip({
           }}
         />
       </label>
+      {unavailableExplanation !== undefined && (
+        <p id={explanationId} className="chat-attachment-disclosure">
+          {unavailableExplanation}
+        </p>
+      )}
       {error !== null && (
         <p className="chat-attachment-error" role="alert">
           {error}

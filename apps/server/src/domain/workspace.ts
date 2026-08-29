@@ -8,7 +8,6 @@ import type {
   TitleSuggestion,
   PromptAcceptance,
   RuntimeEvent,
-  RuntimeUserInput,
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
@@ -45,6 +44,7 @@ import {
   type ThreadRecord,
 } from "../db/store.js";
 import { LiveBroker } from "../live/broker.js";
+import type { ParsedChatInput } from "../chat-images.js";
 import { GitWorktreeManager, worktreeSlug } from "../worktrees/manager.js";
 import {
   ThreadExecutionContextResolver,
@@ -57,17 +57,24 @@ interface PendingPreflight {
   stopRequested: boolean;
 }
 
-function runtimeUserInput(value: RuntimeUserInput | string): RuntimeUserInput {
-  return typeof value === "string" ? { text: value, images: [] } : value;
-}
-
-function canonicalInput(input: RuntimeUserInput): {
+function canonicalInput(input: ParsedChatInput): {
   text: string;
   images: { mimeType: string; digest: string }[];
 } {
   return {
     text: input.text,
     images: input.images.map(({ mimeType, digest }) => ({ mimeType, digest })),
+  };
+}
+
+function runtimeInput(input: ParsedChatInput) {
+  return {
+    text: input.text,
+    images: input.images.map((image) => ({
+      mimeType: image.mimeType,
+      data: new Uint8Array(image.data),
+      digest: image.digest,
+    })),
   };
 }
 
@@ -475,11 +482,10 @@ export class WorkspaceService {
 
   public async startThread(
     projectId: ProjectId,
-    value: RuntimeUserInput | string,
+    input: ParsedChatInput,
     workspace: z.infer<typeof ThreadWorkspaceRequestSchema>,
     idempotencyKey: string,
   ) {
-    const input = runtimeUserInput(value);
     const prompt = input.text;
     const operation = "start-thread";
     const hash = canonicalRequestHash(
@@ -689,7 +695,10 @@ export class WorkspaceService {
               creation.initial_prompt_dispatch_id ?? creation.prompt_command_id,
           };
           const runtime = await this.openRuntime(thread);
-          const recovered = await runtime.recoverPrompt(input, dispatch);
+          const recovered = await runtime.recoverPrompt(
+            runtimeInput(input),
+            dispatch,
+          );
           if (recovered.outcome === "accepted") {
             const receipt = this.store.readReceipt(
               projectId,
@@ -1461,11 +1470,10 @@ export class WorkspaceService {
   public async prompt(
     projectId: ProjectId,
     threadId: ThreadId,
-    value: RuntimeUserInput | string,
+    input: ParsedChatInput,
     idempotencyKey: string,
     dispatch?: { id: string },
   ): Promise<Run> {
-    const input = runtimeUserInput(value);
     const operation = "prompt";
     const hash = canonicalRequestHash(
       operation,
@@ -1513,7 +1521,10 @@ export class WorkspaceService {
             this.requestPreflightStop(preflight);
             throw new Error("project_not_found");
           }
-          const acceptance = await runtime.prompt(input, dispatch);
+          const acceptance = await runtime.prompt(
+            runtimeInput(input),
+            dispatch,
+          );
           pendingAcceptance = acceptance;
           if (!acceptance.accepted) throw new Error("prompt_rejected");
           if (this.preflightPrompts.get(threadId) !== preflight)
@@ -1603,10 +1614,9 @@ export class WorkspaceService {
   public async steer(
     projectId: ProjectId,
     threadId: ThreadId,
-    value: RuntimeUserInput | string,
+    input: ParsedChatInput,
     idempotencyKey: string,
   ): Promise<Run> {
-    const input = runtimeUserInput(value);
     const operation = "steer";
     const hash = canonicalRequestHash(
       operation,
@@ -1632,7 +1642,7 @@ export class WorkspaceService {
         const thread = this.requireThread(projectId, threadId);
         const run = this.store.runningRunForThread(threadId);
         if (run?.project_id !== projectId) throw new Error("run_not_active");
-        await (await this.openRuntime(thread)).steer(input);
+        await (await this.openRuntime(thread)).steer(runtimeInput(input));
         return this.store.withReceipt(
           projectId,
           idempotencyKey,

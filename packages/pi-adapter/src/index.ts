@@ -40,6 +40,7 @@ import {
   CHAT_IMAGE_MAX_SOURCE_BYTES,
   ChatImageIdSchema,
   ChatImageMimeTypeSchema,
+  parseChatImageBytes,
   TimestampSchema,
   SessionIdSchema,
   TranscriptItemSchema,
@@ -62,6 +63,11 @@ const sessionInfoSchema = z.object({
 const nativeHistorySchema = z.array(z.unknown());
 const nativeSessionListSchema = z.array(z.unknown());
 const nativeSessionNameSchema = z.string().max(200).nullable();
+// Pi SDK values are third-party runtime data even when their declarations say
+// otherwise. These deliberately project only the capability fields this
+// adapter authorizes below.
+const openSessionModelInputSchema = z.object({ input: z.array(z.string()) });
+const openSessionBlockImagesSchema = z.boolean();
 const createdSessionHeaderSchema = z.strictObject({
   type: z.literal("session"),
   version: z.literal(3),
@@ -217,6 +223,22 @@ const runtimeUserInputSchema = z
     images: z.array(runtimeImageInputSchema).max(CHAT_IMAGE_MAX_COUNT),
   })
   .strict();
+
+/**
+ * Image input after the adapter has re-parsed bytes that crossed the runtime
+ * boundary.  In particular, `data` is an adapter-owned copy whose format,
+ * MIME type, decoded dimensions, and digest have all been established.
+ */
+interface ParsedRuntimeImageInput {
+  mimeType: z.infer<typeof ChatImageMimeTypeSchema>;
+  data: Uint8Array;
+  digest: string;
+}
+
+interface ParsedRuntimeUserInput {
+  text: string;
+  images: readonly ParsedRuntimeImageInput[];
+}
 function canonicalBase64(value: string): Buffer | null {
   try {
     const bytes = Buffer.from(value, "base64");
@@ -226,24 +248,6 @@ function canonicalBase64(value: string): Buffer | null {
   } catch {
     return null;
   }
-}
-
-function bytesMatchImageMime(bytes: Buffer, mimeType: string): boolean {
-  if (mimeType === "image/png")
-    return (
-      bytes.length >= 8 &&
-      bytes
-        .subarray(0, 8)
-        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-    );
-  if (mimeType === "image/jpeg")
-    return bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8;
-  return (
-    mimeType === "image/webp" &&
-    bytes.length >= 12 &&
-    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
-    bytes.subarray(8, 12).toString("ascii") === "WEBP"
-  );
 }
 
 const piImageContentSchema = z
@@ -261,8 +265,19 @@ const piImageContentSchema = z
   .strict()
   .superRefine((value, context) => {
     const bytes = canonicalBase64(value.data);
-    if (bytes === null || !bytesMatchImageMime(bytes, value.mimeType))
+    if (bytes === null) {
       context.addIssue({ code: "custom", message: "Malformed image content" });
+      return;
+    }
+    try {
+      if (parseChatImageBytes(bytes).mimeType !== value.mimeType)
+        context.addIssue({
+          code: "custom",
+          message: "Malformed image content",
+        });
+    } catch {
+      context.addIssue({ code: "custom", message: "Malformed image content" });
+    }
   });
 
 function normalizeRuntimeInput(
@@ -271,7 +286,44 @@ function normalizeRuntimeInput(
   return typeof input === "string" ? { text: input, images: [] } : input;
 }
 
-function inputFingerprint(input: RuntimeUserInput): string {
+/**
+ * Parses caller-provided runtime input at the SDK-neutral-to-Pi boundary.
+ * Structural validation alone cannot establish that claimed image MIME types
+ * decode, so every image is reparsed before anything can resize or dispatch
+ * it to Pi.
+ */
+function parseRuntimeUserInput(
+  rawInput: RuntimeUserInput | string,
+): ParsedRuntimeUserInput {
+  const structural = runtimeUserInputSchema.safeParse(
+    normalizeRuntimeInput(rawInput),
+  );
+  if (!structural.success)
+    throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+
+  const images = structural.data.images.map((image) => {
+    // A caller retains the original RuntimeImageInput, so make the parsed
+    // value independent from later mutation before computing its digest or
+    // handing it to the SDK.
+    const data = new Uint8Array(image.data);
+    try {
+      if (parseChatImageBytes(data).mimeType !== image.mimeType)
+        throw new Error("chat_image_mime_mismatch");
+    } catch {
+      throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+    }
+    const digest = createHash("sha256").update(data).digest("hex");
+    if (digest !== image.digest)
+      throw new RuntimeFailure("malformed", "chat_image_processing_failed");
+    return { mimeType: image.mimeType, data, digest: image.digest };
+  });
+  return { text: structural.data.text, images };
+}
+
+function inputFingerprint(input: {
+  text: string;
+  images: readonly { mimeType: string; digest: string }[];
+}): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -301,17 +353,20 @@ let activeImagePreparations = 0;
 const imagePreparationQueue: (() => void)[] = [];
 
 async function withImagePreparationSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (activeImagePreparations >= MAX_CONCURRENT_IMAGE_PREPARATIONS) {
+  if (
+    activeImagePreparations >= MAX_CONCURRENT_IMAGE_PREPARATIONS ||
+    imagePreparationQueue.length > 0
+  ) {
     if (imagePreparationQueue.length >= MAX_QUEUED_IMAGE_PREPARATIONS)
       throw new RuntimeFailure("busy", "chat_image_processing_busy");
     await new Promise<void>((resolve) => imagePreparationQueue.push(resolve));
-  }
-  activeImagePreparations += 1;
+  } else activeImagePreparations += 1;
   try {
     return await work();
   } finally {
-    activeImagePreparations -= 1;
-    imagePreparationQueue.shift()?.();
+    const next = imagePreparationQueue.shift();
+    if (next === undefined) activeImagePreparations -= 1;
+    else next();
   }
 }
 
@@ -996,38 +1051,32 @@ class PiOpenSession implements OpenRuntimeSession {
   }
 
   private imageInputCapability(): "supported" | "unsupported" | "unknown" {
-    if (this.session.model === undefined) return "unknown";
-    return this.session.model.input.includes("image") &&
-      !this.session.settingsManager.getBlockImages()
+    let rawModel: unknown;
+    let rawBlockImages: unknown;
+    try {
+      rawModel = this.session.model as unknown;
+      rawBlockImages = this.session.settingsManager.getBlockImages();
+    } catch {
+      return "unknown";
+    }
+    const model = openSessionModelInputSchema.safeParse(rawModel);
+    const blockImages = openSessionBlockImagesSchema.safeParse(rawBlockImages);
+    if (!model.success || !blockImages.success) return "unknown";
+    return model.data.input.includes("image") && !blockImages.data
       ? "supported"
       : "unsupported";
   }
 
-  private async prepareImages(input: RuntimeUserInput | string) {
-    const parsed = runtimeUserInputSchema.safeParse(
-      normalizeRuntimeInput(input),
-    );
-    if (!parsed.success)
-      throw new RuntimeFailure("malformed", "chat_image_processing_failed");
-    if (
-      parsed.data.images.length > 0 &&
-      this.imageInputCapability() !== "supported"
-    )
+  private async prepareImages(rawInput: RuntimeUserInput | string) {
+    const input = parseRuntimeUserInput(rawInput);
+    if (input.images.length > 0 && this.imageInputCapability() !== "supported")
       throw new RuntimeFailure("rejected", "chat_image_input_unsupported");
     const images =
-      parsed.data.images.length === 0
+      input.images.length === 0
         ? []
         : await withImagePreparationSlot(async () => {
             const preparedImages: z.infer<typeof piImageContentSchema>[] = [];
-            for (const image of parsed.data.images) {
-              const digest = createHash("sha256")
-                .update(image.data)
-                .digest("hex");
-              if (digest !== image.digest)
-                throw new RuntimeFailure(
-                  "malformed",
-                  "chat_image_processing_failed",
-                );
+            for (const image of input.images) {
               const resized = await resizeImage(image.data, image.mimeType, {
                 maxWidth: CHAT_IMAGE_MAX_DIMENSION,
                 maxHeight: CHAT_IMAGE_MAX_DIMENSION,
@@ -1051,7 +1100,7 @@ class PiOpenSession implements OpenRuntimeSession {
             }
             return preparedImages;
           });
-    return { input: parsed.data, images };
+    return { input, images };
   }
 
   public async prompt(
@@ -1148,7 +1197,7 @@ class PiOpenSession implements OpenRuntimeSession {
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery> {
     z.uuid().parse(dispatch.id);
-    const input = runtimeUserInputSchema.parse(normalizeRuntimeInput(rawInput));
+    const input = parseRuntimeUserInput(rawInput);
     const snapshot = await this.snapshot();
     return this.hasPromptDispatch(dispatch, input) &&
       snapshot.transcript.some(
@@ -1164,7 +1213,7 @@ class PiOpenSession implements OpenRuntimeSession {
 
   private hasPromptDispatch(
     dispatch: RuntimePromptDispatch,
-    input: RuntimeUserInput,
+    input: ParsedRuntimeUserInput,
   ): boolean {
     return parseNativeHistory(this.manager.getBranch()).some((entry) => {
       const current = initialPromptDispatchEntrySchema.safeParse(entry);

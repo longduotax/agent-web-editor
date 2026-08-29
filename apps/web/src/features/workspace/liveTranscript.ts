@@ -226,6 +226,15 @@ export interface PendingSteer {
   priorUserMessages: number;
 }
 
+type SteerEchoItem = Extract<TranscriptItem, { kind: "message" }> & {
+  /**
+   * Files are pane-local pending state, not persisted ChatImageRefs.  Keep
+   * only their count on the optimistic transcript item so the renderer can
+   * honestly confirm them without trying to fetch or impersonate history.
+   */
+  queuedImageCount: number;
+};
+
 /**
  * Whether Pi will store something other than the text we sent.
  *
@@ -314,15 +323,25 @@ export function isSteerEcho(item: TranscriptItem): boolean {
  *    so without that the words would arrive attached to whatever the reader
  *    sent next. See `ThreadPane` and `packages/pi-adapter`.
  */
-export function steerEchoItem(pending: PendingSteer): TranscriptItem {
+export function steerEchoItem(pending: PendingSteer): SteerEchoItem {
   return {
     id: `${STEER_ECHO_ID_PREFIX}${pending.runId}:${String(pending.ordinal)}`,
     kind: "message",
     role: "user",
     text: pending.text,
     images: [],
+    queuedImageCount: pending.images?.length ?? 0,
     timestamp: null,
   };
+}
+
+/** Returns the number of pane-local images confirmed by an optimistic steer. */
+export function queuedSteerImageCount(item: TranscriptItem): number {
+  if (!isSteerEcho(item) || !("queuedImageCount" in item)) return 0;
+  const count = item.queuedImageCount;
+  return typeof count === "number" && Number.isSafeInteger(count) && count > 0
+    ? count
+    : 0;
 }
 
 /**

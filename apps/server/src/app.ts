@@ -43,7 +43,7 @@ import {
   checkOrigin,
   enforceRequestPolicy,
 } from "./request-policy.js";
-import { parseMultipartChatInput } from "./chat-images.js";
+import { parseMultipartChatInput, parseTextChatInput } from "./chat-images.js";
 import { parseConfig, type ServerConfig } from "./config.js";
 import { MetadataStore, ReceiptConflictError } from "./db/store.js";
 import {
@@ -617,7 +617,7 @@ export async function buildServer(
     const body = StartThreadRequestSchema.parse(request.body);
     return await workspace.startThread(
       params.projectId,
-      { text: body.prompt, images: [] },
+      parseTextChatInput(body.prompt),
       body.workspace,
       body.idempotencyKey,
     );
@@ -720,7 +720,7 @@ export async function buildServer(
         run: await workspace.prompt(
           params.projectId,
           params.threadId,
-          { text: body.prompt, images: [] },
+          parseTextChatInput(body.prompt),
           body.idempotencyKey,
         ),
       };
@@ -749,7 +749,7 @@ export async function buildServer(
         run: await workspace.steer(
           params.projectId,
           params.threadId,
-          { text: body.prompt, images: [] },
+          parseTextChatInput(body.prompt),
           body.idempotencyKey,
         ),
       };

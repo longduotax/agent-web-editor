@@ -24,6 +24,11 @@ function Harness({
           attachments.addFiles(files, "picker");
         }}
         disabled={capability === "unsupported"}
+        unavailableExplanation={
+          capability === "unsupported"
+            ? "The selected Pi model or settings cannot receive images."
+            : undefined
+        }
       />
       <textarea aria-label="Message" onPaste={attachments.onPaste} />
     </form>
@@ -77,6 +82,26 @@ describe("chat image attachment input", () => {
     ).toBeInTheDocument();
   });
 
+  it("attaches a blank-MIME pasted image when its filename is supported", () => {
+    render(<Harness />);
+    const file = new File([new Uint8Array([1, 2, 3])], "photo.png", {
+      type: "",
+    });
+    const accepted = fireEvent.paste(
+      screen.getByRole("textbox", { name: "Message" }),
+      {
+        clipboardData: {
+          items: [{ kind: "file", type: "", getAsFile: () => file }],
+        },
+      },
+    );
+
+    expect(accepted).toBe(false);
+    expect(
+      screen.getByRole("img", { name: "Preview of photo.png" }),
+    ).toBeInTheDocument();
+  });
+
   it("does not consume an ordinary text-only paste", () => {
     render(<Harness />);
     const accepted = fireEvent.paste(
@@ -121,6 +146,9 @@ describe("chat image attachment input", () => {
 
   it("refuses clipboard images when Pi cannot receive them", () => {
     render(<Harness capability="unsupported" />);
+    expect(screen.getByLabelText("＋ Add photos")).toHaveAccessibleDescription(
+      "The selected Pi model or settings cannot receive images.",
+    );
     fireEvent.paste(screen.getByRole("textbox", { name: "Message" }), {
       clipboardData: {
         items: [{ kind: "file", type: "image/png", getAsFile: () => png() }],

@@ -34,6 +34,159 @@ export const CHAT_IMAGE_MAX_DIMENSION = 2_000;
 /** Pi's resize helper bounds encoded base64 below 4.5 MiB. */
 export const CHAT_IMAGE_MAX_BASE64_BYTES = Math.floor(4.5 * 1024 * 1024);
 
+function hasBytes(
+  bytes: Uint8Array,
+  offset: number,
+  expected: readonly number[],
+): boolean {
+  return expected.every((value, index) => bytes[offset + index] === value);
+}
+
+function ascii(bytes: Uint8Array, offset: number, length: number): string {
+  return String.fromCharCode(...bytes.slice(offset, offset + length));
+}
+
+function uint24le(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] ?? 0) |
+    ((bytes[offset + 1] ?? 0) << 8) |
+    ((bytes[offset + 2] ?? 0) << 16)
+  );
+}
+
+function uint16be(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] ?? 0) << 8) | (bytes[offset + 1] ?? 0);
+}
+
+function uint16le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
+}
+
+function uint32be(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] ?? 0) * 2 ** 24 +
+    ((bytes[offset + 1] ?? 0) << 16) +
+    ((bytes[offset + 2] ?? 0) << 8) +
+    (bytes[offset + 3] ?? 0)
+  );
+}
+
+function pngDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (
+    bytes.length < 24 ||
+    !hasBytes(bytes, 0, [137, 80, 78, 71, 13, 10, 26, 10]) ||
+    ascii(bytes, 12, 4) !== "IHDR"
+  )
+    return null;
+  return { width: uint32be(bytes, 16), height: uint32be(bytes, 20) };
+}
+
+function jpegDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) return null;
+    const length = uint16be(bytes, offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    const isStartOfFrame =
+      marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+    if (isStartOfFrame) {
+      if (length < 7) return null;
+      return {
+        height: uint16be(bytes, offset + 3),
+        width: uint16be(bytes, offset + 5),
+      };
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function webpDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (
+    bytes.length < 30 ||
+    ascii(bytes, 0, 4) !== "RIFF" ||
+    ascii(bytes, 8, 4) !== "WEBP"
+  )
+    return null;
+  const chunk = ascii(bytes, 12, 4);
+  if (chunk === "VP8X")
+    return {
+      width: uint24le(bytes, 24) + 1,
+      height: uint24le(bytes, 27) + 1,
+    };
+  if (chunk === "VP8 ") {
+    if (
+      bytes.length < 30 ||
+      bytes[23] !== 0x9d ||
+      bytes[24] !== 0x01 ||
+      bytes[25] !== 0x2a
+    )
+      return null;
+    return {
+      width: uint16le(bytes, 26) & 0x3fff,
+      height: uint16le(bytes, 28) & 0x3fff,
+    };
+  }
+  if (chunk === "VP8L") {
+    if (bytes.length < 25 || bytes[20] !== 0x2f) return null;
+    const b1 = bytes[21] ?? 0;
+    const b2 = bytes[22] ?? 0;
+    const b3 = bytes[23] ?? 0;
+    const b4 = bytes[24] ?? 0;
+    return {
+      width: 1 + ((b1 | (b2 << 8)) & 0x3fff),
+      height: 1 + (((b2 >> 6) | (b3 << 2) | (b4 << 10)) & 0x3fff),
+    };
+  }
+  return null;
+}
+
+/** Parses supported chat-image bytes into their bounded native dimensions. */
+export function parseChatImageBytes(bytes: Uint8Array): {
+  mimeType: ChatImageMimeType;
+  width: number;
+  height: number;
+} {
+  const candidates: {
+    mimeType: ChatImageMimeType;
+    dimensions: { width: number; height: number } | null;
+  }[] = [
+    { mimeType: "image/png", dimensions: pngDimensions(bytes) },
+    { mimeType: "image/jpeg", dimensions: jpegDimensions(bytes) },
+    { mimeType: "image/webp", dimensions: webpDimensions(bytes) },
+  ];
+  const found = candidates.find((candidate) => candidate.dimensions !== null);
+  if (found?.dimensions === null || found === undefined)
+    throw new Error("chat_image_unsupported");
+  const { width, height } = found.dimensions;
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  )
+    throw new Error("chat_image_malformed");
+  if (width * height > CHAT_IMAGE_MAX_PIXELS)
+    throw new Error("chat_image_pixels_exceeded");
+  return { mimeType: found.mimeType, width, height };
+}
+
 export const ChatImageRefSchema = z
   .object({
     id: ChatImageIdSchema,

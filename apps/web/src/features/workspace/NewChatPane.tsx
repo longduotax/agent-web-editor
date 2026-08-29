@@ -186,8 +186,13 @@ export function NewChatPane(props: NewChatPaneProps) {
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
   const [text, setText] = useState(() => readDraft(draftKey));
+  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   const attachments = useChatAttachments(
     preflight.data?.imageInput ?? "unknown",
+    () => {
+      props.onFocus();
+      textareaRef.current?.focus();
+    },
   );
   const attachmentKey = attachments.images.map((image) => image.id).join(":");
   const previousAttachmentKey = useRef(attachmentKey);
@@ -201,7 +206,6 @@ export function NewChatPane(props: NewChatPaneProps) {
   // leaving the text sitting in the composer for that long reads as "Enter
   // did not register", so the message is echoed here the moment it is sent.
   const [sentPrompt, setSentPrompt] = useState<string | null>(null);
-  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   useEffect(() => {
     setMode("worktree");
     setSourceChanges("none");
@@ -685,6 +689,11 @@ export function NewChatPane(props: NewChatPaneProps) {
               }}
               disabled={
                 create.isPending || preflight.data?.imageInput === "unsupported"
+              }
+              unavailableExplanation={
+                preflight.data?.imageInput === "unsupported"
+                  ? "The selected Pi model or settings cannot receive images."
+                  : undefined
               }
             />
             <textarea
