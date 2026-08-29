@@ -44,13 +44,17 @@ const responseFrameSchema = z
       .optional(),
   })
   .strict();
-const notificationFrameSchema = z
-  .object({
-    jsonrpc: z.literal("2.0").optional(),
-    method: z.string().min(1),
-    params: z.unknown().optional(),
-  })
-  .strict();
+const notificationFrameSchema = z.looseObject({
+  jsonrpc: z.literal("2.0").optional(),
+  // Notifications never carry an id. Keeping that discriminator explicit
+  // prevents a malformed request/response hybrid from being fanned out.
+  id: z.never().optional(),
+  method: z.string().min(1),
+  params: z.unknown().optional(),
+  // Codex 0.151.0 added `emittedAtMs` to its notification envelope. Other
+  // additive envelope metadata is deliberately ignored: method and params are
+  // the only values this client trusts and forwards.
+});
 const serverRequestFrameSchema = z
   .object({
     jsonrpc: z.literal("2.0").optional(),
