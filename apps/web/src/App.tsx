@@ -364,14 +364,11 @@ function Sidebar({
       ]);
     },
   });
-  // One `rename` mutation is shared by every row in every project, so its
-  // error outlives the form that produced it: a failed rename of thread A,
-  // Cancel, then Rename on thread B rendered A's red block under B's field.
-  // Nothing ever called `reset()`, so the notice was also the one error in
-  // the app with no way out -- in the commit whose organising idea (G10) is
-  // that a red block needs an exit. Every route into and out of a rename form
-  // goes through these two, so the error can only ever belong to the form on
-  // screen.
+  // One mutation is shared by every sidebar row. The inline editor displays
+  // the rejection it catches from mutateAsync, while reset keeps React
+  // Query's observer from carrying a settled error into a later thread edit.
+  // Every menu and double-click route enters through beginRename, and every
+  // Revert route exits through endRename.
   const beginRename = (target: {
     projectId: ProjectId;
     threadId: ThreadId;
@@ -760,29 +757,17 @@ function Sidebar({
                         >
                           {editing ? (
                             <ThreadRenameForm
-                              value={renamingThread.title}
+                              key={`${thread.id}:${thread.title}`}
+                              initialValue={thread.title}
                               label={`Rename ${thread.title}`}
-                              pending={rename.isPending}
-                              error={rename.error}
-                              onChange={(title) => {
-                                setRenamingThread({
-                                  ...renamingThread,
+                              onCommit={async (title) => {
+                                await rename.mutateAsync({
+                                  projectId: project.id,
+                                  threadId: thread.id,
                                   title,
                                 });
                               }}
-                              onSubmit={() => {
-                                const title = renamingThread.title.trim();
-                                if (title !== "")
-                                  rename.mutate({
-                                    projectId: project.id,
-                                    threadId: thread.id,
-                                    title,
-                                  });
-                              }}
-                              onCancel={endRename}
-                              onDismissError={() => {
-                                rename.reset();
-                              }}
+                              onRevert={endRename}
                             />
                           ) : (
                             <>
@@ -791,6 +776,15 @@ function Sidebar({
                                 to={`/projects/${project.id}/threads/${thread.id}`}
                                 onClick={() => {
                                   setThreadMenu(null);
+                                }}
+                                onDoubleClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  beginRename({
+                                    projectId: project.id,
+                                    threadId: thread.id,
+                                    title: thread.title,
+                                  });
                                 }}
                               >
                                 {/* A title is the only text on this row the
@@ -808,7 +802,11 @@ function Sidebar({
                                     at the logical end. It also stops an RTL
                                     title reordering the status glyph beside
                                     it. A no-op for every LTR title. */}
-                                <span className="thread-title" dir="auto">
+                                <span
+                                  className="thread-title"
+                                  dir="auto"
+                                  title={`${thread.title} — Double-click to rename`}
+                                >
                                   {thread.title}
                                 </span>
                                 {(() => {

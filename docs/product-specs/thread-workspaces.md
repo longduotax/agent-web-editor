@@ -1,6 +1,6 @@
 # Thread workspaces
 
-**Current version:** 2
+**Current version:** 3
 
 **Proposed version:** None
 
@@ -12,9 +12,9 @@
 
 **Subsystem:** New-chat creation, thread execution locations, and Git worktrees
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-29
 
-**Related ExecPlans:** [Thread workspace and worktree support](../exec-plans/completed/2026-08-16-thread-workspaces.md)
+**Related ExecPlans:** [Thread workspace and worktree support](../exec-plans/completed/2026-08-16-thread-workspaces.md), [default-model thread and worktree naming](../exec-plans/completed/2026-08-29-default-model-thread-naming.md), [naming completion metadata](../exec-plans/completed/2026-08-29-naming-completion-metadata.md)
 
 **Related documents:** [Initial agent workspace](initial-workspace.md),
 [architecture overview](../architecture/overview.md), and
@@ -212,19 +212,20 @@ the same title forms the human-readable portion of the generated worktree
 directory and branch names. A server-generated unique suffix prevents collisions.
 The model's text is never used directly as a path, ref, command, or identifier.
 
-Naming uses one bounded, tool-free request to a configured lightweight Pi model.
-In automatic mode, the application stays with the user's configured default Pi
-provider and selects a lower-cost authenticated model from that provider; it
-does not silently send the prompt to a different provider. A user may configure
-an explicit naming model. The request receives only the first prompt and concise
-formatting instructions, not project files, Git state, Pi history, tools,
-extensions, skills, or workspace context.
+Naming uses one bounded, tool-free request to a Pi model. When
+`PI_WEB_NAMING_MODEL` identifies an available authenticated model, the
+application uses that explicit model. Otherwise, automatic naming uses the
+configured default Pi provider and model resolved for the selected project —
+the model a newly created thread initially inherits. It does not silently
+substitute another model or provider. The request receives only the first prompt
+and concise formatting instructions, not project files, Git state, Pi history,
+tools, extensions, skills, or workspace context.
 
 A generated title is plain text, at most 60 characters, and normally three to
-seven words. Model unavailability, timeout, malformed output, or absence of a
-suitable smaller model never blocks thread creation: the server derives a safe,
-deterministic short title from the prompt instead. The resulting title and
-worktree name are stable across idempotent retries.
+seven words. A malformed, unavailable, or unauthenticated configured model,
+timeout, or malformed output never blocks thread creation: the server derives a
+safe, deterministic short title from the prompt instead. The resulting title
+and worktree name are stable across idempotent retries.
 
 The user may rename the thread with the existing rename control. Renaming a
 thread does not rename or move its worktree, directory, branch, or native Pi
@@ -273,10 +274,10 @@ session because those identities must remain stable after provisioning.
     from its first prompt instead of `New thread`; an isolated chat uses a
     sanitized form of the same title plus a unique suffix for its worktree path
     and branch.
-16. Naming uses only the first prompt and a configured lightweight model from the
-    same provider by default; timeout, unavailable auth/model, malformed output,
-    and duplicate submission produce the same safe deterministic fallback name
-    without delaying or duplicating the thread.
+16. Naming uses only the first prompt and an available explicit naming model or
+    the exact configured default Pi provider/model; unavailable auth/model,
+    timeout, malformed output, and duplicate submission produce the same safe
+    deterministic fallback name without delaying or duplicating the thread.
 17. Manually renaming a thread updates only its display title and leaves its
     worktree path, branch, and Pi session location unchanged.
 

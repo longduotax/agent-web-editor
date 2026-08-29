@@ -4,7 +4,7 @@
 
 **Subsystem:** Initial local agent workspace
 
-**Last verified:** 2026-08-23
+**Last verified:** 2026-08-29
 
 Pi Web Workspace is a local-first React application backed by a loopback-only
 Fastify process. The server owns request-integrity policy, SQLite metadata,
@@ -93,7 +93,9 @@ ordinary recoverable state rather than an error.
 `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;
-deterministic local naming is the non-blocking fallback. Prompt
+an explicit naming-model override takes precedence, otherwise the call uses the
+project's configured default Pi model. Deterministic local naming is the
+non-blocking fallback. Prompt
 preflight acceptance precedes atomic run/receipt creation. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads

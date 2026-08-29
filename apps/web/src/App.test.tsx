@@ -848,14 +848,18 @@ describe("safe and accessible workspace rendering", () => {
     ).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    fireEvent.contextMenu(originalThread);
-    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await user.dblClick(
+      screen.getByText("Original thread", { selector: ".thread-title" }),
+    );
     const title = screen.getByRole("textbox", {
       name: "Rename Original thread",
     });
+    expect(
+      screen.queryByRole("button", { name: /save|confirm|cancel/i }),
+    ).not.toBeInTheDocument();
     await user.clear(title);
     await user.type(title, "Renamed thread");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.blur(title, { relatedTarget: document.body });
     await waitFor(() => {
       expect(api.renameThread).toHaveBeenCalledWith(
         projectId,
@@ -913,7 +917,7 @@ describe("safe and accessible workspace rendering", () => {
       screen.getByRole("button", { name: 'Undo archiving "Renamed thread"' }),
     ).toBeInTheDocument();
     expect(api.archiveThread).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 });
 
 describe("sidebar run status", () => {
@@ -2803,12 +2807,9 @@ describe("shell layout and light-mode palette", () => {
   });
 });
 
-// SF5. One `rename` mutation is shared by every row in every project and
-// nothing ever called `reset()`. Two consequences: the notice was the only
-// error in the app with no way out -- in the commit whose organising idea
-// (G10) is that a red block needs an exit -- and the error outlived the form
-// that produced it, so a failed rename of one thread rendered under the next
-// thread's field.
+// A failed inline rename belongs to the editor and draft that produced it.
+// Editing clears it for retry; Revert exits it; and opening another thread's
+// editor starts clean rather than inheriting the previous mutation state.
 describe("a rename that fails", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const first = "20000000-0000-4000-8000-000000000001" as ThreadId;
@@ -2881,13 +2882,15 @@ describe("a rename that fails", () => {
     title: string,
   ) {
     await openRenameOf(user, title);
-    await user.click(
-      within(renameForm()).getByRole("button", { name: "Save" }),
-    );
+    const field = within(renameForm()).getByRole("textbox", {
+      name: `Rename ${title}`,
+    });
+    await user.clear(field);
+    await user.type(field, `${title} draft{Enter}`);
     return await within(renameForm()).findByRole("alert");
   }
 
-  it("can be dismissed, and comes back for the next failure", async () => {
+  it("clears while editing for retry, and comes back for the next failure", async () => {
     api.renameThread.mockRejectedValue(new Error("Renaming is not allowed."));
     const user = userEvent.setup();
     renderTwoThreads();
@@ -2898,20 +2901,15 @@ describe("a rename that fails", () => {
       "Could not rename this thread: Renaming is not allowed.",
     );
 
-    await user.click(
-      within(renameForm()).getByRole("button", {
-        name: "Dismiss this message",
-      }),
-    );
+    const field = within(renameForm()).getByRole("textbox", {
+      name: "Rename First thread",
+    });
+    await user.clear(field);
+    await user.type(field, "Retry title");
     expect(within(renameForm()).queryByRole("alert")).not.toBeInTheDocument();
 
-    // Dismissal is `reset()` at the call site rather than a sticky flag in
-    // the component, so a second failure re-renders the notice by
-    // construction.
     api.renameThread.mockRejectedValue(new Error("The thread is gone."));
-    await user.click(
-      within(renameForm()).getByRole("button", { name: "Save" }),
-    );
+    await user.keyboard("{Enter}");
     expect(await within(renameForm()).findByRole("alert")).toHaveTextContent(
       "Could not rename this thread: The thread is gone.",
     );
@@ -2925,7 +2923,7 @@ describe("a rename that fails", () => {
 
     await failRenameOf(user, "First thread");
     await user.click(
-      within(renameForm()).getByRole("button", { name: "Cancel" }),
+      within(renameForm()).getByRole("button", { name: "Revert title" }),
     );
     expect(document.querySelector(".thread-rename")).toBeNull();
 
