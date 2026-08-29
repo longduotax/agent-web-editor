@@ -21,6 +21,8 @@ import {
 
 import {
   ApiClientError,
+  commandId,
+  getChatImage,
   getSnapshot,
   getWorkspace,
   markViewed,
@@ -56,6 +58,7 @@ import {
   runOutcomeNotice,
 } from "./runStatus.js";
 import { useStickToBottom } from "./stickToBottom.js";
+import { ChatAttachmentStrip, useChatAttachments } from "./chatAttachments.js";
 
 export interface ThreadPaneProps {
   projectId: ProjectId;
@@ -359,6 +362,73 @@ function transcriptContentKey(
   ].join(":");
 }
 
+function TranscriptImage({
+  projectId,
+  threadId,
+  image,
+  ordinal,
+}: {
+  projectId: ProjectId;
+  threadId: ThreadId;
+  image: NonNullable<
+    Extract<TranscriptItem, { kind: "message" }>["images"]
+  >[number];
+  ordinal: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const query = useQuery({
+    queryKey: ["chat-image", projectId, threadId, image.id],
+    queryFn: () => getChatImage(projectId, threadId, image.id),
+  });
+  if (query.isPending)
+    return (
+      <span className="transcript-image-loading" role="status">
+        Loading attached image {String(ordinal)}…
+      </span>
+    );
+  if (query.data === undefined)
+    return <span className="transcript-image-error">Image unavailable</span>;
+  const src = `data:${query.data.mimeType};base64,${query.data.data}`;
+  return (
+    <>
+      <button
+        type="button"
+        className="transcript-image-button"
+        aria-label={`Open attached image ${String(ordinal)}`}
+        onClick={() => {
+          setOpen(true);
+        }}
+      >
+        <img src={src} alt={`Attached image ${String(ordinal)}`} />
+      </button>
+      {open && (
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Attached image ${String(ordinal)}`}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            className="image-lightbox-close"
+            aria-label="Close image preview"
+            autoFocus
+            onClick={() => {
+              setOpen(false);
+            }}
+          >
+            ×
+          </button>
+          <img src={src} alt={`Attached image ${String(ordinal)}, enlarged`} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function Transcript({
   snapshot,
   items,
@@ -420,9 +490,27 @@ function Transcript({
               <div className="u-row" key={item.id}>
                 <div className="u-bubble">
                   <span className="sr-only">You</span>
-                  <div className="markdown">
-                    <Markdown>{item.text}</Markdown>
-                  </div>
+                  {(item.images?.length ?? 0) > 0 && (
+                    <div
+                      className="transcript-images"
+                      aria-label="Attached images"
+                    >
+                      {(item.images ?? []).map((image, imageIndex) => (
+                        <TranscriptImage
+                          key={image.id}
+                          projectId={snapshot.project.id}
+                          threadId={snapshot.thread.id}
+                          image={image}
+                          ordinal={imageIndex + 1}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {item.text !== "" && (
+                    <div className="markdown">
+                      <Markdown>{item.text}</Markdown>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -482,6 +570,7 @@ export function Composer({
         text: string,
         runId: string,
         baseline: { priorCopies: number; priorUserMessages: number },
+        images: readonly File[],
       ) => void)
     | undefined;
   /** Anything was sent: re-pin the transcript to the bottom. */
@@ -497,10 +586,18 @@ export function Composer({
    * cursor thrown into a textarea they had not asked for. Re-reading in
    * place keeps both, and keeps the merge itself in one place (the pane).
    */
-  restoreDraft?: { token: number } | undefined;
+  restoreDraft?: { token: number; images?: readonly File[] } | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
+  const attachments = useChatAttachments(
+    snapshot.capabilities.imageInput ?? "unknown",
+  );
+  const submissionKey = useRef(commandId());
+  const attachmentKey = attachments.images.map((image) => image.id).join(":");
+  useEffect(() => {
+    submissionKey.current = commandId();
+  }, [text, attachmentKey]);
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
@@ -529,7 +626,16 @@ export function Composer({
       // trailing newline from Shift+Enter was enough -- so the echo could
       // never be retired and the steer showed twice for the rest of the run.
       const sent = text.trim();
-      if (activeRun === null) return await prompt(projectId, threadId, sent);
+      if (activeRun === null)
+        return attachments.files.length === 0
+          ? await prompt(projectId, threadId, sent)
+          : await prompt(
+              projectId,
+              threadId,
+              sent,
+              attachments.files,
+              submissionKey.current,
+            );
       // Measured before the request, so a copy that arrives after it is
       // unambiguously this steer landing. Both are taken: Pi rewrites a
       // `/`-prefixed steer before storing it, and the count of ALL user
@@ -538,12 +644,22 @@ export function Composer({
         priorCopies: countUserMessages(snapshot.transcript, sent),
         priorUserMessages: countAllUserMessages(snapshot.transcript),
       };
-      const result = await steer(projectId, threadId, sent);
-      onSteered?.(sent, activeRun.id, baseline);
+      const result =
+        attachments.files.length === 0
+          ? await steer(projectId, threadId, sent)
+          : await steer(
+              projectId,
+              threadId,
+              sent,
+              attachments.files,
+              submissionKey.current,
+            );
+      onSteered?.(sent, activeRun.id, baseline, attachments.files);
       return result;
     },
     onSuccess: async () => {
       setText("");
+      attachments.clear();
       removeDraft(`pi-draft:${threadId}`);
       await queryClient.invalidateQueries({
         queryKey: ["snapshot", projectId, threadId],
@@ -562,11 +678,13 @@ export function Composer({
   useEffect(() => {
     if (restoreDraft === undefined) return;
     setText(readDraft(`pi-draft:${threadId}`));
-  }, [restoreDraft, threadId]);
+    if ((restoreDraft.images?.length ?? 0) > 0)
+      attachments.addFiles(restoreDraft.images ?? [], "drop");
+  }, [restoreDraft, threadId, attachments.addFiles]);
 
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (text.trim() === "") return;
+    if (text.trim() === "" && attachments.images.length === 0) return;
     // Before the request, not after it: sending is the moment the reader
     // expects to be taken to the bottom, and waiting for the response would
     // leave them staring at old history for the length of a round trip.
@@ -580,8 +698,47 @@ export function Composer({
     mutation.error instanceof ApiClientError &&
     mutation.error.code === "thread_not_found";
   return (
-    <form className={`composer${active ? " steering" : ""}`} onSubmit={submit}>
+    <form
+      className={`composer${active ? " steering" : ""}${attachments.dragging ? " image-dragging" : ""}`}
+      onSubmit={submit}
+      onDragEnterCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDragOverCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDropCapture={(event) => {
+        if (!mutation.isPending || !event.dataTransfer.types.includes("Files"))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      {...attachments.dropHandlers}
+    >
+      {attachments.dragging && (
+        <div className="chat-drop-overlay" aria-hidden="true">
+          Drop photos here
+        </div>
+      )}
       <div className="composer-input">
+        <ChatAttachmentStrip
+          images={attachments.images}
+          error={attachments.error}
+          onRemove={attachments.remove}
+          onAdd={(files) => {
+            attachments.addFiles(files, "picker");
+          }}
+          disabled={
+            mutation.isPending ||
+            snapshot.capabilities.imageInput === "unsupported"
+          }
+        />
         <textarea
           ref={textareaRef}
           aria-label="Message Pi"
@@ -600,6 +757,20 @@ export function Composer({
           onChange={(event) => {
             setText(event.target.value);
           }}
+          onPasteCapture={(event) => {
+            if (
+              mutation.isPending &&
+              [...event.clipboardData.items].some(
+                (item) =>
+                  item.kind === "file" && item.type.startsWith("image/"),
+              )
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+          onPaste={attachments.onPaste}
+          readOnly={mutation.isPending}
           onKeyDown={(event) => {
             if (isReleaseKey(event)) {
               event.preventDefault();
@@ -639,7 +810,10 @@ export function Composer({
             className="send"
             aria-label={active ? "Steer current run" : "Send message"}
             title={active ? "Steer current run" : "Send message"}
-            disabled={mutation.isPending || text.trim() === ""}
+            disabled={
+              mutation.isPending ||
+              (text.trim() === "" && attachments.images.length === 0)
+            }
           >
             <span aria-hidden="true">↑</span>
           </button>
@@ -822,12 +996,13 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       text: string,
       runId: string,
       baseline: { priorCopies: number; priorUserMessages: number },
+      images: readonly File[],
     ) => {
       const ordinal = nextOrdinal.current;
       nextOrdinal.current += 1;
       setPendingSteers((current) => [
         ...current,
-        { runId, text, ordinal, ...baseline },
+        { runId, text, ordinal, images, ...baseline },
       ]);
     },
     [],
@@ -852,6 +1027,7 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   const [undelivered, setUndelivered] = useState<{
     token: number;
     count: number;
+    images: readonly File[];
   } | null>(null);
   const lastRun = snapshot.data?.lastRun ?? null;
   // An echo belongs to its run, and cannot outlive it.
@@ -904,6 +1080,7 @@ function ThreadPaneBody(props: ThreadPaneProps) {
     setUndelivered((current) => ({
       token: (current?.token ?? 0) + 1,
       count: lost.length,
+      images: lost.flatMap((steer) => steer.images ?? []),
     }));
   }, [runActive, currentRunId, pendingSteers, settledTranscript, threadId]);
   const queryClient = useQueryClient();

@@ -185,6 +185,8 @@ export interface PendingSteer {
   /** The run it was aimed at, so a stale echo cannot outlive its run. */
   runId: string;
   text: string;
+  /** Page-lifetime image files retained until Pi persists or returns the steer. */
+  images?: readonly File[];
   /**
    * A mint-time serial number, unique within the pane.
    *
@@ -318,6 +320,7 @@ export function steerEchoItem(pending: PendingSteer): TranscriptItem {
     kind: "message",
     role: "user",
     text: pending.text,
+    images: [],
     timestamp: null,
   };
 }

@@ -43,6 +43,7 @@ describe("PiAgentRuntime persistent session creation", () => {
       sessionId: created.sessionId,
       transcript: [],
       diagnostics: [],
+      imageInput: "unsupported",
     });
     await opened.dispose();
   });

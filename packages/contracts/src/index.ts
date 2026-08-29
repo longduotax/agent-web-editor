@@ -9,7 +9,96 @@ export const EventIdSchema = uuid.brand<"EventId">();
 export const TerminalIdSchema = uuid.brand<"TerminalId">();
 export const SessionIdSchema = uuid.brand<"SessionId">();
 export const IdempotencyKeySchema = uuid.brand<"IdempotencyKey">();
+export const ChatImageIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/)
+  .brand<"ChatImageId">();
 export const TimestampSchema = z.iso.datetime({ offset: true });
+export const ChatImageMimeTypeSchema = z.enum([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export const ImageInputCapabilitySchema = z.enum([
+  "supported",
+  "unsupported",
+  "unknown",
+]);
+
+export const CHAT_IMAGE_MAX_COUNT = 4;
+export const CHAT_IMAGE_MAX_SOURCE_BYTES = 10 * 1024 * 1024;
+export const CHAT_IMAGE_MAX_TOTAL_SOURCE_BYTES =
+  CHAT_IMAGE_MAX_COUNT * CHAT_IMAGE_MAX_SOURCE_BYTES;
+export const CHAT_IMAGE_MAX_PIXELS = 64_000_000;
+export const CHAT_IMAGE_MAX_DIMENSION = 2_000;
+/** Pi's resize helper bounds encoded base64 below 4.5 MiB. */
+export const CHAT_IMAGE_MAX_BASE64_BYTES = Math.floor(4.5 * 1024 * 1024);
+
+export const ChatImageRefSchema = z
+  .object({
+    id: ChatImageIdSchema,
+    mimeType: ChatImageMimeTypeSchema,
+  })
+  .strict();
+export type ChatImageRef = z.infer<typeof ChatImageRefSchema>;
+
+const BASE64_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function base64Prefix(data: string, maximum: number): number[] | null {
+  const output: number[] = [];
+  for (
+    let offset = 0;
+    offset < data.length && output.length < maximum;
+    offset += 4
+  ) {
+    const a = BASE64_ALPHABET.indexOf(data[offset] ?? "");
+    const b = BASE64_ALPHABET.indexOf(data[offset + 1] ?? "");
+    const cText = data[offset + 2] ?? "=";
+    const dText = data[offset + 3] ?? "=";
+    const c = cText === "=" ? 0 : BASE64_ALPHABET.indexOf(cText);
+    const d = dText === "=" ? 0 : BASE64_ALPHABET.indexOf(dText);
+    if (a < 0 || b < 0 || c < 0 || d < 0) return null;
+    output.push((a << 2) | (b >> 4));
+    if (cText !== "=") output.push(((b & 15) << 4) | (c >> 2));
+    if (dText !== "=") output.push(((c & 3) << 6) | d);
+  }
+  return output;
+}
+
+function base64ImageMatchesMime(data: string, mimeType: string): boolean {
+  const bytes = base64Prefix(data, 12);
+  if (bytes === null) return false;
+  if (mimeType === "image/png")
+    return [137, 80, 78, 71, 13, 10, 26, 10].every(
+      (value, index) => bytes[index] === value,
+    );
+  if (mimeType === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8;
+  return (
+    mimeType === "image/webp" &&
+    String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
+    String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
+  );
+}
+
+export const ChatImageResponseSchema = z
+  .object({
+    id: ChatImageIdSchema,
+    mimeType: ChatImageMimeTypeSchema,
+    data: z
+      .string()
+      .min(1)
+      .max(CHAT_IMAGE_MAX_BASE64_BYTES)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      ),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!base64ImageMatchesMime(value.data, value.mimeType))
+      context.addIssue({ code: "custom", message: "Malformed image data" });
+  });
+export type ChatImageResponse = z.infer<typeof ChatImageResponseSchema>;
 export const RunStateSchema = z.enum([
   "running",
   "completed",
@@ -24,6 +113,9 @@ export type WorktreeId = z.infer<typeof WorktreeIdSchema>;
 export type TerminalId = z.infer<typeof TerminalIdSchema>;
 export type SessionId = z.infer<typeof SessionIdSchema>;
 export type IdempotencyKey = z.infer<typeof IdempotencyKeySchema>;
+export type ChatImageId = z.infer<typeof ChatImageIdSchema>;
+export type ChatImageMimeType = z.infer<typeof ChatImageMimeTypeSchema>;
+export type ImageInputCapability = z.infer<typeof ImageInputCapabilitySchema>;
 export type RunState = z.infer<typeof RunStateSchema>;
 
 /** A Git local branch name safe to use only after repository authorization. */
@@ -120,6 +212,7 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message"),
     role: z.enum(["user", "assistant", "system"]),
     text: z.string().max(2_000_000),
+    images: z.array(ChatImageRefSchema).max(CHAT_IMAGE_MAX_COUNT).optional(),
     timestamp: TimestampSchema.nullable(),
   }),
   z.object({
@@ -171,6 +264,7 @@ export const ThreadSnapshotSchema = z.object({
     prompt: z.boolean(),
     steer: z.boolean(),
     stop: z.boolean(),
+    imageInput: ImageInputCapabilitySchema.optional(),
   }),
   diagnostics: z.array(z.string().max(500)).max(100),
 });
@@ -204,6 +298,7 @@ export const LocalChangeSummarySchema = z.object({
 });
 export const WorkspacePreflightResponseSchema = z.object({
   worktreeAvailable: z.boolean(),
+  imageInput: ImageInputCapabilitySchema.optional(),
   unavailableReason: z.string().min(1).max(500).nullable(),
   currentBranch: z.string().min(1).max(255).nullable(),
   branches: z.array(z.string().min(1).max(255)).max(10_000),
@@ -228,9 +323,18 @@ export const ThreadWorkspaceRequestSchema = z.discriminatedUnion("mode", [
     })
     .strict(),
 ]);
+const ChatPromptTextSchema = z.string().trim().max(200_000);
+
 export const StartThreadRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
+    workspace: ThreadWorkspaceRequestSchema,
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const StartThreadMultipartMetadataSchema = z
+  .object({
+    prompt: ChatPromptTextSchema,
     workspace: ThreadWorkspaceRequestSchema,
     idempotencyKey: IdempotencyKeySchema,
   })
@@ -324,13 +428,19 @@ export const ImportThreadRequestSchema = z
   .strict();
 export const PromptRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
 export const SteerRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const ChatCommandMultipartMetadataSchema = z
+  .object({
+    prompt: ChatPromptTextSchema,
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();

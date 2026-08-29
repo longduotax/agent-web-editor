@@ -46,7 +46,9 @@ Malformed or unknown-version local values are discarded explicitly. Project/thre
   rendering, plus the Codex-style project/location/start-state/branch new-chat
   toolbar. Clean worktree is the default; include-local and direct-checkout use
   are explicit and the environment slot is omitted.
-- `features/runs`: composer, direct active-run steering, stop, status, trust disclosure, and streaming reducer.
+- `features/runs`: composer, page-memory JPEG/PNG/WebP attachment previews from
+  pane-scoped drop, focused paste, or file selection, direct active-run
+  text/image steering, stop, status, trust disclosure, and streaming reducer.
 - `features/inspector`: resizable shell and Changes/Files/Terminal tabs.
 - `components`: reusable buttons, dialogs, split panes, status icons, error/empty states, and Markdown/code renderer.
 
@@ -55,7 +57,11 @@ Feature components receive DTOs/actions rather than importing transport details 
 ## Rendering and content safety
 
 - `react-markdown` renders Markdown with `remark-gfm`; raw HTML support is not enabled.
-- Links allow only explicit safe schemes, external links use safe `rel`, and images/data URLs are disabled unless separately specified.
+- Links allow only explicit safe schemes and external links use safe `rel`.
+  Arbitrary Markdown images and image/data URLs remain disabled. Separately
+  typed user-message image refs may render only after their authorized response
+  is parsed against the fixed JPEG/PNG/WebP contract; pending local previews use
+  revoked object URLs.
 - Fenced code uses a maintained browser highlighter with language fallback and bounded input. Unknown language renders escaped plain code.
 - Command, tool, Git, file, error, and terminal labels are React text nodes, never `dangerouslySetInnerHTML`.
 - Terminal escape sequences are handled only by xterm inside the terminal surface, not interpreted as page HTML.

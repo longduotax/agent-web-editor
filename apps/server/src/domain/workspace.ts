@@ -8,11 +8,13 @@ import type {
   TitleSuggestion,
   PromptAcceptance,
   RuntimeEvent,
+  RuntimeUserInput,
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
+  ChatImageResponseSchema,
   ProjectIdSchema,
   ProjectSchema,
   RunIdSchema,
@@ -22,6 +24,8 @@ import {
   ThreadSnapshotSchema,
   ThreadWorkspaceRequestSchema,
   ThreadSummarySchema,
+  type ChatImageId,
+  type ImageInputCapability,
   type Project,
   type ProjectId,
   type Run,
@@ -51,6 +55,31 @@ interface PendingPreflight {
   projectId: ProjectId;
   runtime: OpenRuntimeSession | undefined;
   stopRequested: boolean;
+}
+
+function runtimeUserInput(value: RuntimeUserInput | string): RuntimeUserInput {
+  return typeof value === "string" ? { text: value, images: [] } : value;
+}
+
+function canonicalInput(input: RuntimeUserInput): {
+  text: string;
+  images: { mimeType: string; digest: string }[];
+} {
+  return {
+    text: input.text,
+    images: input.images.map(({ mimeType, digest }) => ({ mimeType, digest })),
+  };
+}
+
+async function inspectImageInput(
+  runtime: AgentRuntime,
+  projectRoot: string,
+): Promise<ImageInputCapability> {
+  try {
+    return (await runtime.inspectImageInput?.(projectRoot)) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 async function gitAvailable(path: string): Promise<boolean> {
@@ -438,23 +467,27 @@ export class WorkspaceService {
   }
 
   public async workspacePreflight(projectId: ProjectId) {
-    return await this.worktreeManager.preflight(
-      await this.requireProjectRoot(projectId),
-    );
+    const projectRoot = await this.requireProjectRoot(projectId);
+    const preflight = await this.worktreeManager.preflight(projectRoot);
+    const imageInput = await inspectImageInput(this.runtime, projectRoot);
+    return { ...preflight, imageInput };
   }
 
   public async startThread(
     projectId: ProjectId,
-    prompt: string,
+    value: RuntimeUserInput | string,
     workspace: z.infer<typeof ThreadWorkspaceRequestSchema>,
     idempotencyKey: string,
   ) {
+    const input = runtimeUserInput(value);
+    const prompt = input.text;
     const operation = "start-thread";
-    const hash = canonicalRequestHash(operation, {
-      projectId,
-      prompt,
-      workspace,
-    });
+    const hash = canonicalRequestHash(
+      operation,
+      input.images.length === 0
+        ? { projectId, prompt, workspace }
+        : { projectId, input: canonicalInput(input), workspace },
+    );
     return await this.serialized(
       projectId,
       idempotencyKey,
@@ -463,6 +496,11 @@ export class WorkspaceService {
       StartThreadResponseSchema,
       async () => {
         const projectRoot = await this.requireProjectRoot(projectId);
+        if (input.images.length > 0) {
+          const capability = await inspectImageInput(this.runtime, projectRoot);
+          if (capability === "unsupported")
+            throw new Error("chat_image_input_unsupported");
+        }
         const existingCreation = this.store.getThreadCreation(
           projectId,
           idempotencyKey,
@@ -494,16 +532,19 @@ export class WorkspaceService {
         if (creation.title === null || creation.slug === null) {
           let suggested: TitleSuggestion = { outcome: "unavailable" };
           try {
-            suggested =
-              (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
-              suggested;
+            if (prompt !== "")
+              suggested =
+                (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
+                suggested;
           } catch {
             // Naming is optional; use the deterministic product fallback.
           }
           const title =
             suggested.outcome === "available"
               ? suggested.title
-              : fallbackTitle(prompt);
+              : prompt === ""
+                ? "Image request"
+                : fallbackTitle(prompt);
           creation = this.store.nameThreadCreation(
             projectId,
             idempotencyKey,
@@ -648,17 +689,22 @@ export class WorkspaceService {
               creation.initial_prompt_dispatch_id ?? creation.prompt_command_id,
           };
           const runtime = await this.openRuntime(thread);
-          const recovered = await runtime.recoverPrompt(prompt, dispatch);
+          const recovered = await runtime.recoverPrompt(input, dispatch);
           if (recovered.outcome === "accepted") {
             const receipt = this.store.readReceipt(
               projectId,
               creation.prompt_command_id,
               "prompt",
-              canonicalRequestHash("prompt", {
-                projectId,
-                threadId: thread.id,
-                text: prompt,
-              }),
+              canonicalRequestHash(
+                "prompt",
+                input.images.length === 0
+                  ? { projectId, threadId: thread.id, text: input.text }
+                  : {
+                      projectId,
+                      threadId: thread.id,
+                      input: canonicalInput(input),
+                    },
+              ),
               RunSchema,
             );
             if (receipt !== null) {
@@ -679,7 +725,7 @@ export class WorkspaceService {
             const started = await this.prompt(
               projectId,
               thread.id,
-              prompt,
+              input,
               creation.prompt_command_id,
               dispatch,
             );
@@ -1361,11 +1407,13 @@ export class WorkspaceService {
     const project = this.requireProject(projectId);
     this.store.setLastOpenedThread(projectId, threadId);
     let transcript: TranscriptItem[] = [];
+    let imageInput: ImageInputCapability = "unknown";
     const diagnostics: string[] = [];
     try {
       const runtime = await this.openRuntime(thread);
       const native = await runtime.snapshot();
       transcript = native.transcript;
+      imageInput = native.imageInput ?? "unknown";
       diagnostics.push(...native.diagnostics);
     } catch {
       diagnostics.push("The native agent session is unavailable or malformed.");
@@ -1386,24 +1434,45 @@ export class WorkspaceService {
         prompt: current === null,
         steer: current !== null,
         stop: current !== null,
+        imageInput,
       },
       diagnostics,
     });
   }
 
+  public async readImage(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    imageId: ChatImageId,
+  ) {
+    const thread = this.requireThread(projectId, threadId);
+    const runtime = await this.openRuntime(thread);
+    if (runtime.readImage === undefined)
+      throw new Error("chat_image_not_found");
+    try {
+      return ChatImageResponseSchema.parse(await runtime.readImage(imageId));
+    } catch (error) {
+      if (error instanceof Error && error.message === "chat_image_not_found")
+        throw error;
+      throw new Error("chat_image_not_found", { cause: error });
+    }
+  }
+
   public async prompt(
     projectId: ProjectId,
     threadId: ThreadId,
-    text: string,
+    value: RuntimeUserInput | string,
     idempotencyKey: string,
     dispatch?: { id: string },
   ): Promise<Run> {
+    const input = runtimeUserInput(value);
     const operation = "prompt";
-    const hash = canonicalRequestHash(operation, {
-      projectId,
-      threadId,
-      text,
-    });
+    const hash = canonicalRequestHash(
+      operation,
+      input.images.length === 0
+        ? { projectId, threadId, text: input.text }
+        : { projectId, threadId, input: canonicalInput(input) },
+    );
     return await this.serialized(
       projectId,
       idempotencyKey,
@@ -1444,7 +1513,7 @@ export class WorkspaceService {
             this.requestPreflightStop(preflight);
             throw new Error("project_not_found");
           }
-          const acceptance = await runtime.prompt(text, dispatch);
+          const acceptance = await runtime.prompt(input, dispatch);
           pendingAcceptance = acceptance;
           if (!acceptance.accepted) throw new Error("prompt_rejected");
           if (this.preflightPrompts.get(threadId) !== preflight)
@@ -1534,11 +1603,17 @@ export class WorkspaceService {
   public async steer(
     projectId: ProjectId,
     threadId: ThreadId,
-    text: string,
+    value: RuntimeUserInput | string,
     idempotencyKey: string,
   ): Promise<Run> {
+    const input = runtimeUserInput(value);
     const operation = "steer";
-    const hash = canonicalRequestHash(operation, { projectId, threadId, text });
+    const hash = canonicalRequestHash(
+      operation,
+      input.images.length === 0
+        ? { projectId, threadId, text: input.text }
+        : { projectId, threadId, input: canonicalInput(input) },
+    );
     return await this.serialized(
       projectId,
       idempotencyKey,
@@ -1557,7 +1632,7 @@ export class WorkspaceService {
         const thread = this.requireThread(projectId, threadId);
         const run = this.store.runningRunForThread(threadId);
         if (run?.project_id !== projectId) throw new Error("run_not_active");
-        await (await this.openRuntime(thread)).steer(text);
+        await (await this.openRuntime(thread)).steer(input);
         return this.store.withReceipt(
           projectId,
           idempotencyKey,

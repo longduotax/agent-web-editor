@@ -7,6 +7,9 @@ import {
   UnarchiveThreadResponseSchema,
   BrowseProjectRequestSchema,
   BrowseProjectResponseSchema,
+  ChatCommandMultipartMetadataSchema,
+  ChatImageResponseSchema,
+  StartThreadMultipartMetadataSchema,
   LiveDiagnosticSchema,
   ProjectIdSchema,
   SessionIdSchema,
@@ -45,6 +48,48 @@ describe("wire contracts", () => {
       BrowseProjectResponseSchema.safeParse({
         outcome: "cancelled",
         path: "/tmp/project",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("allows image-only multipart metadata while keeping text-only JSON non-empty", () => {
+    expect(
+      ChatCommandMultipartMetadataSchema.parse({
+        prompt: "",
+        idempotencyKey: id,
+      }),
+    ).toEqual({ prompt: "", idempotencyKey: id });
+    expect(
+      StartThreadMultipartMetadataSchema.safeParse({
+        prompt: "",
+        workspace: { mode: "shared" },
+        idempotencyKey: id,
+        extra: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      StartThreadRequestSchema.safeParse({
+        prompt: "",
+        workspace: { mode: "shared" },
+        idempotencyKey: id,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses bounded conversation image responses", () => {
+    const imageId = "a".repeat(64);
+    expect(
+      ChatImageResponseSchema.parse({
+        id: imageId,
+        mimeType: "image/png",
+        data: "iVBORw0KGgo=",
+      }),
+    ).toEqual({ id: imageId, mimeType: "image/png", data: "iVBORw0KGgo=" });
+    expect(
+      ChatImageResponseSchema.safeParse({
+        id: imageId,
+        mimeType: "image/svg+xml",
+        data: "iVBORw0KGgo=",
       }).success,
     ).toBe(false);
   });

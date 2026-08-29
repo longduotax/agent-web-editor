@@ -8,7 +8,11 @@ also discovers sessions for a canonical execution root, returns path-free
 session descriptors, resolves stored UUIDs through a fresh authorized listing,
 opens/creates native persistent sessions, translates active history and live Pi
 events into SDK-neutral DTOs, and owns prompt preflight, steering, abort, and
-runtime disposal. New blank sessions are atomically materialized from narrowly
+runtime disposal. For chat images it reports selected-model/settings capability,
+verifies source fingerprints, bounds concurrent worker-backed normalization,
+passes flat Pi image blocks to prompt or steer, projects valid native user
+images as opaque content refs, and resolves those refs without exposing a native
+path. New blank sessions are atomically materialized from narrowly
 parsed `SessionManager` state because Pi SDK 0.84.2 otherwise delays its first
 JSONL write until an assistant message exists.
 

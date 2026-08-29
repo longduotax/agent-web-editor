@@ -35,6 +35,13 @@ and approved designs under `docs/design/`.
 - `PI_WEB_NAMING_MODEL=provider/model` optionally selects the lightweight model
   used to name new threads/worktrees; failure falls back to local naming.
 
+Image-bearing start, prompt, and steer commands use direct multipart bodies with
+route-specific count, per-file, aggregate-byte, format, and decoded-pixel
+bounds; the global 1 MiB body limit remains unchanged for existing routes. The
+server detects JPEG/PNG/WebP from bytes, passes ordered SDK-neutral input to the
+runtime, and serves accepted native images only through an authorized
+project/thread lookup. Image bytes are not staged in SQLite or the workspace.
+
 Tests use newly created temporary state/project directories and injected
 runtimes/PTYS. They do not use configured databases or native user sessions.
 

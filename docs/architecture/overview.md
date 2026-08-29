@@ -84,7 +84,14 @@ thread from either the registered checkout or a verified managed worktree.
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;
 deterministic local naming is the non-blocking fallback. Prompt
-preflight acceptance precedes atomic run/receipt creation. A thread-level
+preflight acceptance precedes atomic run/receipt creation. Text-only prompt
+commands retain their strict JSON representation. Image-bearing start, prompt,
+and steer commands use route-bounded multipart bodies: the server detects
+JPEG/PNG/WebP bytes and dimensions, hashes ordered source content for
+idempotency, and passes SDK-neutral image input to the adapter. The adapter
+checks model/settings capability, bounds concurrent worker-backed resizing, and
+supplies Pi flat multimodal image blocks; native Pi JSONL remains their durable
+store. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads
 of the same project to run concurrently. Shared sessions use the registered working directory; isolated sessions use
@@ -161,5 +168,11 @@ labels. Local storage is limited to unsent per-thread drafts and the parsed,
 device-local panel record: its width, its tree, every group's tab list and
 active tab, and each tab's own restorable state.
 
-Every HTTP response and WebSocket frame is parsed with contracts. Raw Markdown
-HTML and images are disabled; terminal escape handling is confined to xterm.
+Every HTTP response and WebSocket frame is parsed with contracts. A composer
+accepts up to four bounded JPEG/PNG/WebP images by pane-scoped drop, explicit
+clipboard paste, or an accessible file picker; pending files remain page-memory
+only and image-bearing commands retain them on failure. Native user-image blocks
+project as opaque content-addressed refs and load on demand through an
+authorized project/thread route. This typed attachment renderer is separate
+from Markdown: raw Markdown HTML and arbitrary Markdown images remain disabled;
+terminal escape handling is confined to xterm.

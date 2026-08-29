@@ -1,4 +1,9 @@
-import type { TranscriptItem } from "@pi-web/contracts";
+import type {
+  ChatImageId,
+  ChatImageMimeType,
+  ImageInputCapability,
+  TranscriptItem,
+} from "@pi-web/contracts";
 
 export type RuntimeFailureCode =
   | "unavailable"
@@ -35,6 +40,25 @@ export interface RuntimeSnapshot {
   sessionId: string;
   transcript: TranscriptItem[];
   diagnostics: string[];
+  imageInput?: ImageInputCapability;
+}
+
+export interface RuntimeImageInput {
+  mimeType: ChatImageMimeType;
+  data: Uint8Array;
+  /** SHA-256 of the bounded source bytes, used for idempotency and recovery. */
+  digest: string;
+}
+
+export interface RuntimeUserInput {
+  text: string;
+  images: RuntimeImageInput[];
+}
+
+export interface RuntimeImageContent {
+  id: ChatImageId;
+  mimeType: ChatImageMimeType;
+  data: string;
 }
 
 export type TitleSuggestion =
@@ -99,14 +123,15 @@ export interface OpenRuntimeSession {
   readonly id: string;
   snapshot(): Promise<RuntimeSnapshot>;
   prompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch?: RuntimePromptDispatch,
   ): Promise<PromptAcceptance>;
   recoverPrompt(
-    text: string,
+    input: RuntimeUserInput | string,
     dispatch: RuntimePromptDispatch,
   ): Promise<PromptRecovery>;
-  steer(text: string): Promise<void>;
+  steer(input: RuntimeUserInput | string): Promise<void>;
+  readImage?(imageId: ChatImageId): Promise<RuntimeImageContent>;
   stop(): Promise<void>;
   subscribe(listener: (event: RuntimeEvent) => void): () => void;
   dispose(): Promise<void>;
@@ -114,6 +139,7 @@ export interface OpenRuntimeSession {
 
 export interface AgentRuntime {
   suggestTitle?(projectPath: string, prompt: string): Promise<TitleSuggestion>;
+  inspectImageInput?(projectPath: string): Promise<ImageInputCapability>;
   discover(
     projectPath: string,
   ): Promise<{ sessions: RuntimeSessionDescriptor[]; diagnostics: string[] }>;

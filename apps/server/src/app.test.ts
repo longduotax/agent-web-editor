@@ -9,12 +9,15 @@ import type {
   AgentRuntime,
   OpenRuntimeSession,
   PromptAcceptance,
+  RuntimeImageContent,
 } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
   ArchivedThreadsResponseSchema,
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
+  ChatImageIdSchema,
+  ChatImageResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -24,6 +27,7 @@ import {
   StartThreadResponseSchema,
   TerminalServerFrameSchema,
   TerminalsResponseSchema,
+  type ChatImageId,
   type TerminalServerFrame,
 } from "@pi-web/contracts";
 import { WebSocket, type RawData } from "ws";
@@ -89,6 +93,17 @@ class PromptingSession implements OpenRuntimeSession {
 
   public steer(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public readImage(imageId: ChatImageId): Promise<RuntimeImageContent> {
+    const expected = ChatImageIdSchema.parse("a".repeat(64));
+    return imageId === expected
+      ? Promise.resolve({
+          id: expected,
+          mimeType: "image/png",
+          data: "iVBORw0KGgo=",
+        })
+      : Promise.reject(new Error("chat_image_not_found"));
   }
 
   public stop(): Promise<void> {
@@ -194,6 +209,53 @@ describe("credential-free project API", () => {
     expect(StartThreadResponseSchema.parse(retry.json())).toEqual(parsed);
     expect(runtime.namingCount).toBe(1);
     expect(runtime.createCount).toBe(1);
+    await server.close();
+  });
+
+  it("serves a native conversation image only through an authorized thread", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const start = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Inspect an image",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000019",
+      },
+    });
+    const thread = StartThreadResponseSchema.parse(start.json()).thread;
+    const imageId = "a".repeat(64);
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/images/${imageId}`,
+      headers: { host },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(ChatImageResponseSchema.parse(response.json())).toEqual({
+      id: imageId,
+      mimeType: "image/png",
+      data: "iVBORw0KGgo=",
+    });
+    const absent = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/images/${"b".repeat(64)}`,
+      headers: { host },
+    });
+    expect(absent.statusCode).toBe(404);
     await server.close();
   });
 

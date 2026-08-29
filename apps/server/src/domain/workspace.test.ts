@@ -7,6 +7,7 @@ import type {
   OpenRuntimeSession,
   PromptAcceptance,
   RuntimeEvent,
+  RuntimeUserInput,
 } from "@pi-web/agent-runtime";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +35,8 @@ class ControlledSession implements OpenRuntimeSession {
   public discardCount = 0;
   public disposeCount = 0;
   public recoveredPrompts = false;
+  public lastPrompt: RuntimeUserInput | string | undefined;
+  public lastSteer: RuntimeUserInput | string | undefined;
 
   public constructor(public readonly id: string) {}
   private settle:
@@ -50,8 +53,11 @@ class ControlledSession implements OpenRuntimeSession {
       diagnostics: [],
     });
   }
-  public async prompt(): Promise<PromptAcceptance> {
+  public async prompt(
+    input: RuntimeUserInput | string,
+  ): Promise<PromptAcceptance> {
     this.promptCount += 1;
+    this.lastPrompt = input;
     this.recoveredPrompts = true;
     await this.promptGate;
     const settlement = new Promise<"completed" | "failed" | "interrupted">(
@@ -75,8 +81,9 @@ class ControlledSession implements OpenRuntimeSession {
         : ({ outcome: "not_accepted" } as const),
     );
   }
-  public steer() {
+  public steer(input: RuntimeUserInput | string) {
     this.steerCount += 1;
+    this.lastSteer = input;
     return Promise.resolve();
   }
   public async stop(): Promise<void> {
@@ -200,6 +207,78 @@ function sessionFor(
 }
 
 describe("run coordination", () => {
+  it("passes ordered image input to the runtime and deduplicates it by content", async () => {
+    const context = await fixture();
+    const session = sessionFor(context, context.first.id);
+    const key = "90000000-0000-4000-8000-000000000099";
+    const input: RuntimeUserInput = {
+      text: "Inspect this",
+      images: [
+        {
+          mimeType: "image/png",
+          data: new Uint8Array([1, 2, 3]),
+          digest: "a".repeat(64),
+        },
+      ],
+    };
+
+    const first = await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      input,
+      key,
+    );
+    const duplicate = await context.service.prompt(
+      context.project.id,
+      context.first.id,
+      input,
+      key,
+    );
+
+    expect(duplicate.id).toBe(first.id);
+    expect(session.promptCount).toBe(1);
+    expect(session.lastPrompt).toEqual(input);
+    await expect(
+      context.service.prompt(
+        context.project.id,
+        context.first.id,
+        {
+          ...input,
+          images: [
+            {
+              mimeType: "image/png",
+              data: new Uint8Array([1, 2, 3]),
+              digest: "b".repeat(64),
+            },
+          ],
+        },
+        key,
+      ),
+    ).rejects.toThrow("Idempotency key was reused");
+  });
+
+  it("creates an image-only thread with the deterministic fallback title", async () => {
+    const context = await fixture();
+    const input: RuntimeUserInput = {
+      text: "",
+      images: [
+        {
+          mimeType: "image/png",
+          data: new Uint8Array([1]),
+          digest: "c".repeat(64),
+        },
+      ],
+    };
+    const started = await context.service.startThread(
+      context.project.id,
+      input,
+      { mode: "shared" },
+      "90000000-0000-4000-8000-000000000098",
+    );
+    expect(started.thread.title).toBe("Image request");
+    expect(sessionFor(context, started.thread.id).lastPrompt).toEqual(input);
+  });
+
   it("replays the original start run after a later run exists", async () => {
     const context = await fixture();
     const key = "90000000-0000-4000-8000-000000000001";
