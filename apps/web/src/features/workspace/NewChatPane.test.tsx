@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 const api = vi.hoisted(() => ({
+  getAgentBackends: vi.fn(),
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
   startThread: vi.fn(),
@@ -31,6 +32,7 @@ import {
   branchLabels,
   shortBranchLabel,
 } from "./NewChatPane.js";
+import { BACKEND_PREFERENCE_KEY } from "../settings/backendPreferences.js";
 
 const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
@@ -44,8 +46,35 @@ afterEach(() => {
 
 function renderNewChat(
   preflight: Record<string, unknown> = {},
-  continuationSourceThreadId: ThreadId | null = null,
+  continuationOrBackendPending: ThreadId | null | boolean = null,
+  backendMetadata?: {
+    defaultRuntime: "pi" | "codex";
+    backends: {
+      kind: "pi" | "codex";
+      available: boolean;
+      reason: string | null;
+    }[];
+  },
 ) {
+  const continuationSourceThreadId =
+    typeof continuationOrBackendPending === "string"
+      ? continuationOrBackendPending
+      : null;
+  const backendMetadataPending = continuationOrBackendPending === true;
+  if (backendMetadataPending)
+    api.getAgentBackends.mockImplementation(
+      async () => await new Promise<never>(() => undefined),
+    );
+  else
+    api.getAgentBackends.mockResolvedValue(
+      backendMetadata ?? {
+        defaultRuntime: "pi",
+        backends: [
+          { kind: "pi", available: true, reason: null },
+          { kind: "codex", available: true, reason: null },
+        ],
+      },
+    );
   api.getWorkspace.mockResolvedValue({
     projects: [
       {
@@ -60,7 +89,10 @@ function renderNewChat(
         lastOpenedThreadId: null,
       },
     ],
-    threads: [],
+    threads:
+      continuationSourceThreadId === null
+        ? []
+        : [{ id: continuationSourceThreadId, runtime: "pi" }],
     diagnostics: [],
   });
   api.getWorkspacePreflight.mockResolvedValue({
@@ -113,6 +145,11 @@ describe("pending same-worktree continuation", () => {
     const user = userEvent.setup();
     renderNewChat({}, threadId);
 
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Create chat and send" }),
+      ).toBeEnabled();
+    });
     await user.keyboard("{Enter}");
 
     await waitFor(() => {
@@ -163,6 +200,48 @@ describe("pending same-worktree continuation", () => {
 // said "New chat", and the only feedback was an 11.5px grey hint -- it read
 // as "my Enter key did not register".
 describe("NewChatPane while the workspace is being prepared", () => {
+  it("falls back to Pi when the default Codex backend is unavailable", async () => {
+    const user = userEvent.setup();
+    api.startThread.mockResolvedValue({ thread: { id: threadId } });
+    renderNewChat({}, false, {
+      defaultRuntime: "codex",
+      backends: [
+        { kind: "pi", available: true, reason: null },
+        { kind: "codex", available: false, reason: "Codex CLI missing" },
+      ],
+    });
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "First message" }),
+      "Use Pi",
+    );
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.startThread).toHaveBeenCalled();
+    });
+    expect(api.startThread.mock.calls[0]?.[4]).toBe("pi");
+  });
+
+  it("lets the server select the machine default before backend metadata loads", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      BACKEND_PREFERENCE_KEY,
+      JSON.stringify({ version: 1, choice: "follow-machine" }),
+    );
+    api.startThread.mockResolvedValue({ thread: { id: threadId } });
+    renderNewChat({}, true);
+
+    const composer = await screen.findByRole("textbox", {
+      name: "First message",
+    });
+    await user.type(composer, "Use the machine default");
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(api.startThread).toHaveBeenCalled();
+    });
+    expect(api.startThread.mock.calls[0]?.[4]).toBeUndefined();
+  });
+
   it("clears the composer and echoes the message the moment it is sent", async () => {
     const user = userEvent.setup();
     let release: ((value: { thread: { id: ThreadId } }) => void) | undefined;

@@ -109,7 +109,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -130,9 +130,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -181,7 +182,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -202,9 +203,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -323,7 +325,7 @@ describe("safe and accessible workspace rendering", () => {
     const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
     const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
     const snapshot: ThreadSnapshot = {
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -344,9 +346,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -497,13 +500,14 @@ describe("safe and accessible workspace rendering", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread: {
         id: threadId,
@@ -514,9 +518,10 @@ describe("safe and accessible workspace rendering", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi" as const,
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -670,6 +675,17 @@ describe("safe and accessible workspace rendering", () => {
           modifiedAt: "2026-01-01T00:00:00.000Z",
           messageCount: 1,
           preview: "Existing work",
+          runtime: "codex" as const,
+          imported: false,
+        },
+        {
+          id: "50000000-0000-4000-8000-000000000001",
+          name: "Existing Pi session",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          modifiedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 1,
+          preview: "Existing Pi work",
+          runtime: "pi" as const,
           imported: false,
         },
       ],
@@ -691,7 +707,7 @@ describe("safe and accessible workspace rendering", () => {
     // requested thread id rather than being a single fixed value.
     api.getSnapshot.mockImplementation((_projectId: string, tid: string) =>
       Promise.resolve({
-        version: 1,
+        version: 2,
         project: workspace.projects[0],
         thread:
           tid === importedThreadId
@@ -723,7 +739,7 @@ describe("safe and accessible workspace rendering", () => {
                   available: true,
                 },
               },
-        transcript: [],
+        transcriptPage: { items: [], olderCursor: null, atLatest: true },
         currentRun: null,
         lastRun: null,
         epoch: "60000000-0000-4000-8000-000000000001",
@@ -765,6 +781,7 @@ describe("safe and accessible workspace rendering", () => {
         mutations: { retry: false },
       },
     });
+    const consoleError = vi.spyOn(console, "error");
     render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
@@ -779,20 +796,43 @@ describe("safe and accessible workspace rendering", () => {
       }),
     );
     expect(
-      await screen.findByRole("button", { name: "Import" }),
-    ).toBeInTheDocument();
+      await screen.findAllByRole("button", { name: "Import" }),
+    ).toHaveLength(2);
     expect(api.discoverSessions).toHaveBeenCalledWith(projectId);
     expect(
       screen.getByText("One session could not be read."),
     ).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join(" ")).not.toContain(
+      "Encountered two children with the same key",
+    );
+    consoleError.mockRestore();
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    const [codexImport] = screen.getAllByRole("button", { name: "Import" });
+    if (codexImport === undefined) throw new Error("Codex import is missing");
+    await user.click(codexImport);
     await waitFor(() => {
       expect(api.importThread).toHaveBeenCalledWith(
         projectId,
         "50000000-0000-4000-8000-000000000001",
+        "codex",
       );
       expect(api.getSnapshot).toHaveBeenCalledWith(projectId, importedThreadId);
+    });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Import an existing session into Example project",
+      }),
+    );
+    await screen.findAllByRole("button", { name: "Import" });
+    const [, piImport] = screen.getAllByRole("button", { name: "Import" });
+    if (piImport === undefined) throw new Error("Pi import is missing");
+    await user.click(piImport);
+    await waitFor(() => {
+      expect(api.importThread).toHaveBeenCalledWith(
+        projectId,
+        "50000000-0000-4000-8000-000000000001",
+        "pi",
+      );
     });
     expect(
       await screen.findByRole("heading", { name: "Existing session" }),
@@ -808,14 +848,18 @@ describe("safe and accessible workspace rendering", () => {
     ).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    fireEvent.contextMenu(originalThread);
-    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await user.dblClick(
+      screen.getByText("Original thread", { selector: ".thread-title" }),
+    );
     const title = screen.getByRole("textbox", {
       name: "Rename Original thread",
     });
+    expect(
+      screen.queryByRole("button", { name: /save|confirm|cancel/i }),
+    ).not.toBeInTheDocument();
     await user.clear(title);
     await user.type(title, "Renamed thread");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.blur(title, { relatedTarget: document.body });
     await waitFor(() => {
       expect(api.renameThread).toHaveBeenCalledWith(
         projectId,
@@ -873,7 +917,7 @@ describe("safe and accessible workspace rendering", () => {
       screen.getByRole("button", { name: 'Undo archiving "Renamed thread"' }),
     ).toBeInTheDocument();
     expect(api.archiveThread).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 });
 
 describe("sidebar run status", () => {
@@ -982,6 +1026,7 @@ describe("the panel does not follow the focused pane", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -1017,10 +1062,10 @@ describe("the panel does not follow the focused pane", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1736,7 +1781,7 @@ describe("workspace surface identity across the /new boundary", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project: {
         id: projectId,
         displayName: "Example project",
@@ -1757,9 +1802,14 @@ describe("workspace surface identity across the /new boundary", () => {
         runState: null,
         unread: false,
         runtimeAvailable: true,
+        runtime: "pi",
         workspace: { mode: "shared", branchName: null, available: true },
       },
-      transcript: [],
+      transcriptPage: {
+        items: [],
+        olderCursor: null,
+        atLatest: true,
+      },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -1859,6 +1909,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -1929,6 +1980,7 @@ describe("restoring an archived thread", () => {
           runState: null,
           unread: false,
           runtimeAvailable: true,
+          runtime: "pi" as const,
           workspace: { mode: "shared", branchName: null, available: true },
         },
       ],
@@ -2047,6 +2099,7 @@ describe("panel Files tab search", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -2093,10 +2146,10 @@ describe("panel Files tab search", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -2201,6 +2254,7 @@ describe("panel Changes tab states", () => {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared" as const, branchName: null, available: true },
   };
 
@@ -2246,10 +2300,10 @@ describe("panel Changes tab states", () => {
       diagnostics: [],
     });
     api.getSnapshot.mockResolvedValue({
-      version: 1,
+      version: 2,
       project,
       thread,
-      transcript: [],
+      transcriptPage: { items: [], olderCursor: null, atLatest: true },
       currentRun: null,
       lastRun: null,
       epoch: "40000000-0000-4000-8000-000000000001",
@@ -2753,12 +2807,9 @@ describe("shell layout and light-mode palette", () => {
   });
 });
 
-// SF5. One `rename` mutation is shared by every row in every project and
-// nothing ever called `reset()`. Two consequences: the notice was the only
-// error in the app with no way out -- in the commit whose organising idea
-// (G10) is that a red block needs an exit -- and the error outlived the form
-// that produced it, so a failed rename of one thread rendered under the next
-// thread's field.
+// A failed inline rename belongs to the editor and draft that produced it.
+// Editing clears it for retry; Revert exits it; and opening another thread's
+// editor starts clean rather than inheriting the previous mutation state.
 describe("a rename that fails", () => {
   const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
   const first = "20000000-0000-4000-8000-000000000001" as ThreadId;
@@ -2831,13 +2882,15 @@ describe("a rename that fails", () => {
     title: string,
   ) {
     await openRenameOf(user, title);
-    await user.click(
-      within(renameForm()).getByRole("button", { name: "Save" }),
-    );
+    const field = within(renameForm()).getByRole("textbox", {
+      name: `Rename ${title}`,
+    });
+    await user.clear(field);
+    await user.type(field, `${title} draft{Enter}`);
     return await within(renameForm()).findByRole("alert");
   }
 
-  it("can be dismissed, and comes back for the next failure", async () => {
+  it("clears while editing for retry, and comes back for the next failure", async () => {
     api.renameThread.mockRejectedValue(new Error("Renaming is not allowed."));
     const user = userEvent.setup();
     renderTwoThreads();
@@ -2848,20 +2901,15 @@ describe("a rename that fails", () => {
       "Could not rename this thread: Renaming is not allowed.",
     );
 
-    await user.click(
-      within(renameForm()).getByRole("button", {
-        name: "Dismiss this message",
-      }),
-    );
+    const field = within(renameForm()).getByRole("textbox", {
+      name: "Rename First thread",
+    });
+    await user.clear(field);
+    await user.type(field, "Retry title");
     expect(within(renameForm()).queryByRole("alert")).not.toBeInTheDocument();
 
-    // Dismissal is `reset()` at the call site rather than a sticky flag in
-    // the component, so a second failure re-renders the notice by
-    // construction.
     api.renameThread.mockRejectedValue(new Error("The thread is gone."));
-    await user.click(
-      within(renameForm()).getByRole("button", { name: "Save" }),
-    );
+    await user.keyboard("{Enter}");
     expect(await within(renameForm()).findByRole("alert")).toHaveTextContent(
       "Could not rename this thread: The thread is gone.",
     );
@@ -2875,7 +2923,7 @@ describe("a rename that fails", () => {
 
     await failRenameOf(user, "First thread");
     await user.click(
-      within(renameForm()).getByRole("button", { name: "Cancel" }),
+      within(renameForm()).getByRole("button", { name: "Revert title" }),
     );
     expect(document.querySelector(".thread-rename")).toBeNull();
 

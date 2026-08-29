@@ -18,9 +18,9 @@
 
 ## Working specification and approval context
 
-[Thread workspaces](../../product-specs/thread-workspaces.md) version 2 remains
+[Thread workspaces](../../product-specs/thread-workspaces.md) version 3 remains
 Current. The user approved proposed version 3 and plan version 1 on 2026-08-29,
-and that implementation now creates a durable blank thread and Pi session when
+and that implementation now creates a durable blank thread and agent session when
 `/new` is submitted. Subsequent discussion selected a materially different
 outcome: exact `/new` should create only a pending pane, while the first real
 prompt creates the server-side conversation. That decision invalidated both
@@ -33,25 +33,26 @@ exact versions.
 Exact `/new` should feel like the existing split/new-chat flow while retaining
 the current managed worktree. An unused command leaves no empty thread or native
 session. The old chat remains intact, a device-local pending composer may survive
-a reload, and the first real task creates the new durable thread, blank Pi
-session, initial title, prompt, and run through one recovery-safe operation.
+a reload, and the first real task creates the new durable thread, blank native
+session on the inherited backend, initial title, prompt, and run through one
+recovery-safe operation.
 
 ## Requirement traceability
 
-| Spec requirement                                                                                               | Technical consequence                                                                                                                                                                                                                       | Verification                                                                                                                                                                                             |
-| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [TW-10](../../product-specs/thread-workspaces.md#tw-10--exact-new-application-command)                         | Retain exact-command parsing and suggestion, but replace the mutating continuation call with a read-only server preflight followed by a pending-pane transition.                                                                            | Component/API tests prove exact interception, no Pi prompt/steer call, no persistence mutation, argument-bearing slash passthrough, and scoped preflight failures.                                       |
-| [TW-11](../../product-specs/thread-workspaces.md#tw-11--pending-chat-first-durable-chat-on-first-prompt)       | Add a discriminated pending-continuation pane assignment and versioned layout-storage migration; create no server conversation until its composer submits.                                                                                  | Layout/storage, route, reload, close, replacement, draft, sidebar, store, and fake-runtime tests prove pending restoration and zero thread/session/run allocation before a prompt.                       |
-| [TW-12](../../product-specs/thread-workspaces.md#tw-12--files-are-continuity-conversation-context-is-not)      | First-prompt continuation resolves the source worktree directly, invokes no Git/worktree manager operation, and sends only the explicit first task to a newly created session.                                                              | Generated-repository test compares status/hashes before `/new` and after first dispatch; runtime fixture proves one empty session create followed by only the submitted task and no source context.      |
-| [TW-13](../../product-specs/thread-workspaces.md#tw-13--one-active-agent-per-reused-managed-worktree)          | Keep the v8 managed-worktree lease/index and acquire one lease token across title/session/thread creation and first-prompt preflight; recheck availability at both command preflight and first submission.                                  | Barrier tests cover command and first-prompt races against source/sibling preflight and runs, lease release on every failure/settlement path, and unchanged distinct-worktree/shared concurrency.        |
-| [TW-14](../../product-specs/thread-workspaces.md#tw-14--first-prompt-creation-naming-idempotency-and-recovery) | Change continuation input/output to prompt plus creation identity and thread-plus-run; extend the durable operation through title, session, thread, prompt dispatch, and run attachment; stop creating new pending-title continuation rows. | Migration and failure-injection tests cover each operation boundary, duplicate/restart recovery, one title/session/thread/accepted prompt/run, rejection behavior, and compatibility with v8 blank rows. |
+| Spec requirement                                                                                               | Technical consequence                                                                                                                                                                                                                       | Verification                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [TW-10](../../product-specs/thread-workspaces.md#tw-10--exact-new-application-command)                         | Retain exact-command parsing and suggestion, but replace the mutating continuation call with a read-only server preflight followed by a pending-pane transition.                                                                            | Component/API tests prove exact interception, no agent prompt/steer call, no persistence mutation, argument-bearing slash passthrough, and scoped preflight failures.                                                        |
+| [TW-11](../../product-specs/thread-workspaces.md#tw-11--pending-chat-first-durable-chat-on-first-prompt)       | Add a discriminated pending-continuation pane assignment and versioned layout-storage migration; create no server conversation until its composer submits.                                                                                  | Layout/storage, route, reload, close, replacement, draft, sidebar, store, and fake-runtime tests prove pending restoration and zero thread/session/run allocation before a prompt.                                           |
+| [TW-12](../../product-specs/thread-workspaces.md#tw-12--files-are-continuity-conversation-context-is-not)      | First-prompt continuation resolves the source worktree directly, invokes no Git/worktree manager operation, and sends only the explicit first task to a newly created session.                                                              | Generated-repository test compares status/hashes before `/new` and after first dispatch; runtime fixture proves one empty session create followed by only the submitted task and no source context.                          |
+| [TW-13](../../product-specs/thread-workspaces.md#tw-13--one-active-agent-per-reused-managed-worktree)          | Keep the v9 managed-worktree lease/index and acquire one lease token across title/session/thread creation and first-prompt preflight; recheck availability at both command preflight and first submission.                                  | Barrier tests cover command and first-prompt races against source/sibling preflight and runs, lease release on every failure/settlement path, and unchanged distinct-worktree/shared concurrency.                            |
+| [TW-14](../../product-specs/thread-workspaces.md#tw-14--first-prompt-creation-naming-idempotency-and-recovery) | Change continuation input/output to prompt plus creation identity and thread-plus-run; extend the durable operation through title, session, thread, prompt dispatch, and run attachment; stop creating new pending-title continuation rows. | Migration and failure-injection tests cover each operation boundary, duplicate/restart recovery, one title/session/thread/accepted prompt/run, rejection behavior, and compatibility with pre-merge blank continuation rows. |
 
 ## Current behavior and affected invariants
 
 - The in-progress v3 implementation intercepts exact `/new`, immediately calls
-  `POST /api/projects/:projectId/threads/:threadId/continue`, creates a blank Pi
+  `POST /api/projects/:projectId/threads/:threadId/continue`, creates a blank agent
   session and thread titled `New chat`, and replaces the pane with that thread.
-- Migration v8 changes managed-worktree ownership to one-to-many, adds durable
+- Migration v9 changes managed-worktree ownership to one-to-many, adds durable
   continuation operations and `threads.initial_title_pending`, and adds the
   persisted one-running-run-per-managed-worktree constraint. Those ownership,
   scope, and lease changes remain required by version 4.
@@ -78,7 +79,7 @@ Preserved invariants:
 - Worktree readiness and repository identity are authoritative server checks,
   repeated at the first prompt rather than trusted from pending browser state.
 - The source thread/session/transcript is neither modified nor copied.
-- One native Pi session belongs to one durable application thread; only the
+- One native agent session belongs to one durable application thread; only the
   verified execution root is shared.
 - No Git, worktree provisioning, handoff, summary, hidden prompt, confirmation,
   or automatic trigger is introduced.
@@ -112,7 +113,7 @@ The proposed specification's non-goals are authoritative. This refactor also
 does not reverse one-to-many worktree ownership, real worktree panel scope, or
 the managed-worktree run lease. It does not merge the ordinary worktree
 provisioning operation with continuation creation, add a server-side pending
-chat/token, or garbage-collect already-created v8 blank threads/sessions.
+chat/token, or garbage-collect already-created pre-merge blank threads/sessions.
 
 ### Assumptions
 
@@ -121,11 +122,13 @@ chat/token, or garbage-collect already-created v8 blank threads/sessions.
 - The source thread ID is the pending pane's authorization/reference handle. The
   browser does not need the worktree ID to request creation, and the server does
   not trust a browser-supplied worktree identity.
-- Existing Pi creation IDs and `recoverPrompt` provide the same external-effect
+- Existing runtime creation IDs and `recoverPrompt` provide the same external-effect
   recovery primitives used by normal first-thread creation.
-- Migration v8 may already have been applied to a retained local database even
-  though this branch has not been deployed. Plan v2 therefore adds migration v9
-  rather than rewriting v8 or assuming any configured database is disposable.
+- A pre-merge continuation migration may already have been applied to a
+  retained local database even though this branch has not been deployed. The
+  merged ladder reserves v8 for immutable runtime metadata, v9 for continuation
+  ownership, and v10 for deferred prompting rather than assuming any configured
+  database is disposable.
 
 ### Unresolved technical decisions
 
@@ -142,17 +145,17 @@ to reconstruct or cancel the pending pane consistently.
    request/response schemas. The creation request contains only `prompt` and
    `idempotencyKey`; its response contains the created thread and run. No path or
    browser-selected worktree ID is added.
-2. Add migration v9 and matching Drizzle/store parsers. Extend continuation
+2. Add migration v10 and matching Drizzle/store parsers. Extend continuation
    operations with bounded title, prompt-command/dispatch identity, and run
    attachment fields plus lifecycle constraints needed for recovery. Do not
-   rewrite migration v8 or delete its existing rows.
-3. Retain `initial_title_pending` as a compatibility field for v8-created blank
+   rewrite migration v9 or delete its existing rows.
+3. Retain `initial_title_pending` as a compatibility field for pre-merge blank
    threads, but make every v4 continuation-created thread non-pending and titled
    from its submitted first prompt.
-4. Parse legacy completed v8 operations separately from v9 first-prompt
+4. Parse legacy completed continuation operations separately from v10 first-prompt
    operations. Reject malformed mixed states rather than inferring missing
    prompt/run ownership.
-5. Add empty-to-v9, v8-to-v9, repeated-startup, backup/newer-version refusal,
+5. Add empty-to-v10, v9-to-v10, repeated-startup, backup/newer-version refusal,
    valid legacy row, malformed lifecycle, and relationship/uniqueness tests.
 
 ### Milestone 2 — Read-only command preflight
@@ -174,7 +177,7 @@ to reconstruct or cancel the pending pane consistently.
 1. Change the continuation mutation so its canonical request hash includes
    project, source thread, exact prompt, and idempotency identity. Re-resolve the
    source and verified worktree on every new operation/recovery entry.
-2. Reserve or recover one v9 operation, derive and persist TW-09's bounded title,
+2. Reserve or recover one v10 operation, derive and persist TW-09's bounded title,
    create/recover a native session at the verified execution root with the
    operation creation ID, and insert one thread linked to the source worktree.
 3. Reserve a stable prompt command and dispatch identity. Reuse/extract the
@@ -231,7 +234,7 @@ to reconstruct or cancel the pending pane consistently.
 ### Milestone 6 — Compatibility, regression cleanup, and documentation
 
 1. Remove the immediate continuation mutation from `ThreadPane` and all new-code
-   reliance on `initial_title_pending`; retain legacy v8 blank-thread first-title
+   reliance on `initial_title_pending`; retain legacy pre-merge blank-thread first-title
    behavior so existing retained rows are not renamed incorrectly or stranded.
 2. Keep real `WorktreeId` panel scope and its legacy browser-context fallback.
    Prove panel tabs/terminals remain in one execution scope while the chat pane
@@ -245,19 +248,19 @@ to reconstruct or cancel the pending pane consistently.
 
 ## Untrusted-data-boundary analysis
 
-| Source and raw representation                   | Entry/read point                                   | Runtime parser                                                    | Trusted output and guarantees                                                                    | Failure behavior                                                                                  | Boundary tests                                                                                          |
-| ----------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Composer text                                   | Source and pending composer submit handlers        | Exact-command parser; strict prompt request schema                | Exact `/new` command or bounded non-empty first prompt, never guessed from a near match          | Near matches remain Pi input; malformed/empty first prompt is not submitted                       | exact/whitespace/case/arguments/composition; empty/max/unknown request fields                           |
-| Source IDs in route and API                     | Pending route, preflight route, first-prompt route | `ProjectIdSchema` and `ThreadIdSchema`                            | Parsed opaque IDs; no path or browser-selected execution scope                                   | Invalid route fallback or 400; cross-project/archived/shared/unavailable source gets scoped error | malformed, missing, cross-project, archived, removed, shared, missing worktree                          |
-| Device-local workspace layout JSON              | `layoutStorage.readLayout`                         | Versioned Zod v1/v2/v3 schemas and explicit migration             | Valid tree plus discriminated thread/new/pending pane assignments                                | Remove malformed record and construct safe initial layout; never invent a source/worktree         | valid migrations, unknown version, invalid union, dangling pane, malformed source UUID, storage failure |
-| Continuation-preflight service result           | Browser API client                                 | Shared strict response schema                                     | Bounded availability/reason with no path and no promise that remains true until first submission | Protocol error is scoped; first prompt always rechecks                                            | available/busy/shared/unavailable, malformed/missing/unknown response fields                            |
-| v8/v9 continuation-operation SQLite rows        | Every store read/recovery branch                   | Separate lifecycle Zod schemas/constructors                       | Legacy blank completion or v9 first-prompt operation with relationship-consistent identities     | Scoped corruption/startup diagnostic; no guessed dispatch/session/run                             | each valid state, null/mismatched IDs, legacy row, impossible mixed state, dangling relationship        |
-| Pi create/discovery and prompt recovery results | Runtime adapter create/open/recover boundaries     | Existing session, cwd, dispatch, and recovery result parsers      | One native session at verified cwd and one accepted dispatch identity                            | Recover/retry or typed failure; never allocate/dispatch blindly                                   | wrong cwd, malformed descriptor, create response loss, accepted/missing/rejected recovery outcomes      |
-| Lease/preflight callbacks                       | Workspace runtime coordinator                      | Explicit internal lease owner/token plus existing event narrowing | One owner for a managed worktree across creation, preflight, and persisted run                   | Reject competing operation and release owner exactly once on every terminal path                  | race matrix, throws, reject, settle-before-return, stop/remove/shutdown                                 |
-| Thread/run response                             | Browser first-prompt mutation                      | Strict shared continuation response schema                        | Owned durable thread and run; isolated summary carries opaque worktree ID but no absolute path   | Protocol error retains pending draft and stable retry key                                         | malformed/missing thread/run, wrong IDs/workspace shape, duplicate response                             |
+| Source and raw representation                      | Entry/read point                                   | Runtime parser                                                    | Trusted output and guarantees                                                                    | Failure behavior                                                                                  | Boundary tests                                                                                          |
+| -------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Composer text                                      | Source and pending composer submit handlers        | Exact-command parser; strict prompt request schema                | Exact `/new` command or bounded non-empty first prompt, never guessed from a near match          | Near matches remain agent input; malformed/empty first prompt is not submitted                    | exact/whitespace/case/arguments/composition; empty/max/unknown request fields                           |
+| Source IDs in route and API                        | Pending route, preflight route, first-prompt route | `ProjectIdSchema` and `ThreadIdSchema`                            | Parsed opaque IDs; no path or browser-selected execution scope                                   | Invalid route fallback or 400; cross-project/archived/shared/unavailable source gets scoped error | malformed, missing, cross-project, archived, removed, shared, missing worktree                          |
+| Device-local workspace layout JSON                 | `layoutStorage.readLayout`                         | Versioned Zod v1/v2/v3 schemas and explicit migration             | Valid tree plus discriminated thread/new/pending pane assignments                                | Remove malformed record and construct safe initial layout; never invent a source/worktree         | valid migrations, unknown version, invalid union, dangling pane, malformed source UUID, storage failure |
+| Continuation-preflight service result              | Browser API client                                 | Shared strict response schema                                     | Bounded availability/reason with no path and no promise that remains true until first submission | Protocol error is scoped; first prompt always rechecks                                            | available/busy/shared/unavailable, malformed/missing/unknown response fields                            |
+| v9/v10 continuation-operation SQLite rows          | Every store read/recovery branch                   | Separate lifecycle Zod schemas/constructors                       | Legacy blank completion or v10 first-prompt operation with relationship-consistent identities    | Scoped corruption/startup diagnostic; no guessed dispatch/session/run                             | each valid state, null/mismatched IDs, legacy row, impossible mixed state, dangling relationship        |
+| Agent create/discovery and prompt recovery results | Runtime adapter create/open/recover boundaries     | Existing session, cwd, dispatch, and recovery result parsers      | One native session at verified cwd and one accepted dispatch identity                            | Recover/retry or typed failure; never allocate/dispatch blindly                                   | wrong cwd, malformed descriptor, create response loss, accepted/missing/rejected recovery outcomes      |
+| Lease/preflight callbacks                          | Workspace runtime coordinator                      | Explicit internal lease owner/token plus existing event narrowing | One owner for a managed worktree across creation, preflight, and persisted run                   | Reject competing operation and release owner exactly once on every terminal path                  | race matrix, throws, reject, settle-before-return, stop/remove/shutdown                                 |
+| Thread/run response                                | Browser first-prompt mutation                      | Strict shared continuation response schema                        | Owned durable thread and run; isolated summary carries opaque worktree ID but no absolute path   | Protocol error retains pending draft and stable retry key                                         | malformed/missing thread/run, wrong IDs/workspace shape, duplicate response                             |
 
 No new filesystem/Git input exists. The server reuses the existing execution
-context resolver and Pi adapter boundaries; pending browser state is never
+context resolver and runtime-adapter boundaries; pending browser state is never
 promoted into a trusted path or worktree identity.
 
 ## Touched-legacy-code analysis
@@ -265,8 +268,8 @@ promoted into a trusted path or worktree identity.
 - **Immediate v3 continuation:** Replace its command-time mutation, not the
   one-to-many schema or worktree scope. Characterization tests first prove the
   old thread remains untouched and exact slash parsing remains narrow.
-- **Migration v8 and retained databases:** Never edit an already-applied schema
-  in place. Migration v9 extends operations. Existing blank threads/sessions and
+- **Migration v9 and retained databases:** Never edit an already-applied schema
+  in place. Migration v10 extends operations. Existing blank threads/sessions and
   completed operations remain readable, reopenable, and subject to pending-title
   compatibility; there is no automatic cleanup.
 - **Normal first-thread creation:** Extract or reuse only prompt-dispatch recovery
@@ -321,15 +324,15 @@ environment:
    session, accepted prompt, and run at the same branch/files/execution root.
 4. Repeat with staged, unstaged, untracked, and ignored sentinels; compare Git
    status and hashes before command and after first dispatch.
-5. Verify `/new anything` and another real Pi slash input stay on the Pi path and
-   exact `/new` is absent from source native history.
+5. Verify `/new anything` and another real backend-native slash input stay on
+   that agent's path and exact `/new` is absent from source native history.
 6. Hold a sibling run/preflight across both command preflight and pending first
    submission; verify scoped busy behavior and draft retention. Verify distinct
    worktree and shared Local checkout concurrency remains.
 7. Keep terminal and Files/Changes tabs open through source → pending → durable
    continuation and verify process/tab identity, label, and sentinel access.
-8. Inject interruption at every v9 operation boundary and restart; verify one
-   title/session/thread/prompt/run. Reopen a retained v8 blank thread and verify
+8. Inject interruption at every v10 operation boundary and restart; verify one
+   title/session/thread/prompt/run. Reopen a retained pre-merge blank thread and verify
    its compatibility naming behavior.
 
 No configured `.env` database, user project, provider credential, or hosted
@@ -337,10 +340,10 @@ application is read or mutated by verification.
 
 ## Compatibility, deployment, migration, recovery, and rollback
 
-- Migration v9 is forward-only and runs under backup-before-migration. It adds
-  continuation recovery metadata only; it invokes neither Pi nor Git and creates
+- Migration v10 is forward-only and runs under backup-before-migration. It adds
+  continuation recovery metadata only; it invokes neither an agent nor Git and creates
   no conversation.
-- Existing v8 databases remain valid. Already-created blank continuation threads
+- Existing v9 databases remain valid. Already-created blank continuation threads
   and native sessions are retained exactly as user data; they are not hidden,
   archived, renamed, or garbage-collected automatically. Their first-prompt
   pending-title behavior remains supported.
@@ -351,11 +354,11 @@ application is read or mutated by verification.
   request lacks the newly required prompt and is rejected rather than creating a
   malformed operation; a new browser parses the new preflight and thread-plus-run
   contracts.
-- A v9 first-prompt operation reserved before failure remains retryable by the
+- A v10 first-prompt operation reserved before failure remains retryable by the
   same source/prompt/idempotency hash and native creation/dispatch identities.
   Source/worktree availability is rechecked without changing its selected root.
-- Rollback restores the pre-v9 database backup and prior code together. Code-only
-  rollback against schema v9 is unsupported under the existing newer-version
+- Rollback restores the pre-v10 database backup and prior code together. Code-only
+  rollback against schema v10 is unsupported under the existing newer-version
   refusal. Rollback never deletes worktrees, branches, threads, sessions, or
   source files.
 
@@ -389,7 +392,7 @@ application is read or mutated by verification.
   survive reload without creating a server thread. Its source ID must be a
   distinct parsed pane variant; overloading `threadId: null` would cause generic
   New chat to lose or silently change execution location.
-- Immediate v3 code and migration v8 may have produced retained blank rows in a
+- Immediate v3 code and its pre-merge migration may have produced retained blank rows in a
   non-disposable database. Forward migration and compatibility are safer than
   rewriting v8 or auto-cleaning data.
 - First-prompt continuation cannot simply call the public `prompt` method while
@@ -418,8 +421,8 @@ application is read or mutated by verification.
   product behavior and architecture; specification advanced to Draft v4, plan
   advanced to Draft v2, and both prior approvals were invalidated.
 - 2026-08-29: Plan v2 selected device-local discriminated pending panes, a
-  read-only command preflight, forward migration v9, and a recovery-safe
-  first-prompt continuation operation while retaining v8 worktree ownership,
+  read-only command preflight, forward migration v10, and a recovery-safe
+  first-prompt continuation operation while retaining v9 worktree ownership,
   leases, and panel scope.
 - 2026-08-29: User said the reload behavior looked good and asked to implement
   it with TDD, explicitly approving Thread Workspaces v4 and plan v2; the plan

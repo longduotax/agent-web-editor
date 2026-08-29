@@ -1,6 +1,6 @@
 # Thread workspaces
 
-**Current version:** 2
+**Current version:** 3
 
 **Proposed version:** 4
 
@@ -12,10 +12,12 @@
 
 **Subsystem:** New-chat creation, thread execution locations, and Git worktrees
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-29
 
 **Related ExecPlans:** [Thread workspace and worktree support](../exec-plans/completed/2026-08-16-thread-workspaces.md),
-[Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md)
+[Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md),
+[default-model thread and worktree naming](../exec-plans/completed/2026-08-29-default-model-thread-naming.md),
+and [naming completion metadata](../exec-plans/completed/2026-08-29-naming-completion-metadata.md)
 
 **Related documents:** [Initial agent workspace](initial-workspace.md),
 [architecture overview](../architecture/overview.md),
@@ -214,19 +216,20 @@ the same title forms the human-readable portion of the generated worktree
 directory and branch names. A server-generated unique suffix prevents collisions.
 The model's text is never used directly as a path, ref, command, or identifier.
 
-Naming uses one bounded, tool-free request to a configured lightweight Pi model.
-In automatic mode, the application stays with the user's configured default Pi
-provider and selects a lower-cost authenticated model from that provider; it
-does not silently send the prompt to a different provider. A user may configure
-an explicit naming model. The request receives only the first prompt and concise
-formatting instructions, not project files, Git state, Pi history, tools,
-extensions, skills, or workspace context.
+Naming uses one bounded, tool-free request to a Pi model. When
+`PI_WEB_NAMING_MODEL` identifies an available authenticated model, the
+application uses that explicit model. Otherwise, automatic naming uses the
+configured default Pi provider and model resolved for the selected project —
+the model a newly created thread initially inherits. It does not silently
+substitute another model or provider. The request receives only the first prompt
+and concise formatting instructions, not project files, Git state, Pi history,
+tools, extensions, skills, or workspace context.
 
 A generated title is plain text, at most 60 characters, and normally three to
-seven words. Model unavailability, timeout, malformed output, or absence of a
-suitable smaller model never blocks thread creation: the server derives a safe,
-deterministic short title from the prompt instead. The resulting title and
-worktree name are stable across idempotent retries.
+seven words. A malformed, unavailable, or unauthenticated configured model,
+timeout, or malformed output never blocks thread creation: the server derives a
+safe, deterministic short title from the prompt instead. The resulting title
+and worktree name are stable across idempotent retries.
 
 The user may rename the thread with the existing rename control. Renaming a
 thread does not rename or move its worktree, directory, branch, or native Pi
@@ -275,10 +278,10 @@ session because those identities must remain stable after provisioning.
     from its first prompt instead of `New thread`; an isolated chat uses a
     sanitized form of the same title plus a unique suffix for its worktree path
     and branch.
-16. Naming uses only the first prompt and a configured lightweight model from the
-    same provider by default; timeout, unavailable auth/model, malformed output,
-    and duplicate submission produce the same safe deterministic fallback name
-    without delaying or duplicating the thread.
+16. Naming uses only the first prompt and an available explicit naming model or
+    the exact configured default Pi provider/model; unavailable auth/model,
+    timeout, malformed output, and duplicate submission produce the same safe
+    deterministic fallback name without delaying or duplicating the thread.
 17. Manually renaming a thread updates only its display title and leaves its
     worktree path, branch, and Pi session location unchanged.
 
@@ -305,44 +308,44 @@ session because those identities must remain stable after provisioning.
 
 ## Open product questions
 
-- None for the Current version 2 contract.
+- None for the Current version 3 contract.
 
 ## Proposed revision v4 — Deferred same-worktree new chat
 
 Version 4 keeps version 3's explicit context-reset workflow but changes when the
 new durable conversation comes into existence. Exact `/new` moves the invoking
 pane into a pending same-worktree composer. The application creates the thread,
-native Pi session, and first run only after the user submits a real task prompt,
+native agent session, and first run only after the user submits a real task prompt,
 matching the ordinary split/new-chat lifecycle and avoiding abandoned empty
-threads. The Current version 2 behavior above remains authoritative until this
-proposal is approved, implemented, and verified.
+threads. The Current version 3 behavior above remains authoritative until this
+proposal is implemented, verified, and promoted.
 
 ### TW-10 — Exact `/new` application command
 
 In an idle isolated-thread composer, entering exactly `/new` after surrounding
 whitespace is trimmed and submitting it invokes an application command. The
-application consumes the command; it never sends `/new` to Pi, records it in the
-old native transcript, or treats it as a prompt, skill, extension command, or
-prompt template.
+application consumes the command; it never sends `/new` to the source agent,
+records it in the old native transcript, or treats it as a prompt, skill,
+extension command, or prompt template.
 
 Typing a slash exposes a compact command suggestion that identifies `/new` as
 “New chat in this worktree.” The command has no arguments in version 4:
-`/new anything` remains an ordinary Pi input rather than silently discarding or
-moving the additional text. No equivalent header, sidebar, or confirmation
+`/new anything` remains ordinary input for that chat's agent rather than
+silently discarding or moving the additional text. No equivalent header, sidebar, or confirmation
 button is added.
 
 The application verifies that the source has an available managed worktree and
 no active sibling agent before leaving the source chat. When that check fails,
 the user stays in the original chat, the command remains available to retry, and
 a scoped explanation is shown. Every other composer submission, including every
-other slash-prefixed value, retains Current Pi behavior.
+other slash-prefixed value, retains that chat's existing agent behavior.
 
 ### TW-11 — Pending chat first; durable chat on first prompt
 
 A successful `/new` replaces the source chat in the invoking pane with a blank,
 focused, pending same-worktree composer titled `New chat`. At command time the
-application creates no thread, native Pi session, transcript, run, sidebar row,
-or unread state. If the user never submits a task, no server-side conversation
+application creates no thread, native agent session, transcript, run, sidebar
+row, or unread state. If the user never submits a task, no server-side conversation
 artifact exists.
 
 The pending pane retains only the source thread's opaque identity, first-prompt
@@ -356,13 +359,14 @@ and its draft without archiving or deleting any server object.
 The source thread, native session, transcript, runs, title, and unread state
 remain untouched and reopenable through normal thread navigation. Submitting the
 first ordinary prompt re-resolves the source's managed worktree server-side and
-creates exactly one new persistent application thread and one new native Pi
-session whose working directory is that same verified execution root.
+creates exactly one new persistent application thread and one new native agent
+session whose backend matches the source chat and whose working directory is
+that same verified execution root.
 
 `/new` is unavailable in a Local checkout/shared thread in version 4. The
 application consumes the exact command there too, but returns a visible
-“managed worktree required” explanation rather than passing it to Pi or silently
-creating a different kind of chat.
+“managed worktree required” explanation rather than passing it to the source
+agent or silently creating a different kind of chat.
 
 ### TW-12 — Files are continuity; conversation context is not
 
@@ -422,12 +426,13 @@ submitted.
 
 1. In an idle isolated chat, typing exact `/new` and pressing Enter focuses a
    blank pending composer in the same pane and execution scope without creating
-   a thread, Pi session, run, transcript, or sidebar row.
+   a thread, agent session, run, transcript, or sidebar row.
 2. Closing or replacing an unused pending pane leaves no server-side artifact;
    its device-local pending state and draft are discarded, while a same-browser
    reload may restore them.
-3. The exact command is absent from the old Pi transcript and every other slash
-   input retains native Pi handling; `/new anything` is not intercepted.
+3. The exact command is absent from the old agent transcript and every other
+   slash input retains that backend's native handling; `/new anything` is not
+   intercepted.
 4. The source chat remains reopenable with its complete history after the
    pending pane replaces it and after the continuation thread is eventually
    created.

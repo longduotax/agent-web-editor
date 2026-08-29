@@ -29,12 +29,14 @@ import type {
   RuntimeSnapshot,
   TitleSuggestion,
 } from "@pi-web/agent-runtime";
-import { RuntimeFailure } from "@pi-web/agent-runtime";
+import { RuntimeFailure, TranscriptPager } from "@pi-web/agent-runtime";
 import {
   TimestampSchema,
   SessionIdSchema,
   TranscriptItemSchema,
+  type TranscriptCursor,
   type TranscriptItem,
+  type TranscriptPage,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -106,9 +108,7 @@ const namingModelHandleSchema = z.object({
 type NamingModelHandle = z.infer<typeof namingModelHandleSchema>;
 const namingCompletionSchema = z.object({
   stopReason: z.literal("stop"),
-  content: z.tuple([
-    z.strictObject({ type: z.literal("text"), text: z.string() }),
-  ]),
+  content: z.tuple([z.object({ type: z.literal("text"), text: z.string() })]),
 });
 
 const generatedTitleSchema = z
@@ -787,6 +787,7 @@ function mapEvent(event: unknown): RuntimeEvent {
 
 class PiOpenSession implements OpenRuntimeSession {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly pager = new TranscriptPager();
   private readonly unsubscribe: () => void;
   private bufferedEvents: RuntimeEvent[] | null = null;
   private disposed = false;
@@ -808,6 +809,20 @@ class PiOpenSession implements OpenRuntimeSession {
 
   public snapshot(): Promise<RuntimeSnapshot> {
     return Promise.resolve().then(() => transcriptFromManager(this.manager));
+  }
+
+  public latestTranscriptPage(): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.latest(snapshot.transcript),
+    );
+  }
+
+  public olderTranscriptPage(
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.older(snapshot.transcript, cursor),
+    );
   }
 
   public async prompt(
@@ -1036,33 +1051,11 @@ export class PiAgentRuntime implements AgentRuntime {
           id: settings.getDefaultModel(),
         });
         if (!defaultSelector.success) return { outcome: "unavailable" };
-        const rawDefaultModel = runtime.getModel(
-          defaultSelector.data.provider,
-          defaultSelector.data.id,
+        model = available.find(
+          (candidate) =>
+            candidate.provider === defaultSelector.data.provider &&
+            candidate.id === defaultSelector.data.id,
         );
-        const defaultModel =
-          namingModelDescriptorSchema.safeParse(rawDefaultModel).data;
-        if (
-          defaultModel?.provider === defaultSelector.data.provider &&
-          defaultModel.id === defaultSelector.data.id
-        ) {
-          const defaultCost =
-            defaultModel.cost.input * 1_000 + defaultModel.cost.output * 32;
-          model = available
-            .filter(
-              (candidate) =>
-                candidate.provider === defaultSelector.data.provider &&
-                candidate.id !== defaultSelector.data.id &&
-                candidate.cost.input * 1_000 + candidate.cost.output * 32 <
-                  defaultCost,
-            )
-            .sort((left, right) => {
-              const leftCost = left.cost.input * 1_000 + left.cost.output * 32;
-              const rightCost =
-                right.cost.input * 1_000 + right.cost.output * 32;
-              return leftCost - rightCost || left.id.localeCompare(right.id);
-            })[0];
-        }
       }
       if (model === undefined) return { outcome: "unavailable" };
       const rawHandle = runtime.getModel(model.provider, model.id);

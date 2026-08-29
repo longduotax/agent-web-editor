@@ -4,7 +4,7 @@
 
 **Subsystem:** Agent runtime abstraction, Pi sessions, runs, tools, and trust
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-29
 
 **Related documents:** [Initial agent workspace](../product-specs/initial-workspace.md), [initial workspace execution plan](../exec-plans/active/2026-08-15-initial-agent-workspace.md), and [Parse, Don't Validate](../architecture/data-boundaries.md)
 
@@ -51,13 +51,14 @@ The UI displays command/tool input, cwd, bounded output, exit/error state, and a
 
 Before a new thread session is created, the adapter may make one tool-free,
 non-persistent `ModelRuntime.completeSimple()` request containing only the first
-prompt and fixed title instructions. `PI_WEB_NAMING_MODEL` explicitly selects a
-model; automatic selection stays within Pi's configured default provider and
-requires a lower-cost authenticated model. Output is bounded and parsed as one
-short text title. Timeout, auth/model unavailability, and malformed output fall
-back to deterministic server naming and never block creation. The parsed title
-names native session metadata; only a separately sanitized server slug can
-enter Git paths/refs.
+prompt and fixed title instructions. An available `PI_WEB_NAMING_MODEL`
+explicitly selects a model; otherwise automatic selection uses the configured
+default Pi provider/model resolved for the project, which is the model a new
+thread initially inherits. It does not substitute another model or provider.
+Output is bounded and parsed as one short text title. Timeout, auth/model
+unavailability, and malformed output fall back to deterministic server naming
+and never block creation. The parsed title names native session metadata; only
+a separately sanitized server slug can enter Git paths/refs.
 
 ## Run lifecycle
 

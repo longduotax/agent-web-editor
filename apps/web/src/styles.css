@@ -753,6 +753,7 @@ a:focus-visible {
 }
 .thread-title {
   overflow: hidden;
+  cursor: text;
   min-width: 0;
   flex: 1;
   text-overflow: ellipsis;
@@ -787,68 +788,105 @@ a:focus-visible {
   color: var(--text);
   background: var(--active);
 }
-/* One column, not three. The field used to share the row with Save and
-   Cancel, which took 115px of a 227px row and left the input at 95px -- about
-   twelve characters of a title that is routinely fifty. The buttons are worth
-   less than the text they were crowding, so they moved to a second line and
-   the field takes the whole width. */
+/* One shared, single-row title editor in both the sidebar and pane header.
+   The only control is Revert, inset at the trailing edge; commit is Enter or
+   focus leaving. Long titles scroll inside the native one-line input rather
+   than making either containing row taller. */
 .thread-rename {
-  display: grid;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.3rem;
-  padding: 0.3rem;
+  position: relative;
+  display: flex;
+  width: calc(100% - 0.44rem);
+  min-width: 0;
+  align-items: center;
+  margin: 0.22rem;
+  font-size: 0.84rem;
 }
-/* A wrapping textarea rather than a one-line input: at this width a long
-   title is fully visible across two or three short lines instead of scrolling
-   past a slot. `resize: none` because it sizes itself (useAutoGrow) and a
-   drag handle inside a sidebar row would fight the list. */
-.thread-rename textarea {
+.thread-rename input {
   display: block;
   width: 100%;
   min-width: 0;
-  padding: 0.3rem 0.4rem;
-  /* The outline is drawn as an inset shadow rather than a border ON PURPOSE.
-     useAutoGrow sets `height = scrollHeight`, which measures content plus
-     padding but not borders; against `box-sizing: border-box` a real 1px
-     border therefore eats 2px off the content box and clips the last line by
-     a sliver. The composer textareas never hit this because their border sits
-     on the wrapper. A shadow contributes nothing to the box, so the field
-     grows to exactly the height its text needs. */
+  height: 1.75rem;
+  padding: 0.28rem 1.85rem 0.28rem 0.42rem;
+  overflow: hidden;
   border: 0;
   border-radius: 0.35rem;
   box-shadow: inset 0 0 0 1px var(--accent);
   color: var(--text);
   background: var(--card);
   font: inherit;
-  font-size: 0.85rem;
-  line-height: 1.35;
-  resize: none;
+  line-height: 1.2;
+  text-overflow: clip;
+  white-space: nowrap;
 }
-.thread-rename textarea:focus-visible {
+.thread-rename input:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
-.thread-rename-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.25rem;
+.thread-rename input[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--fail-ink);
 }
-/* Enter and Escape both already worked and neither was written down
-   anywhere. The buttons stay for the pointer; this is for everyone else. */
-.thread-rename-hint {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
+.thread-rename-revert {
+  position: absolute;
+  right: 0.18rem;
+  display: grid;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0.3rem;
   color: var(--muted);
-  font-size: 0.68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
 }
-.thread-rename .error-notice {
-  margin: 0;
+.thread-rename-revert:hover:not(:disabled),
+.thread-rename-revert:focus-visible {
+  color: var(--text);
+  background: var(--hover);
+}
+.thread-rename-revert:disabled {
+  cursor: default;
+}
+.thread-rename-spinner {
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 1.5px solid var(--faint);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: thread-rename-spin 0.7s linear infinite;
+}
+@keyframes thread-rename-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-rename-spinner {
+    animation: none;
+    border-color: var(--accent);
+  }
+}
+/* Validation and request errors remain visible without adding a second row or
+   changing the fixed pane-header height. They float immediately below the
+   field and leave through retry, editing, or Revert. */
+.thread-rename-error {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 0.2rem);
+  left: 0;
+  width: max-content;
+  max-width: min(22rem, 90vw);
+  padding: 0.28rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--fail-ink) 35%, var(--hairline));
+  border-radius: 0.35rem;
+  box-shadow: var(--pop-shadow);
+  color: var(--fail-ink);
+  background: var(--card);
+  font-size: 0.72rem;
+  line-height: 1.3;
 }
 .thread-context-menu {
   position: fixed;
@@ -1152,6 +1190,17 @@ a:focus-visible {
     animation: none;
   }
 }
+.pane-head .thread-rename {
+  width: auto;
+  flex: 1;
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.pane-head .thread-rename input {
+  height: 1.65rem;
+  background: var(--page);
+}
 .pane-head .title {
   overflow: hidden;
   flex: 1;
@@ -1163,6 +1212,9 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pane-head .title.editable {
+  cursor: text;
+}
 .pane-head.dim .title {
   color: var(--muted);
 }
@@ -1173,6 +1225,17 @@ a:focus-visible {
   color: var(--muted);
   background: var(--hover);
   font-size: 0.72rem;
+}
+/* Which agent runs this chat. Text, never colour alone, and visually quieter
+   than the title so it reads as provenance rather than status. */
+.pane-head .agent-badge {
+  flex: none;
+  padding: 0.125rem 0.44rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
 }
 .pane-head .acts {
   display: flex;
@@ -1532,6 +1595,25 @@ a:focus-visible {
 .transcript-column > * {
   min-width: 0;
   max-width: 100%;
+}
+.history-page-control {
+  display: block;
+  margin: 0 auto 1rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  cursor: pointer;
+}
+.history-page-control:hover,
+.history-page-control:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+.history-page-control:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 .transcript-column :is(details, summary, pre, table) {
   min-width: 0;
@@ -3648,6 +3730,12 @@ a:focus-visible {
   margin: 0 0 1rem;
   color: var(--muted);
   font-size: 0.82rem;
+}
+/* Why a backend cannot be chosen, shown beside the option rather than hidden
+   behind a disabled control with no explanation. */
+.settings-option-note {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 /* Sixteen of the nineteen shortcuts are pane or panel management, and the
    three keys every user needs were the LAST rows of one flat nineteen-row

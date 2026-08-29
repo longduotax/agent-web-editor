@@ -31,6 +31,7 @@ canonical document may be sufficient.
   and [data-boundary guidance](architecture/data-boundaries.md).
 - **Agent runtime abstraction:** [agent-runtime component guide](../packages/agent-runtime/README.md).
 - **Pi integration:** [Pi adapter component guide](../packages/pi-adapter/README.md).
+- **Codex integration:** [Codex adapter component guide](../packages/codex-adapter/README.md).
 - **Repository tooling:** [development index](development/index.md).
 - **Work in progress and implementation history:** [execution plans](exec-plans/index.md).
 

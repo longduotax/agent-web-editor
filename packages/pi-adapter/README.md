@@ -2,13 +2,15 @@
 
 Concrete adapter for `@earendil-works/pi-coding-agent` 0.84.2.
 
-The adapter uses a bounded tool-free lightweight-model request to suggest a
-first-prompt title when an authenticated same-provider model is available. It
-also discovers sessions for a canonical execution root, returns path-free
+The adapter uses a bounded tool-free request to suggest a first-prompt title.
+An explicit naming-model override takes precedence; otherwise it uses the
+project's configured default Pi model when that model is authenticated and
+available. It also discovers sessions for a canonical execution root, returns path-free
 session descriptors, resolves stored UUIDs through a fresh authorized listing,
 opens/creates native persistent sessions, translates active history and live Pi
-events into SDK-neutral DTOs, and owns prompt preflight, steering, abort, and
-runtime disposal. New blank sessions are atomically materialized from narrowly
+events into SDK-neutral DTOs, serves that projection in authenticated bounded
+latest/older pages, and owns prompt preflight, steering, abort, and runtime
+disposal. New blank sessions are atomically materialized from narrowly
 parsed `SessionManager` state because Pi SDK 0.84.2 otherwise delays its first
 JSONL write until an assistant message exists.
 

@@ -3,17 +3,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   IdempotencyKeySchema,
   type ProjectId,
+  type RuntimeKind,
   type ThreadId,
 } from "@pi-web/contracts";
 
 import {
   commandId,
   continueThread,
+  getAgentBackends,
   getWorkspace,
   getWorkspacePreflight,
   startThread,
 } from "../../api/client.js";
 import { ActivityStep } from "../../components/Activity.js";
+import {
+  readBackendChoice,
+  resolveDefaultBackend,
+} from "../settings/backendPreferences.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Markdown } from "../../components/Markdown.js";
 import {
@@ -173,6 +179,11 @@ export interface NewChatPaneProps {
   onThreadStarted(threadId: ThreadId): void;
 }
 
+const AGENT_OPTIONS: readonly { value: RuntimeKind; label: string }[] = [
+  { value: "codex", label: "Codex" },
+  { value: "pi", label: "Pi" },
+];
+
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
   const continuationSourceThreadId = props.continuationSourceThreadId ?? null;
@@ -203,6 +214,50 @@ export function NewChatPane(props: NewChatPaneProps) {
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(initialCreationKey);
+  const backends = useQuery({
+    queryKey: ["agent-backends"],
+    queryFn: getAgentBackends,
+  });
+  // Non-sticky by design: a new composer opens on the resolved default every
+  // time, so an incidental one-off pick never becomes a standing choice.
+  const backendChoice = readBackendChoice();
+  const resolvedDefault = resolveDefaultBackend(
+    backendChoice,
+    backends.data?.defaultRuntime,
+  );
+  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
+  const backendFor = (kind: RuntimeKind) =>
+    backends.data?.backends.find((backend) => backend.kind === kind);
+  const resolvedDefaultBackend = backendFor(resolvedDefault);
+  const fallbackRuntime = backends.data?.backends.find(
+    (backend) => backend.available,
+  )?.kind;
+  const selectedRuntime =
+    runtime ??
+    (resolvedDefaultBackend?.available === false
+      ? (fallbackRuntime ?? resolvedDefault)
+      : resolvedDefault);
+  const continuationThread = workspace.data?.threads.find(
+    (thread) => thread.id === continuationSourceThreadId,
+  );
+  // A continuation inherits its source chat's immutable backend. A brand-new
+  // chat uses the selectable machine/default policy above.
+  const effectiveRuntime = continuationThread?.runtime ?? selectedRuntime;
+  const selectedBackend = backendFor(effectiveRuntime);
+  const waitingForContinuationSource =
+    continuationSourceThreadId !== null && workspace.data === undefined;
+  const continuationSourceMissing =
+    continuationSourceThreadId !== null &&
+    workspace.data !== undefined &&
+    continuationThread === undefined;
+  const selectedUnavailable =
+    waitingForContinuationSource ||
+    continuationSourceMissing ||
+    selectedBackend?.available === false;
+  const selectedUnavailableReason = continuationSourceMissing
+    ? "The source chat is no longer available."
+    : (selectedBackend?.reason ?? "This agent backend is unavailable.");
+  const agentLabel = effectiveRuntime === "codex" ? "Codex" : "Pi";
   const [text, setText] = useState(() => readDraft(draftKey));
   // The prompt the user has already committed to but that has no thread yet.
   // Starting the first thread creates a git worktree, which takes 1.6-2.6s;
@@ -255,6 +310,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                     : {}),
                 },
             creationKey,
+            runtime === null &&
+              backendChoice === "follow-machine" &&
+              backends.data === undefined
+              ? undefined
+              : selectedRuntime,
           )
         : await continueThread(
             projectId,
@@ -284,7 +344,7 @@ export function NewChatPane(props: NewChatPaneProps) {
     // the unchanged `creationKey` deduplicated it server-side -- but the
     // composer is cleared now, so typing again regenerates the key and a
     // second Enter would create a second thread and a second git worktree.
-    if (create.isPending) return;
+    if (create.isPending || selectedUnavailable) return;
     if (
       value.trim() === "" ||
       (continuationSourceThreadId === null &&
@@ -326,12 +386,13 @@ export function NewChatPane(props: NewChatPaneProps) {
         elapsed={null}
         title="New chat"
         projectLabel={project?.displayName ?? ""}
+        runtime={null}
         focused={focused}
         detail={
           <span className="pane-meta">
             {continuationSourceThreadId === null
-              ? "Pick where Pi runs, then describe the work."
-              : "Same managed worktree · fresh conversation"}
+              ? `Pick where ${agentLabel} runs, then describe the work.`
+              : `Same managed worktree · fresh ${agentLabel} conversation`}
           </span>
         }
         onSplit={() => {
@@ -412,14 +473,14 @@ export function NewChatPane(props: NewChatPaneProps) {
                 <dt>New worktree</dt>
                 <dd>
                   A second checkout of this project in its own directory, cut
-                  from the base branch you pick. Pi&apos;s edits never touch the
-                  files you have open.
+                  from the base branch you pick. {agentLabel}&apos;s edits never
+                  touch the files you have open.
                 </dd>
                 <dt>Local checkout</dt>
                 <dd>
-                  The directory you added. Pi writes to the same files you have
-                  open, on the branch you have checked out. Nothing is copied
-                  first and there is no undo.
+                  The directory you added. {agentLabel} writes to the same files
+                  you have open, on the branch you have checked out. Nothing is
+                  copied first and there is no undo.
                 </dd>
                 <dt>Clean start</dt>
                 <dd>
@@ -495,6 +556,34 @@ export function NewChatPane(props: NewChatPaneProps) {
               className="new-chat-toolbar"
               aria-label="New chat configuration"
             >
+              <label>
+                <span className="sr-only">Agent</span>
+                <select
+                  aria-label="Agent"
+                  value={selectedRuntime}
+                  onChange={(event) => {
+                    setRuntime(event.target.value === "pi" ? "pi" : "codex");
+                    setCreationKey(commandId());
+                  }}
+                >
+                  {AGENT_OPTIONS.map((option) => {
+                    const backend = backendFor(option.value);
+                    const unusable =
+                      backend !== undefined && !backend.available;
+                    return (
+                      <option
+                        key={option.value}
+                        value={option.value}
+                        disabled={unusable}
+                      >
+                        {unusable
+                          ? `${option.label} — ${backend.reason ?? "unavailable"}`
+                          : option.label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
               <label>
                 <span className="sr-only">Execution location</span>
                 <select
@@ -600,6 +689,11 @@ export function NewChatPane(props: NewChatPaneProps) {
               </label>
             </div>
           )}
+          {selectedUnavailable && !waitingForContinuationSource && (
+            <p className="new-chat-note" role="alert">
+              {selectedUnavailableReason}
+            </p>
+          )}
           {continuationSourceThreadId === null && (
             <>
               {mode === "worktree" &&
@@ -649,14 +743,24 @@ export function NewChatPane(props: NewChatPaneProps) {
                 // choice, so it should be announced, but politely -- and not
                 // `note`, which is silent on appearance.
                 <p className="new-chat-note warning" role="status">
-                  <strong>Pi writes to your project directory.</strong> It
-                  edits, creates and deletes files in{" "}
-                  {project?.displayPath ?? "this project"}
-                  {currentBranch === null
-                    ? ""
-                    : ` on your current branch, ${currentBranch},`}{" "}
-                  alongside your uncommitted changes. Nothing is copied first
-                  and there is no undo.
+                  {selectedRuntime === "codex" ? (
+                    <>
+                      <strong>Codex starts in your project directory.</strong>{" "}
+                      It runs without application approval inside the boundary
+                      this server was configured with.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Pi writes to your project directory.</strong> It
+                      edits, creates and deletes files in{" "}
+                      {project?.displayPath ?? "this project"}
+                      {currentBranch === null
+                        ? ""
+                        : ` on your current branch, ${currentBranch},`}{" "}
+                      alongside your uncommitted changes. Nothing is copied
+                      first and there is no undo.
+                    </>
+                  )}
                 </p>
               )}
             </>
@@ -665,7 +769,7 @@ export function NewChatPane(props: NewChatPaneProps) {
             <textarea
               ref={textareaRef}
               aria-label="First message"
-              placeholder={`Ask Pi to work in ${project?.displayName ?? "this project"}…`}
+              placeholder={`Ask ${agentLabel} to work in ${project?.displayName ?? "this project"}…`}
               rows={1}
               autoFocus
               value={text}
@@ -699,7 +803,9 @@ export function NewChatPane(props: NewChatPaneProps) {
                 type="submit"
                 className="send"
                 aria-label="Create chat and send"
-                disabled={create.isPending || text.trim() === ""}
+                disabled={
+                  create.isPending || text.trim() === "" || selectedUnavailable
+                }
               >
                 <span aria-hidden="true">↑</span>
               </button>

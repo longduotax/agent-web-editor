@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as axe from "axe-core";
 
@@ -45,6 +46,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="fix the merge conflict"
         projectLabel="valai"
+        runtime="pi"
         focused
         onSplit={onSplit}
         onClose={onClose}
@@ -79,6 +81,80 @@ describe("PaneHeader", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("renames the title in place on double-click with the shared one-row editor", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn<(title: string) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+
+    function EditableHeader() {
+      const [title, setTitle] = useState("Original title");
+      return (
+        <PaneHeader
+          status="done"
+          elapsed={null}
+          title={title}
+          projectLabel="pi-web-app"
+          runtime="pi"
+          focused
+          onRename={async (nextTitle) => {
+            await onRename(nextTitle);
+            setTitle(nextTitle);
+          }}
+          onSplit={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+    }
+
+    render(<EditableHeader />);
+    await user.dblClick(
+      screen.getByRole("heading", { name: "Original title" }),
+    );
+
+    const field = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Rename Original title",
+    });
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe("Original title".length);
+    expect(
+      screen.getByRole("button", { name: "Revert title" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /save|confirm|cancel/i }),
+    ).not.toBeInTheDocument();
+
+    await user.clear(field);
+    await user.type(field, "Renamed in header{Enter}");
+
+    expect(onRename).toHaveBeenCalledWith("Renamed in header");
+    expect(
+      await screen.findByRole("heading", { name: "Renamed in header" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps New chat static when no rename callback is provided", async () => {
+    const user = userEvent.setup();
+    render(
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="New chat"
+        projectLabel="pi-web-app"
+        runtime={null}
+        focused
+        onSplit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.dblClick(screen.getByRole("heading", { name: "New chat" }));
+    expect(
+      screen.queryByRole("textbox", { name: /rename/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the elapsed time alongside a working status", () => {
     render(
       <PaneHeader
@@ -86,6 +162,7 @@ describe("PaneHeader", () => {
         elapsed="2m 14s"
         title="Refactor the auth module"
         projectLabel="pi-web-app"
+        runtime="pi"
         focused={false}
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -103,6 +180,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="New chat"
         projectLabel="valai"
+        runtime="pi"
         focused={false}
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -156,6 +234,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="Investigate flaky test"
         projectLabel="valai"
+        runtime="pi"
         focused
         detail={<span className="pane-meta">⌂ Local checkout</span>}
         detailTitle="⌂ Local checkout · Direct execution: Pi tools run with your user permissions."
@@ -178,6 +257,7 @@ describe("PaneHeader", () => {
         elapsed={null}
         title="Investigate flaky test"
         projectLabel="valai"
+        runtime="pi"
         focused
         onSplit={vi.fn()}
         onClose={vi.fn()}
@@ -186,5 +266,40 @@ describe("PaneHeader", () => {
 
     const results = await axe.run(container);
     expect(results.violations).toEqual([]);
+  });
+});
+
+describe("PaneHeader agent badge", () => {
+  it("names the backend as text, not colour alone", () => {
+    render(
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="Fix the parser"
+        projectLabel="pi-web-app"
+        runtime="codex"
+        focused={false}
+        onSplit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Codex")).toBeInTheDocument();
+  });
+
+  it("shows no badge on a pane that has no chat yet", () => {
+    render(
+      <PaneHeader
+        status={null}
+        elapsed={null}
+        title="New chat"
+        projectLabel="pi-web-app"
+        runtime={null}
+        focused={false}
+        onSplit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pi")).not.toBeInTheDocument();
   });
 });

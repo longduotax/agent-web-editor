@@ -82,25 +82,32 @@ Creation-operation rows make naming, provisioning, Pi session creation, thread
 insertion, and first-prompt acceptance idempotent across HTTP retries. Migration
 itself performs no Git or model operation.
 
-## Schema v8: same-worktree continuation
+## Schema v8: immutable agent backend
 
-Migration v8 removes only the one-thread-per-worktree unique index so several
-independent Pi sessions may share one managed execution root. It adds a durable
-continuation-operation record keyed by project/idempotency identity, a pending
-first-prompt-title bit on continuation threads, and a nullable run worktree ID
-with a partial one-running-run-per-managed-worktree index. Existing threads
-default to non-pending titles; historical run worktree IDs are backfilled from
-their thread relationship. The migration performs no Pi, Git, or filesystem
-operation.
+Migration v8 adds the `runtime` discriminator to threads and durable creation
+operations, backfilling existing rows to Pi. Native session identifiers are only
+unique within one backend, so the thread table is rebuilt with uniqueness over
+`(project_id, runtime, runtime_session_id)` while retaining all prior metadata.
 
-## Schema v9: deferred continuation prompt
+## Schema v9: same-worktree continuation
 
-Migration v9 preserves every v8 row and extends continuation operations with a
+Migration v9 removes only the one-thread-per-worktree unique index so several
+independent agent sessions may share one managed execution root. It adds a
+durable continuation-operation record keyed by project/idempotency identity, a
+pending first-prompt-title bit on continuation threads, and a nullable run
+worktree ID with a partial one-running-run-per-managed-worktree index. Existing
+threads default to non-pending titles; historical run worktree IDs are backfilled
+from their thread relationship. The migration performs no agent, Git, or
+filesystem operation.
+
+## Schema v10: deferred continuation prompt
+
+Migration v10 preserves every v9 row and extends continuation operations with a
 bounded initial title, stable prompt-command and native-dispatch identities, and
 a run reference. Exact `/new` writes none of these rows; the pending pane is a
 parsed device-local layout-v3 assignment. Its first real prompt reserves the
 operation and recovers title, session, thread, dispatch, receipt, and run effects
-under one request identity. V8-created blank threads retain their pending-title
+under one request identity. V9-created blank threads retain their pending-title
 compatibility instead of being deleted or reinterpreted.
 
 ## Repository and transaction rules
@@ -123,9 +130,11 @@ compatibility instead of being deleted or reinterpreted.
 - Migrations v4-v7 add managed worktrees, durable creation recovery, reviewed
   transfer tokens, and initial-prompt dispatch recovery without changing
   archived-thread visibility.
-- Migration v8 adds same-worktree continuation metadata and leases without
+- Migration v8 records immutable agent backends and widens native-session
+  uniqueness while preserving all existing rows as Pi threads.
+- Migration v9 adds same-worktree continuation metadata and leases without
   creating a thread, session, branch, or worktree during migration.
-- Migration v9 extends continuation prompt recovery without creating a thread,
+- Migration v10 extends continuation prompt recovery without creating a thread,
   session, prompt, or run during migration.
 - Migration SQL and Drizzle's migration journal are committed and versioned.
 - Before applying pending migrations to a non-empty database, use SQLite's backup API to create a timestamped sibling backup.

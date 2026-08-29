@@ -69,7 +69,7 @@ const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 
 const snapshot: ThreadSnapshot = {
-  version: 1,
+  version: 2,
   project: {
     id: projectId,
     displayName: "Example project",
@@ -90,9 +90,10 @@ const snapshot: ThreadSnapshot = {
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi" as const,
     workspace: { mode: "shared", branchName: null, available: true },
   },
-  transcript: [],
+  transcriptPage: { items: [], olderCursor: null, atLatest: true },
   currentRun: null,
   lastRun: null,
   epoch: "40000000-0000-4000-8000-000000000001",
@@ -225,7 +226,7 @@ describe("TilingSurface", () => {
     expect(divider).toHaveAttribute("aria-valuenow");
   });
 
-  it("focuses the new pane's message field after the user splits a pane", async () => {
+  it("keeps workspace chords armed after the user splits a pane", async () => {
     renderSurface();
     const user = userEvent.setup();
 
@@ -238,9 +239,10 @@ describe("TilingSurface", () => {
       .find((pane) => pane.getAttribute("aria-current") === "true");
     expect(focusedPane).toBeDefined();
     if (focusedPane === undefined) return;
+    expect(focusedPane).toHaveFocus();
     expect(
       within(focusedPane).getByRole("textbox", { name: "First message" }),
-    ).toHaveFocus();
+    ).not.toHaveFocus();
   });
 
   it("adjusts split sizes on the controller when the divider is resized with the keyboard", async () => {

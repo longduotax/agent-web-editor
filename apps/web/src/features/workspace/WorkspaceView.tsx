@@ -115,11 +115,6 @@ export function WorkspaceView(props: {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Never hijack native text-editing shortcuts (e.g. Cmd+Shift+ArrowUp/
-      // Down select-to-start/end, Cmd+Shift+Backspace delete-to-start)
-      // while the user is typing in a composer or the sidebar's rename
-      // input — let the browser/input handle those untouched.
-      if (isTextEntryTarget(event.target)) return;
       const keyEventLike: KeyEventLike = {
         key: normalizeKey(event.key),
         metaKey: event.metaKey,
@@ -129,6 +124,12 @@ export function WorkspaceView(props: {
       };
       const command = resolveCommand(keyEventLike, detectPlatform(navigator));
       if (command === null) return;
+      // Split is safe while typing: its punctuation chords are not native
+      // text-editing commands, and requiring Escape before every split makes
+      // the composer's most common workspace action needlessly indirect.
+      // Keep commands that use editing/navigation keys suppressed so native
+      // behavior such as delete-to-start remains untouched.
+      if (isTextEntryTarget(event.target) && command.type !== "split") return;
       event.preventDefault();
       controllerRef.current.dispatch(command);
     };

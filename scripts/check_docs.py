@@ -31,6 +31,7 @@ REQUIRED_COMPONENT_DOCS = (
     REPOSITORY_ROOT / "packages" / "contracts" / "README.md",
     REPOSITORY_ROOT / "packages" / "agent-runtime" / "README.md",
     REPOSITORY_ROOT / "packages" / "pi-adapter" / "README.md",
+    REPOSITORY_ROOT / "packages" / "codex-adapter" / "README.md",
 )
 
 INDEXED_DIRECTORIES = (

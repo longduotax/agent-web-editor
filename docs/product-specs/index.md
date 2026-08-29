@@ -8,24 +8,26 @@ belong here.
 | Capability                                                        | Current version | Proposed version | Proposal | Implementation | Related open plan                                                                                   |
 | ----------------------------------------------------------------- | --------------- | ---------------- | -------- | -------------- | --------------------------------------------------------------------------------------------------- |
 | [Initial agent workspace](initial-workspace.md)                   | None            | 2                | Approved | In progress    | [Initial agent workspace](../exec-plans/active/2026-08-15-initial-agent-workspace.md)               |
-| [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | Not started    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md)   |
-| [Thread management](thread-management.md)                         | 2               | 3                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)         |
-| [Thread workspaces](thread-workspaces.md)                         | 2               | 4                | Approved | In progress    | [Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md) |
+| [Scalable conversation history](scalable-conversation-history.md) | None            | 1                | Approved | In progress    | [Scalable conversation history](../exec-plans/active/2026-08-16-scalable-conversation-history.md)   |
+| [Thread management](thread-management.md)                         | 3               | None             | None     | Current        | —                                                                                                   |
+| [Thread workspaces](thread-workspaces.md)                         | 3               | 4                | Approved | In progress    | [Same-worktree new-chat command](../exec-plans/active/2026-08-29-same-worktree-new-chat-command.md) |
 | [Tiling workspace surface](tiling-workspace-surface.md)           | None            | 1                | Draft    | In progress    | [Tiling workspace surface](../exec-plans/active/2026-08-21-tiling-workspace-surface.md)             |
 | [Codex-style workspace surface](codex-workspace-surface.md)       | None            | 1                | Draft    | In progress    | [Codex-style workspace surface](../exec-plans/active/2026-08-22-codex-workspace-surface.md)         |
 | [Workspace panel](workspace-panel.md)                             | None            | 2                | Approved | In progress    | [Workspace panel](../exec-plans/active/2026-08-22-workspace-panel.md)                               |
+| [Agent backends](agent-backends.md)                               | None            | 3                | Approved | In progress    | [Codex tool-call replay](../exec-plans/active/2026-08-23-codex-tool-call-replay.md)                 |
 
 The initial workspace is not yet Current. Proposed version 2 retains the
 version 1 baseline and revises its run lease to allow concurrent runs in
 distinct threads of one project. The user approved product and technical
 version 2 on 2026-08-16; the concurrency slice is implemented and verified
 while the broader initial-workspace plan remains in progress. Thread workspaces
-version 2 is Current and provides per-chat source-checkout or isolated-worktree
-execution while preserving the merged per-thread concurrency behavior.
-Proposed version 3 was approved and implemented in this worktree but not
+version 3 is Current and provides per-chat source-checkout or isolated-worktree
+execution, default-model naming, and explicit naming-completion metadata while
+preserving the merged per-thread concurrency behavior. A pre-merge immediate
+same-worktree continuation revision was approved and implemented but not
 promoted. The user then selected deferred first-prompt creation so an abandoned
-exact `/new` leaves no empty server thread or Pi session. That material revision
-is Draft version 4: `/new` opens a device-local pending same-worktree composer,
+exact `/new` leaves no empty server thread or agent session. That material
+revision is Approved version 4: `/new` opens a device-local pending same-worktree composer,
 and its first real prompt recovery-safely creates the titled thread, session,
 prompt, and run. One-to-many managed-worktree ownership, one active sibling
 agent, no copied context/Git operation, and Local checkout exclusion remain.
@@ -35,15 +37,21 @@ refactoring is active.
 Scalable conversation history is a separate Approved capability for bounded
 latest pages, progressive older-history navigation, polite live following, and
 a bounded browser rendering window. The user approved product specification
-version 1 on 2026-08-16. Technical approvals for plan versions 1 and 2 are
-invalidated; plan version 3 is Draft with technical approval pending, and
-implementation remains paused until that approval is granted.
+version 1 on 2026-08-16. Technical approvals for plan versions 1 and 2 are invalidated; plan version 3
+is Draft with technical approval pending. Its shared bounded-page foundation
+was implemented and verified under the separately approved Agent backends v3 /
+Codex replay plan v2; the remaining page-free live refresh, full viewport
+behavior, and completion work stays paused until plan-v3 approval.
 
-Thread management version 2 is Current. It provides a Codex-style action menu,
-non-destructive inactive-thread archival, a direct hover/focus Archive action,
-and compact inline run-state signals. Version 3 is a Draft proposal that makes
-archival reversible: a per-project Archived list with a per-thread Restore, and
-independently staged archives so no undo window is cut short.
+Thread management version 3 is Current. It retains the Codex-style action menu,
+non-destructive inactive-thread archival, and compact run-state signals while
+giving sidebar and pane-header titles the same one-row inline rename editor:
+double-click enters editing, blur or Enter saves, and Escape or one Revert
+control restores the prior title without an accept/cancel action row. The user
+approved the bounded revision on 2026-08-29 under its conversational label 2.1;
+it was renumbered without a content change to satisfy integer lifecycle
+metadata. The separate archival-recovery text remains a deferred candidate
+outside Current version 3 and needs its own later version and approval.
 
 Tiling workspace surface is a Draft proposal for version 1, distilled from the
 multi-agent tiling workspace design as its first phase. It turns the project
@@ -106,6 +114,22 @@ into the tiling tree. Its CWS-06 inspector requirement is superseded in full by
 requirements section); every other CWS requirement stands. Product approval is
 pending; implementation is in progress under the linked plan and the proposal
 becomes Current only after the user approves it and the behavior is verified.
+
+Agent backends carries three proposals. Version 1 — approved by the user on
+2026-08-22 together with its plan version 1, and implemented but not yet
+promoted — makes a chat's coding agent an explicit, durable, immutable per-chat
+property, adds Codex beside Pi, makes Codex the default for new chats, and shows
+the backend wherever a chat appears. Existing chats are Pi and are unchanged.
+Codex chats run with interactive approvals disabled and, by default, confined
+to their execution root with no network. Version 2 was approved on 2026-08-23:
+a reopened Codex chat restores shell commands and file changes from Codex's
+private history and degrades to messages when that history cannot be read.
+Version 3 is an Approved follow-up that makes shared bounded progressive
+history a shipping requirement for replay: one latest page opens, older
+message/tool pages load explicitly, and the browser retains one bounded page
+window instead of the complete chat. Its production implementation and
+automated verification are complete; real-provider manual checks remain before
+promotion to Current.
 
 When durable behavior changes, prefer a bounded proposed revision in the
 canonical capability document that already governs it. Create a new file only

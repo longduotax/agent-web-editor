@@ -40,6 +40,7 @@ function thread(
     runState: null,
     unread: false,
     runtimeAvailable: true,
+    runtime: "pi",
     workspace,
   };
 }
