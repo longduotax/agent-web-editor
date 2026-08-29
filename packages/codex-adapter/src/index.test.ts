@@ -934,7 +934,7 @@ describe("CodexOpenSession", () => {
     await session.dispose();
   });
 
-  it("accepts a prompt and settles it when the turn completes", async () => {
+  it("settles a prompt from an additively enveloped turn completion", async () => {
     const { server, session } = await opened({
       "turn/start": {
         turn: { id: "turn-1", status: "inProgress", items: [], error: null },
@@ -949,9 +949,16 @@ describe("CodexOpenSession", () => {
       clientUserMessageId: "00000000-0000-4000-8000-0000000000aa",
     });
     acceptance.releaseEvents();
-    server.notify("turn/completed", {
-      threadId: THREAD,
-      turn: { id: "turn-1", status: "completed", items: [], error: null },
+    // Codex 0.151.0 adds this timestamp beside the JSON-RPC method and params.
+    // It is envelope metadata, not part of the turn-completion payload.
+    server.push({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: THREAD,
+        turn: { id: "turn-1", status: "completed", items: [], error: null },
+      },
+      emittedAtMs: 1_788_000_000_000,
     });
     expect(await acceptance.settlement).toBe("completed");
     await session.dispose();

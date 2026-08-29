@@ -179,7 +179,7 @@ export function useWorkspaceLayout(
     if (next.focusedPaneId !== current.focusedPaneId)
       setPaneFocusIntent((intent) => ({
         sequence: intent.sequence + 1,
-        target: "pane",
+        target: command.type === "split" ? "composer" : "pane",
       }));
   }, []);
 
