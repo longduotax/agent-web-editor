@@ -342,6 +342,8 @@ test("codex workspace surface: run status, split (button + chord), one docked pa
   const noHorizontalScroll = await page.evaluate(inPageHasNoHorizontalScroll);
   expect(noHorizontalScroll).toBe(true);
 
+  const workspaceUrl = page.url();
+
   // Settings: System is selected by default (no explicit data-theme yet).
   await expect.poll(() => page.evaluate(pageDataTheme)).toBeNull();
   await page.getByRole("link", { name: "Settings" }).click();
@@ -350,14 +352,18 @@ test("codex workspace surface: run status, split (button + chord), one docked pa
   await expect(themeGroup).toBeVisible();
   await expect(page.getByRole("radio", { name: "System" })).toBeChecked();
 
-  await page.getByRole("radio", { name: "Dark" }).click();
-  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("dark");
+  // Pin Light while the OS prefers dark. This is the direction that exposes
+  // a missing initializer: without data-theme="light", the dark media query
+  // wins on every route that does not mount SettingsPage/useTheme.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("light");
 
-  // Reload and confirm the choice persisted — applied by the before-paint
-  // inline script in apps/web/index.html, so it's already set by the time
-  // any post-navigation check runs (the exact before-paint guarantee is unit
-  // tested in apps/web/src/features/settings/useTheme.test.tsx).
+  // Load and then reload a non-settings route. Production's CSP rejects
+  // inline scripts, so the same-origin synchronous bootstrap must restore the
+  // preference before React mounts; SettingsPage cannot repair this route.
+  await page.goto(workspaceUrl);
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("light");
   await page.reload();
-  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("dark");
-  await expect(page.getByRole("radio", { name: "Dark" })).toBeChecked();
+  await expect.poll(() => page.evaluate(pageDataTheme)).toBe("light");
 });
