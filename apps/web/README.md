@@ -98,6 +98,13 @@ selected-thread center.
   server), so a project's layout survives a reload but is local to that
   browser.
 
+Both new-chat and existing-thread composers accept bounded JPEG, PNG, and WebP
+attachments by pane-scoped drag/drop, focused clipboard paste, or an accessible
+file picker. Pending files and object-URL previews remain page-memory only;
+image-bearing start, prompt, and steer commands use multipart transport, and
+failures retain the originating input. Accepted native Pi images render outside
+Markdown from authorized, on-demand typed image responses.
+
 All transport values are parsed by `@pi-web/contracts`. The browser never
 imports server/runtime/adapter code and never receives canonical project roots
 or native session paths. Markdown raw HTML and images are disabled. xterm is

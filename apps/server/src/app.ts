@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import multipart from "@fastify/multipart";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { RuntimeFailure, type AgentRuntime } from "@pi-web/agent-runtime";
@@ -11,6 +12,8 @@ import {
   UnarchiveThreadRequestSchema,
   AddProjectRequestSchema,
   BrowseProjectRequestSchema,
+  ChatCommandMultipartMetadataSchema,
+  ChatImageIdSchema,
   CommandRequestSchema,
   ImportThreadRequestSchema,
   LiveSubscribeSchema,
@@ -20,6 +23,7 @@ import {
   RemoveProjectRequestSchema,
   RenameThreadRequestSchema,
   RunIdSchema,
+  StartThreadMultipartMetadataSchema,
   StartThreadRequestSchema,
   SteerRequestSchema,
   TERMINAL_MAX_PER_SCOPE,
@@ -42,6 +46,7 @@ import {
   checkOrigin,
   enforceRequestPolicy,
 } from "./request-policy.js";
+import { parseMultipartChatInput, parseTextChatInput } from "./chat-images.js";
 import { parseConfig, type ServerConfig } from "./config.js";
 import { MetadataStore, ReceiptConflictError } from "./db/store.js";
 import {
@@ -68,6 +73,11 @@ const runParamsSchema = z.object({
   projectId: ProjectIdSchema,
   threadId: ThreadIdSchema,
   runId: RunIdSchema,
+});
+const imageParamsSchema = z.object({
+  projectId: ProjectIdSchema,
+  threadId: ThreadIdSchema,
+  imageId: ChatImageIdSchema,
 });
 const fileQuerySchema = z.object({
   path: z.string().default(""),
@@ -253,6 +263,97 @@ function safeError(error: unknown): {
         status: 409,
         code: "prompt_rejected",
         message: "The runtime rejected this prompt.",
+      },
+      chat_input_empty: {
+        status: 400,
+        code: "chat_input_empty",
+        message: "Add a message or at least one photo.",
+      },
+      chat_metadata_missing: {
+        status: 400,
+        code: "invalid_request",
+        message: "The image message metadata is missing.",
+      },
+      chat_metadata_invalid: {
+        status: 400,
+        code: "invalid_request",
+        message: "The image message metadata is malformed.",
+      },
+      chat_multipart_malformed: {
+        status: 400,
+        code: "invalid_request",
+        message: "The image message is malformed.",
+      },
+      chat_image_unsupported: {
+        status: 415,
+        code: "chat_image_unsupported",
+        message: "Use a JPEG, PNG, or WebP image.",
+      },
+      chat_image_input_unsupported: {
+        status: 409,
+        code: "chat_image_input_unsupported",
+        message: "The selected Pi model or settings cannot receive images.",
+      },
+      chat_image_count_exceeded: {
+        status: 413,
+        code: "chat_image_count_exceeded",
+        message: "A message can include at most four photos.",
+      },
+      chat_image_too_large: {
+        status: 413,
+        code: "chat_image_too_large",
+        message: "Each photo must be 10 MiB or smaller.",
+      },
+      chat_image_pixels_exceeded: {
+        status: 413,
+        code: "chat_image_pixels_exceeded",
+        message: "That photo has too many pixels.",
+      },
+      chat_image_limit_exceeded: {
+        status: 413,
+        code: "chat_image_limit_exceeded",
+        message: "The attached photos exceed the message limits.",
+      },
+      chat_image_total_too_large: {
+        status: 413,
+        code: "chat_image_total_too_large",
+        message: "The attached photos exceed the message size limit.",
+      },
+      chat_image_empty: {
+        status: 400,
+        code: "chat_image_malformed",
+        message: "An attached photo is empty.",
+      },
+      chat_image_malformed: {
+        status: 400,
+        code: "chat_image_malformed",
+        message: "An attached photo could not be read.",
+      },
+      chat_image_part_invalid: {
+        status: 400,
+        code: "invalid_request",
+        message: "The image message is malformed.",
+      },
+      chat_image_name_too_long: {
+        status: 400,
+        code: "chat_image_name_too_long",
+        message: "An attached photo name is too long.",
+      },
+      chat_image_not_found: {
+        status: 404,
+        code: "chat_image_not_found",
+        message: "That conversation image is unavailable.",
+      },
+      chat_image_processing_failed: {
+        status: 400,
+        code: "chat_image_processing_failed",
+        message: "An attached photo could not be prepared for Pi.",
+      },
+      chat_image_processing_busy: {
+        status: 503,
+        code: "chat_image_processing_busy",
+        message:
+          "Image processing is busy. Keep your photos attached and retry.",
       },
       path_escape: {
         status: 400,
@@ -462,6 +563,7 @@ export async function buildServer(
   await server.register(websocket, {
     options: { maxPayload: config.bodyLimit },
   });
+  await server.register(multipart);
   server.addHook(
     "onRequest",
     enforceRequestPolicy({
@@ -539,10 +641,23 @@ export async function buildServer(
   );
   server.post("/api/projects/:projectId/threads/start", async (request) => {
     const params = projectParamsSchema.parse(request.params);
+    if (request.isMultipart()) {
+      const parsed = await parseMultipartChatInput(
+        request,
+        StartThreadMultipartMetadataSchema,
+      );
+      return await workspace.startThread(
+        params.projectId,
+        parsed.input,
+        parsed.metadata.workspace,
+        parsed.metadata.idempotencyKey,
+        parsed.metadata.runtime,
+      );
+    }
     const body = StartThreadRequestSchema.parse(request.body);
     return await workspace.startThread(
       params.projectId,
-      body.prompt,
+      parseTextChatInput(body.prompt),
       body.workspace,
       body.idempotencyKey,
       body.runtime,
@@ -617,6 +732,17 @@ export async function buildServer(
     return await workspace.snapshot(params.projectId, params.threadId);
   });
   server.get(
+    "/api/projects/:projectId/threads/:threadId/images/:imageId",
+    async (request) => {
+      const params = imageParamsSchema.parse(request.params);
+      return await workspace.readImage(
+        params.projectId,
+        params.threadId,
+        params.imageId,
+      );
+    },
+  );
+  server.get(
     "/api/projects/:projectId/threads/:threadId/transcript",
     async (request) => {
       const params = threadParamsSchema.parse(request.params);
@@ -633,12 +759,26 @@ export async function buildServer(
     "/api/projects/:projectId/threads/:threadId/prompt",
     async (request) => {
       const params = threadParamsSchema.parse(request.params);
+      if (request.isMultipart()) {
+        const parsed = await parseMultipartChatInput(
+          request,
+          ChatCommandMultipartMetadataSchema,
+        );
+        return {
+          run: await workspace.prompt(
+            params.projectId,
+            params.threadId,
+            parsed.input,
+            parsed.metadata.idempotencyKey,
+          ),
+        };
+      }
       const body = PromptRequestSchema.parse(request.body);
       return {
         run: await workspace.prompt(
           params.projectId,
           params.threadId,
-          body.prompt,
+          parseTextChatInput(body.prompt),
           body.idempotencyKey,
         ),
       };
@@ -648,12 +788,26 @@ export async function buildServer(
     "/api/projects/:projectId/threads/:threadId/steer",
     async (request) => {
       const params = threadParamsSchema.parse(request.params);
+      if (request.isMultipart()) {
+        const parsed = await parseMultipartChatInput(
+          request,
+          ChatCommandMultipartMetadataSchema,
+        );
+        return {
+          run: await workspace.steer(
+            params.projectId,
+            params.threadId,
+            parsed.input,
+            parsed.metadata.idempotencyKey,
+          ),
+        };
+      }
       const body = SteerRequestSchema.parse(request.body);
       return {
         run: await workspace.steer(
           params.projectId,
           params.threadId,
-          body.prompt,
+          parseTextChatInput(body.prompt),
           body.idempotencyKey,
         ),
       };
@@ -872,7 +1026,7 @@ export async function buildServer(
       setHeaders(response) {
         response.raw.setHeader(
           "Content-Security-Policy",
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'",
         );
         response.raw.setHeader("X-Frame-Options", "DENY");
         response.raw.setHeader("Referrer-Policy", "no-referrer");

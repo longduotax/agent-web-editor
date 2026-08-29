@@ -1,4 +1,4 @@
-import { useEffect, useState, type SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ProjectId, RuntimeKind, ThreadId } from "@pi-web/contracts";
 
@@ -26,6 +26,7 @@ import type { PaneId } from "./layoutTree.js";
 import { isReleaseKey, releaseFocusToPane } from "./paneFocus.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { useAutoGrow } from "../../components/useAutoGrow.js";
+import { ChatAttachmentStrip, useChatAttachments } from "./chatAttachments.js";
 
 /**
  * Example first messages, written for what this tool actually is: a coding
@@ -225,21 +226,37 @@ export function NewChatPane(props: NewChatPaneProps) {
   const selectedUnavailableReason =
     selectedBackend?.reason ?? "This agent backend is unavailable.";
   const agentLabel = selectedRuntime === "codex" ? "Codex" : "Pi";
+  const imageInputCapability =
+    selectedRuntime === "pi"
+      ? (preflight.data?.imageInput ?? "unknown")
+      : "unsupported";
   const [text, setText] = useState(() => readDraft(draftKey));
+  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
+  const attachments = useChatAttachments(imageInputCapability, () => {
+    props.onFocus();
+    textareaRef.current?.focus();
+  });
+  const attachmentKey = attachments.images.map((image) => image.id).join(":");
+  const previousAttachmentKey = useRef(attachmentKey);
+  useEffect(() => {
+    if (previousAttachmentKey.current === attachmentKey) return;
+    previousAttachmentKey.current = attachmentKey;
+    setCreationKey(commandId());
+  }, [attachmentKey]);
   // The prompt the user has already committed to but that has no thread yet.
   // Starting the first thread creates a git worktree, which takes 1.6-2.6s;
   // leaving the text sitting in the composer for that long reads as "Enter
   // did not register", so the message is echoed here the moment it is sent.
   const [sentPrompt, setSentPrompt] = useState<string | null>(null);
-  const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   useEffect(() => {
     setMode("worktree");
     setSourceChanges("none");
     setBaseBranch("");
     setCreationKey(commandId());
     setSentPrompt(null);
+    attachments.clear();
     setText(readDraft(newChatDraftKey(projectId, paneId)));
-  }, [paneId, projectId]);
+  }, [paneId, projectId, attachments.clear]);
   useEffect(() => {
     if (preflight.data?.currentBranch !== null && baseBranch === "")
       setBaseBranch(preflight.data?.currentBranch ?? "");
@@ -277,9 +294,11 @@ export function NewChatPane(props: NewChatPaneProps) {
           backends.data === undefined
           ? undefined
           : selectedRuntime,
+        attachments.files,
       ),
     onSuccess: async (result) => {
       setSentPrompt(null);
+      attachments.clear();
       removeDraft(draftKey);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       props.onThreadStarted(result.thread.id);
@@ -301,7 +320,7 @@ export function NewChatPane(props: NewChatPaneProps) {
     // second Enter would create a second thread and a second git worktree.
     if (create.isPending || selectedUnavailable) return;
     if (
-      value.trim() === "" ||
+      (value.trim() === "" && attachments.images.length === 0) ||
       (mode === "worktree" &&
         (!preflight.data?.worktreeAvailable || baseBranch === ""))
     )
@@ -458,9 +477,27 @@ export function NewChatPane(props: NewChatPaneProps) {
             <div className="u-row">
               <div className="u-bubble">
                 <span className="sr-only">You</span>
-                <div className="markdown">
-                  <Markdown>{sentPrompt}</Markdown>
-                </div>
+                {attachments.images.length > 0 && (
+                  <div
+                    className="pending-transcript-images"
+                    aria-label="Attached images"
+                  >
+                    {attachments.images.map((image) =>
+                      image.previewUrl === "" ? null : (
+                        <img
+                          key={image.id}
+                          src={image.previewUrl}
+                          alt={`Preview of ${image.label}`}
+                        />
+                      ),
+                    )}
+                  </div>
+                )}
+                {sentPrompt !== "" && (
+                  <div className="markdown">
+                    <Markdown>{sentPrompt}</Markdown>
+                  </div>
+                )}
               </div>
             </div>
             <ActivityStep
@@ -493,7 +530,43 @@ export function NewChatPane(props: NewChatPaneProps) {
             </ActivityStep>
           </div>
         )}
-        <form className="new-chat-card" onSubmit={submit}>
+        <form
+          className={`new-chat-card${attachments.dragging ? " image-dragging" : ""}`}
+          onSubmit={submit}
+          onDragEnterCapture={(event) => {
+            if (
+              !create.isPending ||
+              !event.dataTransfer.types.includes("Files")
+            )
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onDragOverCapture={(event) => {
+            if (
+              !create.isPending ||
+              !event.dataTransfer.types.includes("Files")
+            )
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onDropCapture={(event) => {
+            if (
+              !create.isPending ||
+              !event.dataTransfer.types.includes("Files")
+            )
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          {...attachments.dropHandlers}
+        >
+          {attachments.dragging && (
+            <div className="chat-drop-overlay" aria-hidden="true">
+              Drop photos here
+            </div>
+          )}
           <div className="new-chat-toolbar" aria-label="New chat configuration">
             <label>
               <span className="sr-only">Agent</span>
@@ -684,6 +757,24 @@ export function NewChatPane(props: NewChatPaneProps) {
             </p>
           )}
           <div className="composer-input new-chat-input">
+            <ChatAttachmentStrip
+              images={attachments.images}
+              error={attachments.error}
+              onRemove={attachments.remove}
+              onAdd={(files) => {
+                attachments.addFiles(files, "picker");
+              }}
+              disabled={
+                create.isPending || imageInputCapability === "unsupported"
+              }
+              unavailableExplanation={
+                imageInputCapability === "unsupported"
+                  ? selectedRuntime === "pi"
+                    ? "The selected Pi model or settings cannot receive images."
+                    : "Codex image input is not supported. Choose Pi to attach photos."
+                  : undefined
+              }
+            />
             <textarea
               ref={textareaRef}
               aria-label="First message"
@@ -695,6 +786,20 @@ export function NewChatPane(props: NewChatPaneProps) {
                 setText(event.target.value);
                 setCreationKey(commandId());
               }}
+              onPasteCapture={(event) => {
+                if (
+                  create.isPending &&
+                  [...event.clipboardData.items].some(
+                    (item) =>
+                      item.kind === "file" && item.type.startsWith("image/"),
+                  )
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onPaste={attachments.onPaste}
+              readOnly={create.isPending}
               onKeyDown={(event) => {
                 if (isReleaseKey(event)) {
                   event.preventDefault();
@@ -722,7 +827,9 @@ export function NewChatPane(props: NewChatPaneProps) {
                 className="send"
                 aria-label="Create chat and send"
                 disabled={
-                  create.isPending || text.trim() === "" || selectedUnavailable
+                  create.isPending ||
+                  selectedUnavailable ||
+                  (text.trim() === "" && attachments.images.length === 0)
                 }
               >
                 <span aria-hidden="true">↑</span>

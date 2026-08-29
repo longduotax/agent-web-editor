@@ -9,7 +9,250 @@ export const EventIdSchema = uuid.brand<"EventId">();
 export const TerminalIdSchema = uuid.brand<"TerminalId">();
 export const SessionIdSchema = uuid.brand<"SessionId">();
 export const IdempotencyKeySchema = uuid.brand<"IdempotencyKey">();
+export const ChatImageIdSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/)
+  .brand<"ChatImageId">();
 export const TimestampSchema = z.iso.datetime({ offset: true });
+export const ChatImageMimeTypeSchema = z.enum([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export const ImageInputCapabilitySchema = z.enum([
+  "supported",
+  "unsupported",
+  "unknown",
+]);
+
+export const CHAT_IMAGE_MAX_COUNT = 4;
+export const CHAT_IMAGE_MAX_SOURCE_BYTES = 10 * 1024 * 1024;
+export const CHAT_IMAGE_MAX_TOTAL_SOURCE_BYTES =
+  CHAT_IMAGE_MAX_COUNT * CHAT_IMAGE_MAX_SOURCE_BYTES;
+export const CHAT_IMAGE_MAX_PIXELS = 64_000_000;
+export const CHAT_IMAGE_MAX_DIMENSION = 2_000;
+/** Pi's resize helper bounds encoded base64 below 4.5 MiB. */
+export const CHAT_IMAGE_MAX_BASE64_BYTES = Math.floor(4.5 * 1024 * 1024);
+
+function hasBytes(
+  bytes: Uint8Array,
+  offset: number,
+  expected: readonly number[],
+): boolean {
+  return expected.every((value, index) => bytes[offset + index] === value);
+}
+
+function ascii(bytes: Uint8Array, offset: number, length: number): string {
+  return String.fromCharCode(...bytes.slice(offset, offset + length));
+}
+
+function uint24le(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] ?? 0) |
+    ((bytes[offset + 1] ?? 0) << 8) |
+    ((bytes[offset + 2] ?? 0) << 16)
+  );
+}
+
+function uint16be(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] ?? 0) << 8) | (bytes[offset + 1] ?? 0);
+}
+
+function uint16le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
+}
+
+function uint32be(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] ?? 0) * 2 ** 24 +
+    ((bytes[offset + 1] ?? 0) << 16) +
+    ((bytes[offset + 2] ?? 0) << 8) +
+    (bytes[offset + 3] ?? 0)
+  );
+}
+
+function pngDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (
+    bytes.length < 24 ||
+    !hasBytes(bytes, 0, [137, 80, 78, 71, 13, 10, 26, 10]) ||
+    ascii(bytes, 12, 4) !== "IHDR"
+  )
+    return null;
+  return { width: uint32be(bytes, 16), height: uint32be(bytes, 20) };
+}
+
+function jpegDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) return null;
+    const length = uint16be(bytes, offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    const isStartOfFrame =
+      marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+    if (isStartOfFrame) {
+      if (length < 7) return null;
+      return {
+        height: uint16be(bytes, offset + 3),
+        width: uint16be(bytes, offset + 5),
+      };
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function webpDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | null {
+  if (
+    bytes.length < 30 ||
+    ascii(bytes, 0, 4) !== "RIFF" ||
+    ascii(bytes, 8, 4) !== "WEBP"
+  )
+    return null;
+  const chunk = ascii(bytes, 12, 4);
+  if (chunk === "VP8X")
+    return {
+      width: uint24le(bytes, 24) + 1,
+      height: uint24le(bytes, 27) + 1,
+    };
+  if (chunk === "VP8 ") {
+    if (
+      bytes.length < 30 ||
+      bytes[23] !== 0x9d ||
+      bytes[24] !== 0x01 ||
+      bytes[25] !== 0x2a
+    )
+      return null;
+    return {
+      width: uint16le(bytes, 26) & 0x3fff,
+      height: uint16le(bytes, 28) & 0x3fff,
+    };
+  }
+  if (chunk === "VP8L") {
+    if (bytes.length < 25 || bytes[20] !== 0x2f) return null;
+    const b1 = bytes[21] ?? 0;
+    const b2 = bytes[22] ?? 0;
+    const b3 = bytes[23] ?? 0;
+    const b4 = bytes[24] ?? 0;
+    return {
+      width: 1 + ((b1 | (b2 << 8)) & 0x3fff),
+      height: 1 + (((b2 >> 6) | (b3 << 2) | (b4 << 10)) & 0x3fff),
+    };
+  }
+  return null;
+}
+
+/** Parses supported chat-image bytes into their bounded native dimensions. */
+export function parseChatImageBytes(bytes: Uint8Array): {
+  mimeType: ChatImageMimeType;
+  width: number;
+  height: number;
+} {
+  const candidates: {
+    mimeType: ChatImageMimeType;
+    dimensions: { width: number; height: number } | null;
+  }[] = [
+    { mimeType: "image/png", dimensions: pngDimensions(bytes) },
+    { mimeType: "image/jpeg", dimensions: jpegDimensions(bytes) },
+    { mimeType: "image/webp", dimensions: webpDimensions(bytes) },
+  ];
+  const found = candidates.find((candidate) => candidate.dimensions !== null);
+  if (found?.dimensions === null || found === undefined)
+    throw new Error("chat_image_unsupported");
+  const { width, height } = found.dimensions;
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  )
+    throw new Error("chat_image_malformed");
+  if (width * height > CHAT_IMAGE_MAX_PIXELS)
+    throw new Error("chat_image_pixels_exceeded");
+  return { mimeType: found.mimeType, width, height };
+}
+
+export const ChatImageRefSchema = z
+  .object({
+    id: ChatImageIdSchema,
+    mimeType: ChatImageMimeTypeSchema,
+  })
+  .strict();
+export type ChatImageRef = z.infer<typeof ChatImageRefSchema>;
+
+const BASE64_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function base64Prefix(data: string, maximum: number): number[] | null {
+  const output: number[] = [];
+  for (
+    let offset = 0;
+    offset < data.length && output.length < maximum;
+    offset += 4
+  ) {
+    const a = BASE64_ALPHABET.indexOf(data[offset] ?? "");
+    const b = BASE64_ALPHABET.indexOf(data[offset + 1] ?? "");
+    const cText = data[offset + 2] ?? "=";
+    const dText = data[offset + 3] ?? "=";
+    const c = cText === "=" ? 0 : BASE64_ALPHABET.indexOf(cText);
+    const d = dText === "=" ? 0 : BASE64_ALPHABET.indexOf(dText);
+    if (a < 0 || b < 0 || c < 0 || d < 0) return null;
+    output.push((a << 2) | (b >> 4));
+    if (cText !== "=") output.push(((b & 15) << 4) | (c >> 2));
+    if (dText !== "=") output.push(((c & 3) << 6) | d);
+  }
+  return output;
+}
+
+function base64ImageMatchesMime(data: string, mimeType: string): boolean {
+  const bytes = base64Prefix(data, 12);
+  if (bytes === null) return false;
+  if (mimeType === "image/png")
+    return [137, 80, 78, 71, 13, 10, 26, 10].every(
+      (value, index) => bytes[index] === value,
+    );
+  if (mimeType === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8;
+  return (
+    mimeType === "image/webp" &&
+    String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
+    String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
+  );
+}
+
+export const ChatImageResponseSchema = z
+  .object({
+    id: ChatImageIdSchema,
+    mimeType: ChatImageMimeTypeSchema,
+    data: z
+      .string()
+      .min(1)
+      .max(CHAT_IMAGE_MAX_BASE64_BYTES)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      ),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!base64ImageMatchesMime(value.data, value.mimeType))
+      context.addIssue({ code: "custom", message: "Malformed image data" });
+  });
+export type ChatImageResponse = z.infer<typeof ChatImageResponseSchema>;
+
 // A chat's agent backend. It is chosen once, at creation, and is immutable for
 // the life of the chat: a chat is continued by resuming that backend's own
 // native session, and no transcript or tool history transfers between agents.
@@ -30,6 +273,9 @@ export type WorktreeId = z.infer<typeof WorktreeIdSchema>;
 export type TerminalId = z.infer<typeof TerminalIdSchema>;
 export type SessionId = z.infer<typeof SessionIdSchema>;
 export type IdempotencyKey = z.infer<typeof IdempotencyKeySchema>;
+export type ChatImageId = z.infer<typeof ChatImageIdSchema>;
+export type ChatImageMimeType = z.infer<typeof ChatImageMimeTypeSchema>;
+export type ImageInputCapability = z.infer<typeof ImageInputCapabilitySchema>;
 export type RunState = z.infer<typeof RunStateSchema>;
 
 /** A Git local branch name safe to use only after repository authorization. */
@@ -129,6 +375,7 @@ export const TranscriptItemSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message"),
     role: z.enum(["user", "assistant", "system"]),
     text: z.string().max(2_000_000),
+    images: z.array(ChatImageRefSchema).max(CHAT_IMAGE_MAX_COUNT).optional(),
     timestamp: TimestampSchema.nullable(),
   }),
   z.object({
@@ -206,6 +453,7 @@ export const ThreadSnapshotSchema = z.object({
     prompt: z.boolean(),
     steer: z.boolean(),
     stop: z.boolean(),
+    imageInput: ImageInputCapabilitySchema.optional(),
   }),
   diagnostics: z.array(z.string().max(500)).max(100),
 });
@@ -239,6 +487,7 @@ export const LocalChangeSummarySchema = z.object({
 });
 export const WorkspacePreflightResponseSchema = z.object({
   worktreeAvailable: z.boolean(),
+  imageInput: ImageInputCapabilitySchema.optional(),
   unavailableReason: z.string().min(1).max(500).nullable(),
   currentBranch: z.string().min(1).max(255).nullable(),
   branches: z.array(z.string().min(1).max(255)).max(10_000),
@@ -263,9 +512,19 @@ export const ThreadWorkspaceRequestSchema = z.discriminatedUnion("mode", [
     })
     .strict(),
 ]);
+const ChatPromptTextSchema = z.string().trim().max(200_000);
+
 export const StartThreadRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
+    workspace: ThreadWorkspaceRequestSchema,
+    runtime: RuntimeKindSchema.optional(),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const StartThreadMultipartMetadataSchema = z
+  .object({
+    prompt: ChatPromptTextSchema,
     workspace: ThreadWorkspaceRequestSchema,
     runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
@@ -362,13 +621,19 @@ export const ImportThreadRequestSchema = z
   .strict();
 export const PromptRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();
 export const SteerRequestSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(200_000),
+    prompt: ChatPromptTextSchema.pipe(z.string().min(1)),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const ChatCommandMultipartMetadataSchema = z
+  .object({
+    prompt: ChatPromptTextSchema,
     idempotencyKey: IdempotencyKeySchema,
   })
   .strict();

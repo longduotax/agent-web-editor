@@ -10,6 +10,7 @@ import type {
   AgentRuntime,
   OpenRuntimeSession,
   PromptAcceptance,
+  RuntimeImageContent,
   RuntimeSnapshot,
 } from "@pi-web/agent-runtime";
 import {
@@ -17,6 +18,8 @@ import {
   ArchivedThreadsResponseSchema,
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
+  ChatImageIdSchema,
+  ChatImageResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -29,12 +32,14 @@ import {
   TranscriptPageSchema,
   TerminalServerFrameSchema,
   TerminalsResponseSchema,
+  type ChatImageId,
   type TerminalServerFrame,
 } from "@pi-web/contracts";
 import { WebSocket, type RawData } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildServer } from "./app.js";
+import { parseTextChatInput } from "./chat-images.js";
 import type { DirectoryPicker } from "./directory-picker/native.js";
 import { parseConfig } from "./config.js";
 import type { PtyFactory, PtyProcess } from "./terminal/manager.js";
@@ -90,6 +95,17 @@ class PromptingSession implements OpenRuntimeSession {
 
   public steer(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public readImage(imageId: ChatImageId): Promise<RuntimeImageContent> {
+    const expected = ChatImageIdSchema.parse("a".repeat(64));
+    return imageId === expected
+      ? Promise.resolve({
+          id: expected,
+          mimeType: "image/png",
+          data: "iVBORw0KGgo=",
+        })
+      : Promise.reject(new Error("chat_image_not_found"));
   }
 
   public stop(): Promise<void> {
@@ -179,6 +195,35 @@ async function directories(): Promise<{ state: string; project: string }> {
 const host = "127.0.0.1:3001";
 const origin = "http://127.0.0.1:5173";
 
+function png(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+function multipartChatRequest(
+  metadata: unknown,
+  image: Buffer,
+): { boundary: string; body: Buffer } {
+  const boundary = "pi-web-app-image-boundary";
+  return {
+    boundary,
+    body: Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+      ),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="images"; filename="photo.png"\r\nContent-Type: image/png\r\n\r\n`,
+      ),
+      image,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
+}
+
 describe("credential-free project API", () => {
   it("returns one bounded latest page and loads older history by opaque cursor", async () => {
     const paths = await directories();
@@ -264,6 +309,129 @@ describe("credential-free project API", () => {
     expect(StartThreadResponseSchema.parse(retry.json())).toEqual(parsed);
     expect(runtime.namingCount).toBe(1);
     expect(runtime.createCount).toBe(1);
+    await server.close();
+  });
+
+  it("keeps multipart retry identity content-aware", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const runtime = new PromptingRuntime();
+    const server = await buildServer({ config, runtime, logger: false });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const metadata = {
+      prompt: "Inspect this",
+      workspace: { mode: "shared" },
+      idempotencyKey: "00000000-0000-4000-8000-000000000020",
+    };
+    const firstPayload = multipartChatRequest(metadata, png(1, 1));
+    const request = async (payload: { boundary: string; body: Buffer }) =>
+      await server.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/threads/start`,
+        headers: {
+          host,
+          origin,
+          "x-pi-web-request": "1",
+          "content-type": `multipart/form-data; boundary=${payload.boundary}`,
+        },
+        payload: payload.body,
+      });
+
+    const first = await request(firstPayload);
+    expect(first.statusCode).toBe(200);
+    const retry = await request(firstPayload);
+    expect(StartThreadResponseSchema.parse(retry.json())).toEqual(
+      StartThreadResponseSchema.parse(first.json()),
+    );
+    expect(runtime.createCount).toBe(1);
+
+    const changed = await request(multipartChatRequest(metadata, png(2, 1)));
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({
+      error: { code: "idempotency_conflict" },
+    });
+    await server.close();
+  });
+
+  it("continues to reject an empty text-only JSON command", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000021",
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it("serves a native conversation image only through an authorized thread", async () => {
+    const paths = await directories();
+    const config = parseConfig({
+      argv: [],
+      environment: { PI_WEB_STATE_DIR: paths.state },
+    });
+    const server = await buildServer({
+      config,
+      runtime: new PromptingRuntime(),
+      logger: false,
+    });
+    const project =
+      await server.workspaceContext.workspace.registerSelectedProject(
+        paths.project,
+      );
+    const start = await server.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/threads/start`,
+      headers: { host, origin, "x-pi-web-request": "1" },
+      payload: {
+        prompt: "Inspect an image",
+        workspace: { mode: "shared" },
+        idempotencyKey: "00000000-0000-4000-8000-000000000019",
+      },
+    });
+    const thread = StartThreadResponseSchema.parse(start.json()).thread;
+    const imageId = "a".repeat(64);
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/images/${imageId}`,
+      headers: { host },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(ChatImageResponseSchema.parse(response.json())).toEqual({
+      id: imageId,
+      mimeType: "image/png",
+      data: "iVBORw0KGgo=",
+    });
+    const absent = await server.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/threads/${thread.id}/images/${"b".repeat(64)}`,
+      headers: { host },
+    });
+    expect(absent.statusCode).toBe(404);
     await server.close();
   });
 
@@ -1576,13 +1744,13 @@ describe("terminal routes", () => {
     const other = await workspace.registerSelectedProject(otherProject);
     const thread = await workspace.startThread(
       project.id,
-      "Run a shell here",
+      parseTextChatInput("Run a shell here"),
       { mode: "shared" },
       "00000000-0000-4000-8000-000000000101",
     );
     const otherThread = await workspace.startThread(
       other.id,
-      "Run a shell there",
+      parseTextChatInput("Run a shell there"),
       { mode: "shared" },
       "00000000-0000-4000-8000-000000000102",
     );

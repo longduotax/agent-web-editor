@@ -5,6 +5,7 @@ import {
   ArchiveThreadResponseSchema,
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
+  ChatImageResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -18,6 +19,7 @@ import {
   ThreadSnapshotSchema,
   TranscriptPageSchema,
   WorkspacePreflightResponseSchema,
+  type ChatImageId,
   type ProjectId,
   type RunId,
   type ThreadId,
@@ -96,7 +98,8 @@ async function request<T>(
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body !== undefined) {
-    headers.set("Content-Type", "application/json");
+    if (!(init.body instanceof FormData))
+      headers.set("Content-Type", "application/json");
     headers.set("X-Pi-Web-Request", "1");
   }
   // An explicit controller and timer rather than `AbortSignal.timeout`: the
@@ -165,6 +168,13 @@ export function commandId(): string {
 }
 const body = (value: unknown): string => JSON.stringify(value);
 
+function chatForm(metadata: unknown, images: readonly File[]): FormData {
+  const form = new FormData();
+  form.append("metadata", JSON.stringify(metadata));
+  for (const image of images) form.append("images", image, image.name);
+  return form;
+}
+
 export async function getWorkspace() {
   return await request("/api/projects", ProjectsResponseSchema);
 }
@@ -224,18 +234,20 @@ export async function startThread(
       },
   idempotencyKey: string,
   runtime?: RuntimeKind,
+  images: readonly File[] = [],
 ) {
+  const metadata = {
+    prompt,
+    workspace,
+    idempotencyKey,
+    ...(runtime === undefined ? {} : { runtime }),
+  };
   return await request(
     `/api/projects/${projectId}/threads/start`,
     StartThreadResponseSchema,
     {
       method: "POST",
-      body: body({
-        prompt,
-        workspace,
-        idempotencyKey,
-        ...(runtime === undefined ? {} : { runtime }),
-      }),
+      body: images.length === 0 ? body(metadata) : chatForm(metadata, images),
     },
   );
 }
@@ -320,13 +332,16 @@ export async function prompt(
   projectId: ProjectId,
   threadId: ThreadId,
   promptText: string,
+  images: readonly File[] = [],
+  idempotencyKey = commandId(),
 ) {
+  const metadata = { prompt: promptText, idempotencyKey };
   return await request(
     `/api/projects/${projectId}/threads/${threadId}/prompt`,
     RunMutationResponseSchema,
     {
       method: "POST",
-      body: body({ prompt: promptText, idempotencyKey: commandId() }),
+      body: images.length === 0 ? body(metadata) : chatForm(metadata, images),
     },
   );
 }
@@ -334,14 +349,27 @@ export async function steer(
   projectId: ProjectId,
   threadId: ThreadId,
   promptText: string,
+  images: readonly File[] = [],
+  idempotencyKey = commandId(),
 ) {
+  const metadata = { prompt: promptText, idempotencyKey };
   return await request(
     `/api/projects/${projectId}/threads/${threadId}/steer`,
     RunMutationResponseSchema,
     {
       method: "POST",
-      body: body({ prompt: promptText, idempotencyKey: commandId() }),
+      body: images.length === 0 ? body(metadata) : chatForm(metadata, images),
     },
+  );
+}
+export async function getChatImage(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  imageId: ChatImageId,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/images/${imageId}`,
+    ChatImageResponseSchema,
   );
 }
 export async function stop(projectId: ProjectId, threadId: ThreadId) {
