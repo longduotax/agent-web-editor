@@ -174,6 +174,30 @@ describe("CodexClient framing and correlation", () => {
     await codex.dispose();
   });
 
+  it("accepts additive app-server notification envelope metadata", async () => {
+    const transport = new FakeTransport();
+    const codex = client(transport);
+    await codex.ready();
+    const seen: { method: string; params: unknown }[] = [];
+    codex.onNotification((method, params) => seen.push({ method, params }));
+
+    transport.emit({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1" } },
+      emittedAtMs: 1_788_000_000_000,
+    });
+
+    expect(seen).toEqual([
+      {
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1" } },
+      },
+    ]);
+    expect(codex.droppedFrames).toBe(0);
+    await codex.dispose();
+  });
+
   it("ignores unparseable and unknown frames rather than failing the session", async () => {
     const transport = new FakeTransport();
     const codex = client(transport);
