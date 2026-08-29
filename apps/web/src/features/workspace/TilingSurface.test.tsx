@@ -226,7 +226,7 @@ describe("TilingSurface", () => {
     expect(divider).toHaveAttribute("aria-valuenow");
   });
 
-  it("keeps workspace chords armed after the user splits a pane", async () => {
+  it("focuses the new pane's message field after the user splits a pane", async () => {
     renderSurface();
     const user = userEvent.setup();
 
@@ -239,10 +239,9 @@ describe("TilingSurface", () => {
       .find((pane) => pane.getAttribute("aria-current") === "true");
     expect(focusedPane).toBeDefined();
     if (focusedPane === undefined) return;
-    expect(focusedPane).toHaveFocus();
     expect(
       within(focusedPane).getByRole("textbox", { name: "First message" }),
-    ).not.toHaveFocus();
+    ).toHaveFocus();
   });
 
   it("adjusts split sizes on the controller when the divider is resized with the keyboard", async () => {
