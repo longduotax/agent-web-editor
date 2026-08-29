@@ -28,6 +28,10 @@ specifications, designs, code, or tests.
   added right-click and keyboard Rename/Archive actions, a direct hover/focus
   Archive icon, durable inactive-thread archival, and compact inline run
   signals.
+- [Inline thread title editing](2026-08-29-inline-thread-title-editing.md) —
+  replaced the sidebar's multi-row Save/Cancel form and the pane header's
+  static title with one shared one-row editor: double-click enters editing,
+  blur or Enter saves, and Escape or Revert restores the prior title.
 - [Thread workspace and worktree support](2026-08-16-thread-workspaces.md) —
   added the Codex-style new-chat flow, clean or explicitly transferred managed
   worktrees, prompt-derived names, durable creation recovery, and thread-scoped
@@ -41,3 +45,10 @@ specifications, designs, code, or tests.
   selection; bounded multipart prompt/steer transport; Pi multimodal delivery,
   idempotent recovery, native-history image refs, and authorized on-demand
   rendering without a staging store or local path exposure.
+- [Default-model thread and worktree naming](2026-08-29-default-model-thread-naming.md) —
+  changed automatic first-prompt naming from a distinct lower-cost
+  same-provider model to the selected project's configured default Pi model,
+  while preserving the explicit override and deterministic fallback.
+- [Accept provider metadata in naming completions](2026-08-29-naming-completion-metadata.md) —
+  fixed prompt-prefix fallback when valid default-model title blocks include
+  additive provider metadata by projecting only the required text fields.

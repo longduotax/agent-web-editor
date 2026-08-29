@@ -27,6 +27,7 @@ import {
   getWorkspace,
   markViewed,
   prompt,
+  renameThread,
   steer,
   stop,
   unarchiveThread,
@@ -909,11 +910,28 @@ export function ThreadPane(props: ThreadPaneProps) {
 
 function ThreadPaneBody(props: ThreadPaneProps) {
   const { projectId, threadId, focused } = props;
+  const queryClient = useQueryClient();
+  const snapshotKey = ["snapshot", projectId, threadId] as const;
   const snapshot = useQuery({
-    queryKey: ["snapshot", projectId, threadId],
+    queryKey: snapshotKey,
     queryFn: () => getSnapshot(projectId, threadId),
     refetchInterval: 15_000,
   });
+  const rename = useMutation({
+    mutationFn: async (title: string) =>
+      await renameThread(projectId, threadId, title),
+    onSuccess: async (result) => {
+      // The parsed mutation response carries the authoritative ThreadSummary.
+      // Patch only that member so the title changes without a stale-heading
+      // frame while preserving transcript/live state owned by this snapshot.
+      queryClient.setQueryData<ThreadSnapshot>(snapshotKey, (current) =>
+        current === undefined ? current : { ...current, thread: result.thread },
+      );
+      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+    },
+  });
+  // Keep the query declaration adjacent to the rename cache patch: both must
+  // use the exact same key, or a pane can keep its old title until polling.
   const runActive = snapshot.data?.currentRun?.state === "running";
   const currentRunId = snapshot.data?.currentRun?.id ?? null;
   const live = useLive(
@@ -1083,7 +1101,6 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       images: lost.flatMap((steer) => steer.images ?? []),
     }));
   }, [runActive, currentRunId, pendingSteers, settledTranscript, threadId]);
-  const queryClient = useQueryClient();
   const restore = useMutation({
     mutationFn: async () => await unarchiveThread(projectId, threadId),
     onSuccess: async () => {
@@ -1228,6 +1245,13 @@ function ThreadPaneBody(props: ThreadPaneProps) {
               </span>
             </span>
           </>
+        }
+        onRename={
+          snapshot.data === undefined || archived
+            ? undefined
+            : async (title) => {
+                await rename.mutateAsync(title);
+              }
         }
         onSplit={() => {
           props.onSplit();

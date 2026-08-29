@@ -1,161 +1,191 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadRenameForm } from "./ThreadRenameForm.js";
 
+const LONG_TITLE = "Explore this repository before changing anything run";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function renderEditor(
+  initialValue = LONG_TITLE,
+  onCommit: (value: string) => Promise<void> = vi.fn(() => Promise.resolve()),
+) {
+  const onRevert = vi.fn();
+  render(
+    <ThreadRenameForm
+      initialValue={initialValue}
+      label={`Rename ${initialValue}`}
+      onCommit={onCommit}
+      onRevert={onRevert}
+    />,
+  );
+  return { onCommit, onRevert };
+}
+
 afterEach(() => {
   cleanup();
 });
 
-// The measured case: 52 characters edited through a 95px window.
-const LONG_TITLE = "Explore this repository before changing anything run";
-
-function renderForm(
-  value = LONG_TITLE,
-  overrides: { pending?: boolean; error?: unknown } = {},
-) {
-  const handlers = {
-    onChange: vi.fn(),
-    onSubmit: vi.fn(),
-    onCancel: vi.fn(),
-    onDismissError: vi.fn(),
-  };
-  render(
-    <ThreadRenameForm
-      value={value}
-      label="Rename Example thread"
-      pending={overrides.pending ?? false}
-      error={overrides.error ?? null}
-      {...handlers}
-    />,
-  );
-  return handlers;
-}
-
-// G9. The field was a single-line input sharing a 227px sidebar row with Save
-// (50px) and Cancel (65px): 95px of field, about twelve characters of a
-// fifty-two character title. Renaming exists because generated titles are
-// bad, so doing it blind defeats the point.
 describe("ThreadRenameForm", () => {
-  it("gives the whole row to the field and wraps the title instead of hiding it", () => {
-    renderForm();
+  it("is one inline row, selects the title, and has only a Revert control", () => {
+    renderEditor();
 
-    const field = screen.getByRole("textbox", {
-      name: "Rename Example thread",
+    const field = screen.getByRole<HTMLInputElement>("textbox", {
+      name: `Rename ${LONG_TITLE}`,
     });
-    // A wrapping textarea, not a one-line input: the title is visible across
-    // as many short lines as it needs.
-    expect(field.tagName).toBe("TEXTAREA");
-    // The buttons no longer share the field's row.
-    expect(field.parentElement).toBe(
-      screen.getByRole("button", { name: "Save" }).parentElement?.parentElement,
-    );
-    expect(
-      screen.getByRole("button", { name: "Save" }).parentElement,
-    ).toHaveClass("thread-rename-actions");
-  });
-
-  it("selects the whole title on focus so retyping does not mean deleting first", () => {
-    renderForm();
-
-    const field = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Rename Example thread",
-    });
+    expect(field.tagName).toBe("INPUT");
+    expect(field).toHaveAttribute("type", "text");
+    expect(field).toHaveAttribute("maxlength", "200");
     expect(field).toHaveFocus();
     expect(field.selectionStart).toBe(0);
     expect(field.selectionEnd).toBe(LONG_TITLE.length);
+    expect(
+      screen.getByRole("button", { name: "Revert title" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /save|confirm|cancel/i }),
+    ).not.toBeInTheDocument();
   });
 
-  // A title has no second line, so Enter is a submit rather than a newline --
-  // Shift+Enter included.
-  it("submits on Enter and cancels on Escape", async () => {
+  it("saves a trimmed changed title when focus leaves the editor", async () => {
     const user = userEvent.setup();
-    const handlers = renderForm();
+    const onCommit = vi.fn(() => Promise.resolve());
+    renderEditor("Original title", onCommit);
 
-    await user.keyboard("{Enter}");
-    expect(handlers.onSubmit).toHaveBeenCalledTimes(1);
+    const field = screen.getByRole("textbox", {
+      name: "Rename Original title",
+    });
+    await user.clear(field);
+    await user.type(field, "  Renamed thread  ");
+    fireEvent.blur(field, { relatedTarget: document.body });
 
-    await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(handlers.onSubmit).toHaveBeenCalledTimes(2);
-    expect(handlers.onChange).not.toHaveBeenCalled();
-
-    await user.keyboard("{Escape}");
-    expect(handlers.onCancel).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith("Renamed thread");
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Save and Cancel for the pointer, and names the keys for everyone else", async () => {
+  it("saves on Enter and never inserts a second row", async () => {
     const user = userEvent.setup();
-    const handlers = renderForm();
+    const onCommit = vi.fn(() => Promise.resolve());
+    renderEditor("Original title", onCommit);
 
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(handlers.onSubmit).toHaveBeenCalledTimes(1);
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "Renamed{Enter}");
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(handlers.onCancel).toHaveBeenCalledTimes(1);
-
-    expect(screen.getByText("Enter saves · Esc cancels")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith("Renamed");
+    });
+    expect(screen.getByRole("textbox")).toHaveValue("Renamed");
   });
 
-  it("collapses a pasted line break rather than growing a second line", async () => {
+  it("reverts on Escape without committing", async () => {
     const user = userEvent.setup();
-    const handlers = renderForm("");
+    const { onCommit, onRevert } = renderEditor("Original title");
 
-    await user.paste("first line\nsecond line");
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "Draft{Escape}");
 
-    expect(handlers.onChange).toHaveBeenLastCalledWith(
-      "first line second line",
-    );
-  });
-});
-
-// SF5. Save and Cancel were both `disabled={pending}`; Enter went straight
-// past that to `onSubmit`, so a second Enter on a slow rename fired a second
-// rename of the same thread.
-describe("ThreadRenameForm while a rename is in flight", () => {
-  it("does not submit again on Enter", async () => {
-    const user = userEvent.setup();
-    const handlers = renderForm(LONG_TITLE, { pending: true });
-
-    await user.click(
-      screen.getByRole("textbox", { name: "Rename Example thread" }),
-    );
-    await user.keyboard("{Enter}{Enter}");
-
-    expect(handlers.onSubmit).not.toHaveBeenCalled();
+    expect(onRevert).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("still submits on Enter once the rename has settled", async () => {
+  it("lets the Revert pointer action win over blur-save", async () => {
     const user = userEvent.setup();
-    const handlers = renderForm();
+    const { onCommit, onRevert } = renderEditor("Original title");
 
-    await user.click(
-      screen.getByRole("textbox", { name: "Rename Example thread" }),
-    );
-    await user.keyboard("{Enter}");
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "Draft");
+    await user.click(screen.getByRole("button", { name: "Revert title" }));
 
-    expect(handlers.onSubmit).toHaveBeenCalledTimes(1);
+    expect(onRevert).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
-  // G10's rule, applied to the one error that did not have it: a red block
-  // needs an exit.
-  it("gives the rename error a way out", async () => {
-    const user = userEvent.setup();
-    const handlers = renderForm(LONG_TITLE, {
-      error: new Error("Renaming is not allowed."),
+  it("exits an unchanged edit without sending a rename", () => {
+    const { onCommit, onRevert } = renderEditor("Original title");
+
+    fireEvent.blur(screen.getByRole("textbox"), {
+      relatedTarget: document.body,
     });
 
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onRevert).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an empty title editable with a compact validation error", async () => {
+    const user = userEvent.setup();
+    const { onCommit, onRevert } = renderEditor("Original title");
+
+    await user.clear(screen.getByRole("textbox"));
+    fireEvent.blur(screen.getByRole("textbox"), {
+      relatedTarget: document.body,
+    });
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onRevert).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Title cannot be empty.",
+    );
+    expect(screen.getByRole("textbox")).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("prevents duplicate blur or Enter commits while a save is pending", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<undefined>();
+    const onCommit = vi.fn(() => pending.promise);
+    renderEditor("Original title", onCommit);
+
+    const field = screen.getByRole("textbox");
+    await user.clear(field);
+    await user.type(field, "Renamed{Enter}{Enter}");
+    fireEvent.blur(field, { relatedTarget: document.body });
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(field).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Saving title" })).toBeDisabled();
+
+    pending.resolve(undefined);
+    await waitFor(() => {
+      expect(field).not.toHaveAttribute("readonly");
+    });
+  });
+
+  it("retains the draft and exposes a failed save for retry or Revert", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn(() =>
+      Promise.reject(new Error("Renaming is not allowed.")),
+    );
+    const { onRevert } = renderEditor("Original title", onCommit);
+
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "Draft{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not rename this thread: Renaming is not allowed.",
     );
-    await user.click(
-      screen.getByRole("button", { name: "Dismiss this message" }),
-    );
+    expect(screen.getByRole("textbox")).toHaveValue("Draft");
 
-    expect(handlers.onDismissError).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Revert title" }));
+    expect(onRevert).toHaveBeenCalledTimes(1);
   });
 });

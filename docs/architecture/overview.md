@@ -4,7 +4,7 @@
 
 **Subsystem:** Initial local agent workspace
 
-**Last verified:** 2026-08-16
+**Last verified:** 2026-08-29
 
 Pi Web Workspace is a local-first React application backed by a loopback-only
 Fastify process. The server owns request-integrity policy, SQLite metadata,
@@ -83,15 +83,16 @@ thread from either the registered checkout or a verified managed worktree.
 `@pi-web/pi-adapter` resolves stored session UUIDs through a fresh Pi listing for
 that execution root before opening private native paths. A bounded tool-free Pi
 model call may summarize the first prompt for the initial thread/worktree name;
-deterministic local naming is the non-blocking fallback. Prompt
-preflight acceptance precedes atomic run/receipt creation. Text-only prompt
-commands retain their strict JSON representation. Image-bearing start, prompt,
-and steer commands use route-bounded multipart bodies: the server detects
-JPEG/PNG/WebP bytes and dimensions, hashes ordered source content for
-idempotency, and passes SDK-neutral image input to the adapter. The adapter
-checks model/settings capability, bounds concurrent worker-backed resizing, and
-supplies Pi flat multimodal image blocks; native Pi JSONL remains their durable
-store. A thread-level
+an explicit naming-model override takes precedence, otherwise the call uses the
+project's configured default Pi model. Deterministic local naming is the
+non-blocking fallback. Prompt preflight acceptance precedes atomic run/receipt
+creation. Text-only prompt commands retain their strict JSON representation.
+Image-bearing start, prompt, and steer commands use route-bounded multipart
+bodies: the server detects JPEG/PNG/WebP bytes and dimensions, hashes ordered
+source content for idempotency, and passes SDK-neutral image input to the
+adapter. The adapter checks model/settings capability, bounds concurrent
+worker-backed resizing, and supplies Pi flat multimodal image blocks; native Pi
+JSONL remains their durable store. A thread-level
 in-process preflight lease and SQLite partial unique index prevent simultaneous
 runs in one thread while allowing independent Pi sessions in distinct threads
 of the same project to run concurrently. Shared sessions use the registered working directory; isolated sessions use

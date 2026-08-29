@@ -123,9 +123,7 @@ const namingModelHandleSchema = z.object({
 type NamingModelHandle = z.infer<typeof namingModelHandleSchema>;
 const namingCompletionSchema = z.object({
   stopReason: z.literal("stop"),
-  content: z.tuple([
-    z.strictObject({ type: z.literal("text"), text: z.string() }),
-  ]),
+  content: z.tuple([z.object({ type: z.literal("text"), text: z.string() })]),
 });
 
 const generatedTitleSchema = z
@@ -1377,33 +1375,11 @@ export class PiAgentRuntime implements AgentRuntime {
           id: settings.getDefaultModel(),
         });
         if (!defaultSelector.success) return { outcome: "unavailable" };
-        const rawDefaultModel = runtime.getModel(
-          defaultSelector.data.provider,
-          defaultSelector.data.id,
+        model = available.find(
+          (candidate) =>
+            candidate.provider === defaultSelector.data.provider &&
+            candidate.id === defaultSelector.data.id,
         );
-        const defaultModel =
-          namingModelDescriptorSchema.safeParse(rawDefaultModel).data;
-        if (
-          defaultModel?.provider === defaultSelector.data.provider &&
-          defaultModel.id === defaultSelector.data.id
-        ) {
-          const defaultCost =
-            defaultModel.cost.input * 1_000 + defaultModel.cost.output * 32;
-          model = available
-            .filter(
-              (candidate) =>
-                candidate.provider === defaultSelector.data.provider &&
-                candidate.id !== defaultSelector.data.id &&
-                candidate.cost.input * 1_000 + candidate.cost.output * 32 <
-                  defaultCost,
-            )
-            .sort((left, right) => {
-              const leftCost = left.cost.input * 1_000 + left.cost.output * 32;
-              const rightCost =
-                right.cost.input * 1_000 + right.cost.output * 32;
-              return leftCost - rightCost || left.id.localeCompare(right.id);
-            })[0];
-        }
       }
       if (model === undefined) return { outcome: "unavailable" };
       const rawHandle = runtime.getModel(model.provider, model.id);

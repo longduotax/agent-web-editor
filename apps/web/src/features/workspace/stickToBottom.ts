@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 /** The parts of a scroll container this module reads and writes. */
 export interface ScrollBox {
@@ -91,14 +91,18 @@ export function useStickToBottom<T extends HTMLElement>(
     if (element !== null) scrollToBottom(element);
   }, [setStuck]);
 
-  useEffect(() => {
+  // Correct the scroll position before paint. A passive effect lets one frame
+  // of newly appended output appear below the viewport, which is visible as a
+  // small upward jump on send and can also let a queued scroll event mistake
+  // that transient gap for the reader deliberately scrolling away.
+  useLayoutEffect(() => {
     const element = ref.current;
     if (element === null) return;
     setStuck(true);
     scrollToBottom(element);
   }, [resetKey, setStuck]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = ref.current;
     if (element === null || !stuck.current) return;
     scrollToBottom(element);
@@ -115,8 +119,27 @@ export function useStickToBottom<T extends HTMLElement>(
         setStuck(isAtBottom(node));
       };
       node.addEventListener("scroll", onScroll, { passive: true });
+
+      // The transcript's viewport changes height when the composer grows,
+      // clears, or gains the running controls after send. Those layout
+      // changes do not change contentKey and do not necessarily emit a scroll
+      // event, so scrollTop can be left at the old bottom. The next streamed
+      // item then looks like a user-created gap and stops live following.
+      // Observe both the viewport and its content so asynchronous wrapping or
+      // font/layout changes cannot create the same stale-bottom state.
+      const observer =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => {
+              if (stuck.current) scrollToBottom(node);
+            });
+      observer?.observe(node);
+      const content = node.firstElementChild;
+      if (content !== null) observer?.observe(content);
+
       release.current = () => {
         node.removeEventListener("scroll", onScroll);
+        observer?.disconnect();
       };
       // A container that has only just appeared starts on its newest content,
       // which is what opening a thread should land on.

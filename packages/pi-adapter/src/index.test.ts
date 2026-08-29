@@ -318,21 +318,22 @@ describe("PiAgentRuntime naming-model boundary", () => {
     ).resolves.toEqual({ outcome: "unavailable" });
   });
 
-  it("parses automatic settings before model lookup and selects the lower-cost default-provider model", async () => {
+  it("selects the configured default model and strips additive response metadata", async () => {
     const context = await fixture();
     const getModel = vi.fn((provider: string, id: string) =>
-      provider === "test" && id === "default"
-        ? {
-            ...namingHandle(provider, id),
-            cost: { input: 2, output: 2, cacheRead: 0, cacheWrite: 0 },
-          }
-        : provider === "test" && id === "cheap"
-          ? namingHandle(provider, id)
-          : undefined,
+      provider === "test" && ["default", "cheap"].includes(id)
+        ? namingHandle(provider, id)
+        : undefined,
     );
     const completeSimple = vi.fn().mockResolvedValue({
       stopReason: "stop",
-      content: [{ type: "text", text: "Implement worktrees" }],
+      content: [
+        {
+          type: "text",
+          text: "Implement worktrees",
+          textSignature: '{"provider":"metadata"}',
+        },
+      ],
     });
     sdk.settingsCreate.mockReturnValue({
       getDefaultProvider: () => "test",
@@ -354,12 +355,41 @@ describe("PiAgentRuntime naming-model boundary", () => {
         "Do the work",
       ),
     ).resolves.toEqual({ outcome: "available", title: "Implement worktrees" });
+    expect(getModel).toHaveBeenCalledOnce();
     expect(getModel).toHaveBeenCalledWith("test", "default");
     expect(completeSimple).toHaveBeenCalledWith(
-      namingHandle("test", "cheap"),
+      namingHandle("test", "default"),
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("does not substitute another model when the configured default is unavailable", async () => {
+    const context = await fixture();
+    const getModel = vi.fn();
+    const completeSimple = vi.fn();
+    sdk.settingsCreate.mockReturnValue({
+      getDefaultProvider: () => "test",
+      getDefaultModel: () => "default",
+    });
+    sdk.modelCreate.mockResolvedValue({
+      getAvailable: vi
+        .fn()
+        .mockResolvedValue([
+          { provider: "test", id: "cheap", cost: { input: 0, output: 0 } },
+        ]),
+      getModel,
+      completeSimple,
+    });
+
+    await expect(
+      new PiAgentRuntime(context.root).suggestTitle(
+        context.project,
+        "Do the work",
+      ),
+    ).resolves.toEqual({ outcome: "unavailable" });
+    expect(getModel).not.toHaveBeenCalled();
+    expect(completeSimple).not.toHaveBeenCalled();
   });
 
   it.each([
