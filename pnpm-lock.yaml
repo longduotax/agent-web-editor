@@ -56,6 +56,9 @@ importers:
       '@pi-web/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
+      '@pi-web/codex-adapter':
+        specifier: workspace:*
+        version: link:../../packages/codex-adapter
       '@pi-web/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -160,6 +163,18 @@ importers:
       '@pi-web/contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/codex-adapter:
+    dependencies:
+      '@pi-web/agent-runtime':
+        specifier: workspace:*
+        version: link:../agent-runtime
+      '@pi-web/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/contracts:
     dependencies:

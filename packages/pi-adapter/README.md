@@ -8,8 +8,9 @@ project's configured default Pi model when that model is authenticated and
 available. It also discovers sessions for a canonical execution root, returns path-free
 session descriptors, resolves stored UUIDs through a fresh authorized listing,
 opens/creates native persistent sessions, translates active history and live Pi
-events into SDK-neutral DTOs, and owns prompt preflight, steering, abort, and
-runtime disposal. For chat images it reports selected-model/settings capability,
+events into SDK-neutral DTOs, serves that projection in authenticated bounded
+latest/older pages, and owns prompt preflight, steering, abort, and runtime
+disposal. For chat images it reports selected-model/settings capability,
 verifies source fingerprints, bounds concurrent worker-backed normalization,
 passes flat Pi image blocks to prompt or steer, projects valid native user
 images as opaque content refs, and resolves those refs without exposing a native

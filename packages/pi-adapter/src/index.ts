@@ -32,7 +32,7 @@ import type {
   RuntimeImageContent,
   TitleSuggestion,
 } from "@pi-web/agent-runtime";
-import { RuntimeFailure } from "@pi-web/agent-runtime";
+import { RuntimeFailure, TranscriptPager } from "@pi-web/agent-runtime";
 import {
   CHAT_IMAGE_MAX_BASE64_BYTES,
   CHAT_IMAGE_MAX_COUNT,
@@ -46,7 +46,9 @@ import {
   TranscriptItemSchema,
   type ChatImageId,
   type ChatImageRef,
+  type TranscriptCursor,
   type TranscriptItem,
+  type TranscriptPage,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
@@ -1021,6 +1023,7 @@ function mapEvent(event: unknown): RuntimeEvent {
 
 class PiOpenSession implements OpenRuntimeSession {
   private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly pager = new TranscriptPager();
   private readonly unsubscribe: () => void;
   private bufferedEvents: RuntimeEvent[] | null = null;
   private disposed = false;
@@ -1101,6 +1104,20 @@ class PiOpenSession implements OpenRuntimeSession {
             return preparedImages;
           });
     return { input, images };
+  }
+
+  public latestTranscriptPage(): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.latest(snapshot.transcript),
+    );
+  }
+
+  public olderTranscriptPage(
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    return this.snapshot().then((snapshot) =>
+      this.pager.older(snapshot.transcript, cursor),
+    );
   }
 
   public async prompt(

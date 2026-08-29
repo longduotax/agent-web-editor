@@ -9,6 +9,7 @@ import type {
   PromptAcceptance,
   RuntimeEvent,
 } from "@pi-web/agent-runtime";
+import { TranscriptPager } from "@pi-web/agent-runtime";
 import {
   ArchiveThreadResponseSchema,
   UnarchiveThreadResponseSchema,
@@ -21,6 +22,7 @@ import {
   StartThreadResponseSchema,
   ThreadIdSchema,
   ThreadSnapshotSchema,
+  TranscriptPageSchema,
   ThreadWorkspaceRequestSchema,
   ThreadSummarySchema,
   type ChatImageId,
@@ -28,14 +30,19 @@ import {
   type Project,
   type ProjectId,
   type Run,
+  type RuntimeKind,
   type ThreadId,
+  type AgentBackendsResponse,
+  type SessionDescriptor,
   type ThreadSnapshot,
   type ThreadSummary,
-  type TranscriptItem,
+  type TranscriptCursor,
+  type TranscriptPage,
   type WorktreeId,
 } from "@pi-web/contracts";
 import { z } from "zod";
 
+import { RuntimeRegistry } from "./runtimes.js";
 import {
   canonicalRequestHash,
   MetadataStore,
@@ -377,8 +384,16 @@ function dropTrailingStopword(text: string): string {
 export class WorkspaceService {
   private readonly runtimes = new Map<
     ThreadId,
-    { runtime: OpenRuntimeSession; unsubscribe: () => void }
+    {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    }
   >();
+  private readonly fallbackPagers = new Map<ThreadId, TranscriptPager>();
+  /** Last readable page lets a temporarily unavailable external backend stay readable. */
+  private readonly transcriptPages = new Map<ThreadId, TranscriptPage>();
+  private readonly runtimeUnavailableReasons = new Map<ThreadId, string>();
   private readonly activeThreads = new Set<ThreadId>();
   private readonly preflightPrompts = new Map<ThreadId, PendingPreflight>();
   private readonly removingProjects = new Set<ProjectId>();
@@ -391,7 +406,7 @@ export class WorkspaceService {
 
   public constructor(
     public readonly store: MetadataStore,
-    private readonly runtime: AgentRuntime,
+    private readonly adapters: RuntimeRegistry,
     public readonly broker: LiveBroker,
     private readonly terminalCleanup: { terminate(projectId: string): void } = {
       terminate: () => undefined,
@@ -423,6 +438,13 @@ export class WorkspaceService {
       record.worktree_id === null
         ? null
         : this.store.getWorktree(record.worktree_id);
+    const backendStatus = this.adapters.status(record.runtime);
+    const runtimeUnavailableReason =
+      this.runtimeUnavailableReasons.get(record.id) ??
+      (backendStatus.available
+        ? undefined
+        : (backendStatus.reason ??
+          `${record.runtime} is not available on this machine.`));
     return ThreadSummarySchema.parse({
       id: record.id,
       projectId: record.project_id,
@@ -432,7 +454,12 @@ export class WorkspaceService {
       runState: latest?.state ?? null,
       unread: this.store.isUnread(record),
       runtimeAvailable:
-        record.worktree_id === null || worktree?.state === "ready",
+        (record.worktree_id === null || worktree?.state === "ready") &&
+        runtimeUnavailableReason === undefined,
+      ...(runtimeUnavailableReason === undefined
+        ? {}
+        : { runtimeUnavailableReason }),
+      runtime: record.runtime,
       workspace:
         worktree === null
           ? { mode: "shared", branchName: null, available: true }
@@ -451,6 +478,10 @@ export class WorkspaceService {
     threads: ThreadSummary[];
     diagnostics: string[];
   }> {
+    // Probe once per backend, not once per thread, before persisted thread
+    // summaries are constructed. This makes the first response after restart
+    // honest even when an external runtime disappeared while the server was down.
+    await this.adapters.availability();
     const projectResults = this.store.listProjectResults();
     const threadResults = this.store.listThreadResults();
     const projectRecords = projectResults.flatMap((result) =>
@@ -476,7 +507,10 @@ export class WorkspaceService {
   public async workspacePreflight(projectId: ProjectId) {
     const projectRoot = await this.requireProjectRoot(projectId);
     const preflight = await this.worktreeManager.preflight(projectRoot);
-    const imageInput = await inspectImageInput(this.runtime, projectRoot);
+    const imageInput = await inspectImageInput(
+      this.adapters.get("pi"),
+      projectRoot,
+    );
     return { ...preflight, imageInput };
   }
 
@@ -485,14 +519,20 @@ export class WorkspaceService {
     input: ParsedChatInput,
     workspace: z.infer<typeof ThreadWorkspaceRequestSchema>,
     idempotencyKey: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ) {
     const prompt = input.text;
     const operation = "start-thread";
     const hash = canonicalRequestHash(
       operation,
       input.images.length === 0
-        ? { projectId, prompt, workspace }
-        : { projectId, input: canonicalInput(input), workspace },
+        ? { projectId, prompt, workspace, runtime }
+        : {
+            projectId,
+            input: canonicalInput(input),
+            workspace,
+            runtime,
+          },
     );
     return await this.serialized(
       projectId,
@@ -503,7 +543,10 @@ export class WorkspaceService {
       async () => {
         const projectRoot = await this.requireProjectRoot(projectId);
         if (input.images.length > 0) {
-          const capability = await inspectImageInput(this.runtime, projectRoot);
+          const capability = await inspectImageInput(
+            this.adapters.get(runtime),
+            projectRoot,
+          );
           if (capability === "unsupported")
             throw new Error("chat_image_input_unsupported");
         }
@@ -511,6 +554,10 @@ export class WorkspaceService {
           projectId,
           idempotencyKey,
         );
+        // Do this before recording or provisioning a new creation. A registered
+        // external adapter may be installed but presently unable to start.
+        // Existing operations retain their normal idempotent recovery path.
+        if (existingCreation === null) await this.adapters.usable(runtime);
         if (existingCreation === null && workspace.mode === "worktree")
           await this.worktreeManager.authorizeBaseBranch(
             projectRoot,
@@ -520,6 +567,7 @@ export class WorkspaceService {
           projectId,
           idempotencyKey,
           requestHash: hash,
+          runtime,
           workspaceMode: workspace.mode,
           baseBranch:
             workspace.mode === "worktree" ? workspace.baseBranch : null,
@@ -540,8 +588,9 @@ export class WorkspaceService {
           try {
             if (prompt !== "")
               suggested =
-                (await this.runtime.suggestTitle?.(projectRoot, prompt)) ??
-                suggested;
+                (await this.adapters
+                  .get(creation.runtime)
+                  .suggestTitle?.(projectRoot, prompt)) ?? suggested;
           } catch {
             // Naming is optional; use the deterministic product fallback.
           }
@@ -661,11 +710,13 @@ export class WorkspaceService {
             projectId,
             idempotencyKey,
           );
-          const session = await this.runtime.create(
-            executionRoot,
-            creation.title ?? fallbackTitle(prompt),
-            creation.session_creation_id ?? undefined,
-          );
+          const session = await this.adapters
+            .get(creation.runtime)
+            .create(
+              executionRoot,
+              creation.title ?? fallbackTitle(prompt),
+              creation.session_creation_id ?? undefined,
+            );
           creation = this.store.attachCreationSession(
             projectId,
             idempotencyKey,
@@ -743,6 +794,7 @@ export class WorkspaceService {
           }
         }
         if (run === null) throw new Error("run_not_found");
+        await this.adapters.refresh(thread.runtime);
         return StartThreadResponseSchema.parse({
           thread: this.threadDto(this.requireThread(projectId, thread.id)),
           run: runDto(run),
@@ -1079,11 +1131,16 @@ export class WorkspaceService {
     projectId: ProjectId,
     title?: string,
     idempotencyKey?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
     if (idempotencyKey === undefined)
-      return await this.createThreadUnprotected(projectId, title);
+      return await this.createThreadUnprotected(projectId, title, runtime);
     const operation = "create-thread";
-    const hash = canonicalRequestHash(operation, { projectId, title });
+    const hash = canonicalRequestHash(operation, {
+      projectId,
+      title,
+      runtime,
+    });
     return await this.serialized(
       projectId,
       idempotencyKey,
@@ -1098,18 +1155,26 @@ export class WorkspaceService {
           hash,
           ThreadIdSchema,
         );
-        if (prior !== null)
+        if (prior !== null) {
+          await this.adapters.refresh(runtime);
           return this.threadDto(this.requireThread(projectId, prior));
-        const created = await this.runtime.create(
-          await this.requireProjectRoot(projectId),
-        );
+        }
+        const created = await (
+          await this.adapters.usable(runtime)
+        ).create(await this.requireProjectRoot(projectId));
         const receipt = this.store.withReceipt(
           projectId,
           idempotencyKey,
           operation,
           hash,
           ThreadIdSchema,
-          () => this.store.createThread(projectId, created.sessionId, title).id,
+          () =>
+            this.store.createThread(
+              projectId,
+              runtime,
+              created.sessionId,
+              title,
+            ).id,
         );
         return this.threadDto(this.requireThread(projectId, receipt.response));
       },
@@ -1119,12 +1184,13 @@ export class WorkspaceService {
   private async createThreadUnprotected(
     projectId: ProjectId,
     title?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
-    const created = await this.runtime.create(
-      await this.requireProjectRoot(projectId),
-    );
+    const created = await (
+      await this.adapters.usable(runtime)
+    ).create(await this.requireProjectRoot(projectId));
     return this.threadDto(
-      this.store.createThread(projectId, created.sessionId, title),
+      this.store.createThread(projectId, runtime, created.sessionId, title),
     );
   }
 
@@ -1133,6 +1199,7 @@ export class WorkspaceService {
     sessionId: string,
     title?: string,
     idempotencyKey?: string,
+    runtime: RuntimeKind = this.adapters.defaultKind,
   ): Promise<ThreadSummary> {
     if (idempotencyKey !== undefined) {
       const operation = "import-thread";
@@ -1140,6 +1207,7 @@ export class WorkspaceService {
         projectId,
         sessionId,
         title,
+        runtime,
       });
       return await this.serialized(
         projectId,
@@ -1155,11 +1223,13 @@ export class WorkspaceService {
             hash,
             ThreadIdSchema,
           );
-          if (prior !== null)
+          if (prior !== null) {
+            await this.adapters.refresh(runtime);
             return this.threadDto(this.requireThread(projectId, prior));
-          const sessions = await this.runtime.discover(
-            await this.requireProjectRoot(projectId),
-          );
+          }
+          const sessions = await (
+            await this.adapters.usable(runtime)
+          ).discover(await this.requireProjectRoot(projectId));
           const descriptor = sessions.sessions.find(
             (session) => session.id === sessionId,
           );
@@ -1173,6 +1243,7 @@ export class WorkspaceService {
             () =>
               this.store.createThread(
                 projectId,
+                runtime,
                 descriptor.id,
                 title ??
                   descriptor.name ??
@@ -1185,9 +1256,9 @@ export class WorkspaceService {
         },
       );
     }
-    const sessions = await this.runtime.discover(
-      await this.requireProjectRoot(projectId),
-    );
+    const sessions = await (
+      await this.adapters.usable(runtime)
+    ).discover(await this.requireProjectRoot(projectId));
     const descriptor = sessions.sessions.find(
       (session) => session.id === sessionId,
     );
@@ -1195,6 +1266,7 @@ export class WorkspaceService {
     return this.threadDto(
       this.store.createThread(
         projectId,
+        runtime,
         descriptor.id,
         title ??
           descriptor.name ??
@@ -1203,22 +1275,48 @@ export class WorkspaceService {
     );
   }
 
+  public async agentBackends(): Promise<AgentBackendsResponse> {
+    return {
+      defaultRuntime: this.adapters.defaultKind,
+      backends: await this.adapters.availability(),
+    };
+  }
+
   public async discoverSessions(projectId: ProjectId) {
-    const result = await this.runtime.discover(
-      await this.requireProjectRoot(projectId),
-    );
+    const projectRoot = await this.requireProjectRoot(projectId);
+    // A session identifier is only unique within its backend, so "already
+    // imported" is keyed by both (AGB-01, AGB-09).
     const imported = new Set(
       this.store
         .listThreads(projectId, { includeArchived: true })
-        .map((thread) => thread.runtime_session_id),
+        .map((thread) => `${thread.runtime}:${thread.runtime_session_id}`),
     );
-    return {
-      sessions: result.sessions.map((session) => ({
-        ...session,
-        imported: imported.has(session.id),
-      })),
-      diagnostics: result.diagnostics,
-    };
+    const sessions: (SessionDescriptor & {
+      runtime: RuntimeKind;
+      imported: boolean;
+    })[] = [];
+    const diagnostics: string[] = [];
+    // Every installed backend is listed, each labelled with the one that owns
+    // it. One backend being unusable must not hide the others.
+    for (const kind of this.adapters.kinds()) {
+      try {
+        const result = await this.adapters.get(kind).discover(projectRoot);
+        for (const session of result.sessions)
+          sessions.push({
+            ...session,
+            runtime: kind,
+            imported: imported.has(`${kind}:${session.id}`),
+          });
+        diagnostics.push(...result.diagnostics);
+      } catch (error) {
+        diagnostics.push(
+          `${kind === "codex" ? "Codex" : "Pi"} sessions could not be listed: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+      }
+    }
+    return { sessions, diagnostics };
   }
 
   public async archiveThread(
@@ -1284,15 +1382,21 @@ export class WorkspaceService {
 
   // Archived threads are hidden from every other listing, so restoring one
   // needs its own read path. Ordered like the sidebar's live list.
-  public listArchivedThreads(projectId: ProjectId): ThreadSummary[] {
+  public async listArchivedThreads(
+    projectId: ProjectId,
+  ): Promise<ThreadSummary[]> {
     this.requireProject(projectId);
-    return this.store
+    const archived = this.store
       .listThreadResults(projectId, { includeArchived: true })
       .flatMap((result) =>
-        result.record?.archived_at == null
-          ? []
-          : [this.threadDto(result.record)],
+        result.record?.archived_at == null ? [] : [result.record],
       );
+    await Promise.all(
+      [...new Set(archived.map((thread) => thread.runtime))].map(
+        async (runtime) => await this.adapters.refresh(runtime),
+      ),
+    );
+    return archived.map((thread) => this.threadDto(thread));
   }
 
   // The inverse of archiveThread, and the reason archive is no longer a
@@ -1389,15 +1493,56 @@ export class WorkspaceService {
     const current = this.runtimes.get(thread.id);
     if (current !== undefined) return current.runtime;
     const context = await this.executionContexts.resolve(thread);
-    const runtime = await this.runtime.open(
-      context.executionRoot,
-      thread.runtime_session_id,
-    );
+    let runtime: OpenRuntimeSession;
+    try {
+      runtime = await (
+        await this.adapters.usable(thread.runtime)
+      ).open(context.executionRoot, thread.runtime_session_id);
+    } catch (error) {
+      this.runtimeUnavailableReasons.set(
+        thread.id,
+        error instanceof Error
+          ? error.message
+          : "The native agent session is unavailable or malformed.",
+      );
+      throw error;
+    }
+    this.runtimeUnavailableReasons.delete(thread.id);
     const unsubscribe = runtime.subscribe((event) => {
       this.onRuntimeEvent(thread, event);
     });
-    this.runtimes.set(thread.id, { runtime, unsubscribe });
+    const owner: {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    } = {
+      runtime,
+      unsubscribe,
+      unsubscribeUnavailable: () => undefined,
+    };
+    owner.unsubscribeUnavailable =
+      runtime.onUnavailable?.(() => {
+        this.invalidateRuntime(thread.id, owner);
+      }) ?? (() => undefined);
+    this.runtimes.set(thread.id, owner);
     return runtime;
+  }
+
+  private invalidateRuntime(
+    threadId: ThreadId,
+    owner: {
+      runtime: OpenRuntimeSession;
+      unsubscribe: () => void;
+      unsubscribeUnavailable: () => void;
+    },
+  ): void {
+    // An old session can report its delayed disconnect after a fresh one has
+    // been opened. Only its own cache entry may be evicted.
+    if (this.runtimes.get(threadId) !== owner) return;
+    this.runtimes.delete(threadId);
+    owner.unsubscribe();
+    owner.unsubscribeUnavailable();
+    void owner.runtime.dispose().catch(() => undefined);
   }
 
   private onRuntimeEvent(thread: ThreadRecord, event: RuntimeEvent): void {
@@ -1415,35 +1560,61 @@ export class WorkspaceService {
     const thread = this.requireThread(projectId, threadId);
     const project = this.requireProject(projectId);
     this.store.setLastOpenedThread(projectId, threadId);
-    let transcript: TranscriptItem[] = [];
+    let transcriptPage: TranscriptPage = {
+      items: [],
+      olderCursor: null,
+      atLatest: true,
+    };
     let imageInput: ImageInputCapability = "unknown";
     const diagnostics: string[] = [];
     try {
       const runtime = await this.openRuntime(thread);
-      const native = await runtime.snapshot();
-      transcript = native.transcript;
-      imageInput = native.imageInput ?? "unknown";
-      diagnostics.push(...native.diagnostics);
-    } catch {
-      diagnostics.push("The native agent session is unavailable or malformed.");
+      let nativeSnapshot:
+        Awaited<ReturnType<OpenRuntimeSession["snapshot"]>> | undefined;
+      if (runtime.readImage !== undefined) {
+        nativeSnapshot = await runtime.snapshot();
+        imageInput = nativeSnapshot.imageInput ?? "unknown";
+        diagnostics.push(...nativeSnapshot.diagnostics);
+      } else imageInput = "unsupported";
+      if (runtime.latestTranscriptPage !== undefined)
+        transcriptPage = await runtime.latestTranscriptPage();
+      else {
+        nativeSnapshot ??= await runtime.snapshot();
+        const pager = this.fallbackPager(threadId);
+        transcriptPage = pager.latest(nativeSnapshot.transcript);
+        diagnostics.push(...nativeSnapshot.diagnostics);
+      }
+      this.transcriptPages.set(threadId, transcriptPage);
+      this.runtimeUnavailableReasons.delete(threadId);
+      this.adapters.recordAvailable(thread.runtime);
+    } catch (error) {
+      transcriptPage = this.transcriptPages.get(threadId) ?? transcriptPage;
+      const reason =
+        error instanceof Error
+          ? error.message
+          : "The native agent session is unavailable or malformed.";
+      this.runtimeUnavailableReasons.set(threadId, reason);
+      diagnostics.push(reason);
     }
     const latest = this.store.latestRun(threadId);
     const current = latest?.state === "running" ? latest : null;
     const cursor = this.broker.cursor(threadId);
     return ThreadSnapshotSchema.parse({
-      version: 1,
+      version: 2,
       project: await this.projectDto(project),
       thread: this.threadDto(thread),
-      transcript,
+      transcriptPage,
       currentRun: current === null ? null : runDto(current),
       lastRun: latest === null ? null : runDto(latest),
       epoch: cursor.epoch,
       highWaterSequence: cursor.sequence,
       capabilities: {
-        prompt: current === null,
-        steer: current !== null,
-        stop: current !== null,
-        imageInput,
+        prompt:
+          current === null && !this.runtimeUnavailableReasons.has(threadId),
+        steer:
+          current !== null && !this.runtimeUnavailableReasons.has(threadId),
+        stop: current !== null && !this.runtimeUnavailableReasons.has(threadId),
+        ...(imageInput === "unknown" ? {} : { imageInput }),
       },
       diagnostics,
     });
@@ -1465,6 +1636,35 @@ export class WorkspaceService {
         throw error;
       throw new Error("chat_image_not_found", { cause: error });
     }
+  }
+
+  public async olderTranscriptPage(
+    projectId: ProjectId,
+    threadId: ThreadId,
+    cursor: TranscriptCursor,
+  ): Promise<TranscriptPage> {
+    const thread = this.requireThread(projectId, threadId);
+    const runtime = await this.openRuntime(thread);
+    const page =
+      runtime.olderTranscriptPage !== undefined
+        ? TranscriptPageSchema.parse(await runtime.olderTranscriptPage(cursor))
+        : TranscriptPageSchema.parse(
+            this.fallbackPager(threadId).older(
+              (await runtime.snapshot()).transcript,
+              cursor,
+            ),
+          );
+    this.runtimeUnavailableReasons.delete(threadId);
+    this.adapters.recordAvailable(thread.runtime);
+    return page;
+  }
+
+  private fallbackPager(threadId: ThreadId): TranscriptPager {
+    const existing = this.fallbackPagers.get(threadId);
+    if (existing !== undefined) return existing;
+    const pager = new TranscriptPager();
+    this.fallbackPagers.set(threadId, pager);
+    return pager;
   }
 
   public async prompt(
@@ -1792,21 +1992,26 @@ export class WorkspaceService {
   }
 
   public async disposeThread(threadId: ThreadId): Promise<void> {
+    this.fallbackPagers.delete(threadId);
     const owner = this.runtimes.get(threadId);
     if (owner === undefined) return;
     this.runtimes.delete(threadId);
     owner.unsubscribe();
+    owner.unsubscribeUnavailable();
     await owner.runtime.dispose();
   }
 
   public async close(): Promise<void> {
     const owners = [...this.runtimes.values()];
     this.runtimes.clear();
+    this.fallbackPagers.clear();
     await Promise.allSettled(
       owners.map(async (owner) => {
         owner.unsubscribe();
+        owner.unsubscribeUnavailable();
         await owner.runtime.dispose();
       }),
     );
+    await this.adapters.close();
   }
 }

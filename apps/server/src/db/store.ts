@@ -19,12 +19,14 @@ import {
   GitBranchSchema,
   RunIdSchema,
   RunStateSchema,
+  RuntimeKindSchema,
   ThreadIdSchema,
   TimestampSchema,
   WorktreeIdSchema,
   type ProjectId,
   type RunId,
   type RunState,
+  type RuntimeKind,
   type ThreadId,
   type WorktreeId,
 } from "@pi-web/contracts";
@@ -45,6 +47,7 @@ const threadRowSchema = z.object({
   id: ThreadIdSchema,
   project_id: ProjectIdSchema,
   title: z.string().min(1).max(200),
+  runtime: RuntimeKindSchema,
   runtime_session_id: z.uuid(),
   created_at: TimestampSchema,
   last_activity_at: TimestampSchema,
@@ -97,6 +100,7 @@ const creationRowSchema = z
       .nullable(),
     session_creation_id: z.uuid().nullable(),
     worktree_id: WorktreeIdSchema.nullable(),
+    runtime: RuntimeKindSchema,
     runtime_session_id: z.uuid().nullable(),
     thread_id: ThreadIdSchema.nullable(),
     run_id: RunIdSchema.nullable(),
@@ -194,6 +198,9 @@ const sqliteAggregateCountSchema = z.object({
   count: z.number().int().nonnegative(),
 });
 const sqliteSchemaVersionSchema = z.number().int().nonnegative();
+// `PRAGMA foreign_key_check` reports one row per violation and nothing at all
+// when the database is consistent, so an empty array is the only safe outcome.
+const sqliteForeignKeyCheckSchema = z.array(z.unknown());
 
 export type ProjectRecord = z.infer<typeof projectRowSchema>;
 export type ThreadRecord = z.infer<typeof threadRowSchema>;
@@ -375,7 +382,7 @@ export class MetadataStore {
       const schemaVersion = sqliteSchemaVersionSchema.parse(
         sqlite.pragma("user_version", { simple: true }),
       );
-      if (schemaVersion > 7)
+      if (schemaVersion > 8)
         throw new Error(
           "Database was created by a newer Pi Web Workspace version",
         );
@@ -484,6 +491,34 @@ export class MetadataStore {
           sqlite.exec(sql);
           sqlite.pragma("user_version = 7");
         })();
+      }
+      if (migratedSchemaVersion < 8) {
+        if (schemaVersion >= 7) await backupBefore(8);
+        const migrationPath = new URL(
+          "../../migrations/0008_thread_runtime.sql",
+          import.meta.url,
+        );
+        const sql = await readFile(migrationPath, "utf8");
+        // Widening the threads uniqueness key rebuilds the table, and SQLite
+        // only allows foreign keys to be toggled outside a transaction. The
+        // consistency check runs inside it so any violation rolls the rebuild
+        // back rather than committing a damaged schema.
+        sqlite.pragma("foreign_keys = OFF");
+        try {
+          sqlite.transaction(() => {
+            sqlite.exec(sql);
+            const violations = sqliteForeignKeyCheckSchema.parse(
+              sqlite.pragma("foreign_key_check"),
+            );
+            if (violations.length > 0)
+              throw new Error(
+                "Thread runtime migration left dangling references",
+              );
+            sqlite.pragma("user_version = 8");
+          })();
+        } finally {
+          sqlite.pragma("foreign_keys = ON");
+        }
       }
       if (process.platform !== "win32") await chmod(databasePath, 0o600);
       const store = new MetadataStore(
@@ -690,6 +725,7 @@ export class MetadataStore {
 
   public createThread(
     projectId: ProjectId,
+    runtime: RuntimeKind,
     runtimeSessionId: string,
     title?: string,
     worktreeId: WorktreeId | null = null,
@@ -699,12 +735,13 @@ export class MetadataStore {
     this.sqlite.transaction(() => {
       this.sqlite
         .prepare(
-          "INSERT INTO threads (id, project_id, title, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, worktree_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+          "INSERT INTO threads (id, project_id, title, runtime, runtime_session_id, created_at, last_activity_at, last_completed_run_id, last_viewed_completed_run_id, worktree_id) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
         )
         .run(
           id,
           projectId,
           title ?? "New thread",
+          runtime,
           runtimeSessionId,
           now,
           now,
@@ -719,14 +756,15 @@ export class MetadataStore {
 
   public getThreadByRuntimeSession(
     projectId: ProjectId,
+    runtime: RuntimeKind,
     runtimeSessionId: string,
     options: { includeArchived?: boolean } = {},
   ): ThreadRecord | null {
     const row = this.sqlite
       .prepare(
-        `SELECT * FROM threads WHERE project_id = ? AND runtime_session_id = ?${options.includeArchived ? "" : " AND archived_at IS NULL"}`,
+        `SELECT * FROM threads WHERE project_id = ? AND runtime = ? AND runtime_session_id = ?${options.includeArchived ? "" : " AND archived_at IS NULL"}`,
       )
-      .get(projectId, runtimeSessionId);
+      .get(projectId, runtime, runtimeSessionId);
     return row === undefined
       ? null
       : parseRow(threadRowSchema, row, "thread", runtimeSessionId);
@@ -1046,6 +1084,7 @@ export class MetadataStore {
     workspaceMode: "shared" | "worktree";
     baseBranch: string | null;
     sourceChanges: "none" | "tracked_and_untracked" | null;
+    runtime: RuntimeKind;
   }): ThreadCreationRecord {
     const existing = this.getThreadCreation(
       input.projectId,
@@ -1061,7 +1100,7 @@ export class MetadataStore {
     const now = this.now();
     this.sqlite
       .prepare(
-        "INSERT INTO thread_creation_operations (id, project_id, idempotency_key, request_hash, state, workspace_mode, base_branch, source_changes, title, slug, worktree_id, runtime_session_id, thread_id, run_id, prompt_command_id, initial_prompt_dispatch_id, initial_prompt_dispatch_state, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, 'naming', ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, 'none', ?, ?, NULL, NULL)",
+        "INSERT INTO thread_creation_operations (id, project_id, idempotency_key, request_hash, state, workspace_mode, base_branch, source_changes, runtime, title, slug, worktree_id, runtime_session_id, thread_id, run_id, prompt_command_id, initial_prompt_dispatch_id, initial_prompt_dispatch_state, created_at, updated_at, failure_code, failure_message) VALUES (?, ?, ?, ?, 'naming', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, 'none', ?, ?, NULL, NULL)",
       )
       .run(
         id,
@@ -1071,6 +1110,7 @@ export class MetadataStore {
         input.workspaceMode,
         input.baseBranch,
         input.sourceChanges,
+        input.runtime,
         promptCommandId,
         now,
         now,
@@ -1276,12 +1316,19 @@ export class MetadataStore {
         );
       const existing = this.getThreadByRuntimeSession(
         projectId,
+        creation.runtime,
         runtimeSessionId,
         { includeArchived: true },
       );
       const thread =
         existing ??
-        this.createThread(projectId, runtimeSessionId, title, worktreeId);
+        this.createThread(
+          projectId,
+          creation.runtime,
+          runtimeSessionId,
+          title,
+          worktreeId,
+        );
       this.sqlite
         .prepare(
           "UPDATE thread_creation_operations SET thread_id = ?, state = 'thread_created', updated_at = ? WHERE project_id = ? AND idempotency_key = ?",

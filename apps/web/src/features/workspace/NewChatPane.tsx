@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectId, ThreadId } from "@pi-web/contracts";
+import type { ProjectId, RuntimeKind, ThreadId } from "@pi-web/contracts";
 
 import {
   commandId,
+  getAgentBackends,
   getWorkspace,
   getWorkspacePreflight,
   startThread,
 } from "../../api/client.js";
 import { ActivityStep } from "../../components/Activity.js";
+import {
+  readBackendChoice,
+  resolveDefaultBackend,
+} from "../settings/backendPreferences.js";
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Markdown } from "../../components/Markdown.js";
 import {
@@ -167,6 +172,11 @@ export interface NewChatPaneProps {
   onThreadStarted(threadId: ThreadId): void;
 }
 
+const AGENT_OPTIONS: readonly { value: RuntimeKind; label: string }[] = [
+  { value: "codex", label: "Codex" },
+  { value: "pi", label: "Pi" },
+];
+
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
   const draftKey = newChatDraftKey(projectId, paneId);
@@ -185,15 +195,47 @@ export function NewChatPane(props: NewChatPaneProps) {
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
   const [creationKey, setCreationKey] = useState(commandId);
+  const backends = useQuery({
+    queryKey: ["agent-backends"],
+    queryFn: getAgentBackends,
+  });
+  // Non-sticky by design: the composer opens on the resolved default every
+  // time, so an incidental one-off pick never becomes a standing choice.
+  const backendChoice = readBackendChoice();
+  const resolvedDefault = resolveDefaultBackend(
+    backendChoice,
+    backends.data?.defaultRuntime,
+  );
+  const [runtime, setRuntime] = useState<RuntimeKind | null>(null);
+  const backendFor = (kind: RuntimeKind) =>
+    backends.data?.backends.find((backend) => backend.kind === kind);
+  const resolvedDefaultBackend = backendFor(resolvedDefault);
+  const fallbackRuntime = backends.data?.backends.find(
+    (backend) => backend.available,
+  )?.kind;
+  // A default is a policy, not an explicit one-off choice. If that policy
+  // names an unavailable backend, pick the first server-advertised available
+  // backend. An explicit choice stays visible so its refusal is explainable.
+  const selectedRuntime =
+    runtime ??
+    (resolvedDefaultBackend?.available === false
+      ? (fallbackRuntime ?? resolvedDefault)
+      : resolvedDefault);
+  const selectedBackend = backendFor(selectedRuntime);
+  const selectedUnavailable = selectedBackend?.available === false;
+  const selectedUnavailableReason =
+    selectedBackend?.reason ?? "This agent backend is unavailable.";
+  const agentLabel = selectedRuntime === "codex" ? "Codex" : "Pi";
+  const imageInputCapability =
+    selectedRuntime === "pi"
+      ? (preflight.data?.imageInput ?? "unknown")
+      : "unsupported";
   const [text, setText] = useState(() => readDraft(draftKey));
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
-  const attachments = useChatAttachments(
-    preflight.data?.imageInput ?? "unknown",
-    () => {
-      props.onFocus();
-      textareaRef.current?.focus();
-    },
-  );
+  const attachments = useChatAttachments(imageInputCapability, () => {
+    props.onFocus();
+    textareaRef.current?.focus();
+  });
   const attachmentKey = attachments.images.map((image) => image.id).join(":");
   const previousAttachmentKey = useRef(attachmentKey);
   useEffect(() => {
@@ -247,6 +289,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                 : {}),
             },
         creationKey,
+        runtime === null &&
+          backendChoice === "follow-machine" &&
+          backends.data === undefined
+          ? undefined
+          : selectedRuntime,
         attachments.files,
       ),
     onSuccess: async (result) => {
@@ -271,7 +318,7 @@ export function NewChatPane(props: NewChatPaneProps) {
     // the unchanged `creationKey` deduplicated it server-side -- but the
     // composer is cleared now, so typing again regenerates the key and a
     // second Enter would create a second thread and a second git worktree.
-    if (create.isPending) return;
+    if (create.isPending || selectedUnavailable) return;
     if (
       (value.trim() === "" && attachments.images.length === 0) ||
       (mode === "worktree" &&
@@ -312,10 +359,11 @@ export function NewChatPane(props: NewChatPaneProps) {
         elapsed={null}
         title="New chat"
         projectLabel={project?.displayName ?? ""}
+        runtime={null}
         focused={focused}
         detail={
           <span className="pane-meta">
-            Pick where Pi runs, then describe the work.
+            Pick where {agentLabel} runs, then describe the work.
           </span>
         }
         onSplit={() => {
@@ -396,14 +444,14 @@ export function NewChatPane(props: NewChatPaneProps) {
                 <dt>New worktree</dt>
                 <dd>
                   A second checkout of this project in its own directory, cut
-                  from the base branch you pick. Pi&apos;s edits never touch the
-                  files you have open.
+                  from the base branch you pick. {agentLabel}&apos;s edits never
+                  touch the files you have open.
                 </dd>
                 <dt>Local checkout</dt>
                 <dd>
-                  The directory you added. Pi writes to the same files you have
-                  open, on the branch you have checked out. Nothing is copied
-                  first and there is no undo.
+                  The directory you added. {agentLabel} writes to the same files
+                  you have open, on the branch you have checked out. Nothing is
+                  copied first and there is no undo.
                 </dd>
                 <dt>Clean start</dt>
                 <dd>
@@ -521,6 +569,35 @@ export function NewChatPane(props: NewChatPaneProps) {
           )}
           <div className="new-chat-toolbar" aria-label="New chat configuration">
             <label>
+              <span className="sr-only">Agent</span>
+              <select
+                aria-label="Agent"
+                value={selectedRuntime}
+                onChange={(event) => {
+                  setRuntime(event.target.value === "pi" ? "pi" : "codex");
+                  setCreationKey(commandId());
+                }}
+              >
+                {AGENT_OPTIONS.map((option) => {
+                  const backend = backends.data?.backends.find(
+                    (entry) => entry.kind === option.value,
+                  );
+                  const unusable = backend !== undefined && !backend.available;
+                  return (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={unusable}
+                    >
+                      {unusable
+                        ? `${option.label} — ${backend.reason ?? "unavailable"}`
+                        : option.label}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label>
               <span className="sr-only">Execution location</span>
               <select
                 aria-label="Execution location"
@@ -630,6 +707,11 @@ export function NewChatPane(props: NewChatPaneProps) {
                 {preflight.data.unavailableReason}
               </p>
             )}
+          {selectedUnavailable && (
+            <p className="new-chat-note" role="alert">
+              {selectedUnavailableReason}
+            </p>
+          )}
           {mode === "worktree" && sourceChanges === "none" && (
             <p className="new-chat-note">
               Starts from committed {baseBranch || "HEAD"}. Local changes are
@@ -653,30 +735,25 @@ export function NewChatPane(props: NewChatPaneProps) {
             </div>
           )}
           {mode === "shared" && (
-            // The old note read "Pi will work directly in the existing
-            // checkout and see its current files." Every word of that was
-            // about READING. Verified against the server: a shared thread
-            // resolves its execution root to the project's own canonical
-            // path (ThreadExecutionContextResolver.resolve, worktree_id
-            // null) and Pi's tools run there with the user's permissions,
-            // no approval step and no sandbox -- so it edits, creates and
-            // deletes files in the directory the user has open, on whatever
-            // branch is checked out, with their uncommitted work in place.
-            // That is the defining property of the mode and the one
-            // irreversible choice on this screen, so it is what the note
-            // says first.
-            // `status`, not `alert`: it appears in response to the user's own
-            // choice, so it should be announced, but politely -- and not
-            // `note`, which is silent on appearance.
             <p className="new-chat-note warning" role="status">
-              <strong>Pi writes to your project directory.</strong> It edits,
-              creates and deletes files in{" "}
-              {project?.displayPath ?? "this project"}
-              {currentBranch === null
-                ? ""
-                : ` on your current branch, ${currentBranch},`}{" "}
-              alongside your uncommitted changes. Nothing is copied first and
-              there is no undo.
+              {selectedRuntime === "codex" ? (
+                <>
+                  <strong>Codex starts in your project directory.</strong> It
+                  runs without application approval inside the boundary this
+                  server was configured with.
+                </>
+              ) : (
+                <>
+                  <strong>Pi writes to your project directory.</strong> It
+                  edits, creates and deletes files in{" "}
+                  {project?.displayPath ?? "this project"}
+                  {currentBranch === null
+                    ? ""
+                    : ` on your current branch, ${currentBranch},`}{" "}
+                  alongside your uncommitted changes. Nothing is copied first
+                  and there is no undo.
+                </>
+              )}
             </p>
           )}
           <div className="composer-input new-chat-input">
@@ -688,18 +765,20 @@ export function NewChatPane(props: NewChatPaneProps) {
                 attachments.addFiles(files, "picker");
               }}
               disabled={
-                create.isPending || preflight.data?.imageInput === "unsupported"
+                create.isPending || imageInputCapability === "unsupported"
               }
               unavailableExplanation={
-                preflight.data?.imageInput === "unsupported"
-                  ? "The selected Pi model or settings cannot receive images."
+                imageInputCapability === "unsupported"
+                  ? selectedRuntime === "pi"
+                    ? "The selected Pi model or settings cannot receive images."
+                    : "Codex image input is not supported. Choose Pi to attach photos."
                   : undefined
               }
             />
             <textarea
               ref={textareaRef}
               aria-label="First message"
-              placeholder={`Ask Pi to work in ${project?.displayName ?? "this project"}…`}
+              placeholder={`Ask ${agentLabel} to work in ${project?.displayName ?? "this project"}…`}
               rows={1}
               autoFocus
               value={text}
@@ -749,6 +828,7 @@ export function NewChatPane(props: NewChatPaneProps) {
                 aria-label="Create chat and send"
                 disabled={
                   create.isPending ||
+                  selectedUnavailable ||
                   (text.trim() === "" && attachments.images.length === 0)
                 }
               >

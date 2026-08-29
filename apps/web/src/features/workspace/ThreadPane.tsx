@@ -17,12 +17,14 @@ import {
   type ThreadId,
   type ThreadSnapshot,
   type TranscriptItem,
+  type TranscriptPage,
 } from "@pi-web/contracts";
 
 import {
   ApiClientError,
   commandId,
   getChatImage,
+  getOlderTranscriptPage,
   getSnapshot,
   getWorkspace,
   markViewed,
@@ -53,7 +55,7 @@ import {
   type LiveTurn,
   type PendingSteer,
 } from "./liveTranscript.js";
-import { PaneHeader } from "./PaneHeader.js";
+import { BACKEND_LABEL, PaneHeader } from "./PaneHeader.js";
 import {
   deriveRunStatus,
   elapsedLabel,
@@ -172,7 +174,9 @@ function useLive(
       // pane's render is not.
       const cached = queryClient.getQueryData<ThreadSnapshot>(queryKey);
       const userMessagesNow =
-        cached === undefined ? 0 : countAllUserMessages(cached.transcript);
+        cached === undefined
+          ? 0
+          : countAllUserMessages(cached.transcriptPage.items);
       setLiveTurn((current) =>
         batch.reduce(
           (turn, item) => reduceLiveTurn(turn, item, userMessagesNow),
@@ -431,19 +435,80 @@ function TranscriptImage({
   );
 }
 
+function pageKey(page: TranscriptPage): string {
+  return `${page.items[0]?.id ?? "empty"}:${page.items.at(-1)?.id ?? "empty"}:${String(page.items.length)}`;
+}
+
 function Transcript({
+  projectId,
+  threadId,
   snapshot,
   items,
   diagnostic,
   scrollRef,
+  resetToLatest,
+  onLatestChange,
 }: {
+  projectId: ProjectId;
+  threadId: ThreadId;
   snapshot: ThreadSnapshot;
   items: readonly TranscriptItem[];
   diagnostic: LiveDiagnostic | null;
   scrollRef: (node: HTMLDivElement | null) => void;
+  resetToLatest: number;
+  onLatestChange: (atLatest: boolean) => void;
 }) {
+  const [pages, setPages] = useState<TranscriptPage[]>([
+    snapshot.transcriptPage,
+  ]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const handledReset = useRef(0);
+  const latestKey = pageKey(snapshot.transcriptPage);
+
+  useEffect(() => {
+    setPages([snapshot.transcriptPage]);
+    setHistoryError(null);
+  }, [snapshot.thread.id]);
+
+  useEffect(() => {
+    setPages((current) => {
+      const latestIndex = current.findIndex((page) => page.atLatest);
+      if (latestIndex < 0) return current;
+      // An unavailable backend cannot authoritatively replace history with an
+      // empty page: retain the page this pane already obtained until it can
+      // reopen, while still showing the availability diagnostic.
+      if (
+        !snapshot.thread.runtimeAvailable &&
+        snapshot.transcriptPage.items.length === 0 &&
+        current[latestIndex]?.items.length !== 0
+      )
+        return current;
+      const next = [...current];
+      next[latestIndex] = snapshot.transcriptPage;
+      return next;
+    });
+  }, [latestKey, snapshot.transcriptPage]);
+
+  const showingLatest = pages.some((page) => page.atLatest);
+  useEffect(() => {
+    onLatestChange(showingLatest);
+  }, [onLatestChange, showingLatest]);
+  useEffect(() => {
+    if (resetToLatest === handledReset.current) return;
+    handledReset.current = resetToLatest;
+    setPages([snapshot.transcriptPage]);
+  }, [resetToLatest, snapshot.transcriptPage]);
+  const renderedItems = displayTranscript([
+    ...pages.filter((page) => !page.atLatest).flatMap((page) => page.items),
+    ...(showingLatest ? items : []),
+  ]).filter(
+    (item, index, all) =>
+      all.findIndex((candidate) => candidate.id === item.id) === index,
+  );
   const running = snapshot.currentRun?.state === "running";
-  const groups = groupTranscriptItems(items);
+  const groups = groupTranscriptItems(renderedItems);
   // The newest batch of steps stays open for the whole run. Keying "live" to
   // the last group of any kind made a finished batch snap shut the moment the
   // assistant started narrating after it, which is a layout jump mid-run.
@@ -451,14 +516,86 @@ function Transcript({
     (last, group, index) => (group.kind === "tool-run" ? index : last),
     -1,
   );
+  const oldestCursor = pages[0]?.olderCursor ?? null;
+
+  const loadEarlier = async () => {
+    if (oldestCursor === null || loadingOlder) return;
+    setLoadingOlder(true);
+    setHistoryError(null);
+    const element = elementRef.current;
+    const previousHeight = element?.scrollHeight ?? 0;
+    const previousTop = element?.scrollTop ?? 0;
+    try {
+      const page = await getOlderTranscriptPage(
+        projectId,
+        threadId,
+        oldestCursor,
+      );
+      // Keep one contiguous browser window. Once it is full, discard its
+      // newest edge (including the latest page) rather than a page in the
+      // middle; Jump to latest restores that deliberately omitted edge.
+      setPages((current) => [page, ...current].slice(0, 5));
+      requestAnimationFrame(() => {
+        if (element !== null)
+          element.scrollTop =
+            previousTop + element.scrollHeight - previousHeight;
+      });
+    } catch (error) {
+      if (
+        error instanceof ApiClientError &&
+        error.code === "stale_transcript"
+      ) {
+        setPages([snapshot.transcriptPage]);
+        setHistoryError(
+          "Conversation history changed, so the view returned to the latest messages.",
+        );
+      } else
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Earlier messages could not be loaded.",
+        );
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
   return (
-    <div className="transcript" aria-label="Conversation" ref={scrollRef}>
+    <div
+      className="transcript"
+      aria-label="Conversation"
+      ref={(node) => {
+        elementRef.current = node;
+        scrollRef(node);
+      }}
+    >
       <div className="transcript-column">
-        {items.length === 0 && (
+        {oldestCursor !== null && (
+          <button
+            type="button"
+            className="history-page-control"
+            disabled={loadingOlder}
+            onClick={() => void loadEarlier()}
+          >
+            {loadingOlder
+              ? "Loading earlier messages…"
+              : "Load earlier messages"}
+          </button>
+        )}
+        {historyError !== null && (
+          <p className="diagnostic warning" role="alert">
+            {historyError}{" "}
+            <button type="button" onClick={() => void loadEarlier()}>
+              Retry
+            </button>
+          </p>
+        )}
+        {renderedItems.length === 0 && (
           <div className="empty conversation-empty">
             <strong>No messages yet</strong>
             <span>
-              Ask Pi to inspect, implement, or review something in this project.
+              Ask {BACKEND_LABEL[snapshot.thread.runtime]} to inspect,
+              implement, or review something in this project.
             </span>
           </div>
         )}
@@ -565,7 +702,6 @@ export function Composer({
   onSteered,
   onSent,
   onFocus,
-  restoreDraft,
 }: {
   projectId: ProjectId;
   threadId: ThreadId;
@@ -590,18 +726,6 @@ export function Composer({
   /** Anything was sent: re-pin the transcript to the bottom. */
   onSent?: (() => void) | undefined;
   onFocus?: (() => void) | undefined;
-  /**
-   * A token whose identity changes when the pane has written something back
-   * into this thread's draft — an undelivered steer handed back after a
-   * stopped run. The composer re-reads its draft when it changes.
-   *
-   * This used to be a `key` on the composer, which remounted it to make the
-   * new draft visible. A remount drops focus and the caret, so a reader who
-   * was already typing when a stopped run handed a steer back had their
-   * cursor thrown into a textarea they had not asked for. Re-reading in
-   * place keeps both, and keeps the merge itself in one place (the pane).
-   */
-  restoreDraft?: { token: number; images?: readonly File[] } | undefined;
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState(() => readDraft(`pi-draft:${threadId}`));
@@ -621,6 +745,7 @@ export function Composer({
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
+  const runtimeUnavailable = !snapshot.thread.runtimeAvailable;
   // Stop used to be `void stop(...).then(...)` with no rejection handler: a
   // Stop the server refused produced an unhandled promise rejection in the
   // console and NOTHING on screen, so the run went on running under a button
@@ -660,8 +785,8 @@ export function Composer({
       // `/`-prefixed steer before storing it, and the count of ALL user
       // messages is the only baseline that still means something then.
       const baseline = {
-        priorCopies: countUserMessages(snapshot.transcript, sent),
-        priorUserMessages: countAllUserMessages(snapshot.transcript),
+        priorCopies: countUserMessages(snapshot.transcriptPage.items, sent),
+        priorUserMessages: countAllUserMessages(snapshot.transcriptPage.items),
       };
       const result =
         attachments.files.length === 0
@@ -689,27 +814,22 @@ export function Composer({
   useEffect(() => {
     writeDraft(`pi-draft:${threadId}`, text);
   }, [text, threadId]);
-  // The pane has merged something into the stored draft. Read it rather than
-  // being told it, so storage and the box cannot disagree about what the
-  // reader is now holding.
-  // Re-reading what the `useState` initialiser already read is a no-op, so
-  // no guard is needed for the mount where a token is already in place.
-  useEffect(() => {
-    if (restoreDraft === undefined) return;
-    setText(readDraft(`pi-draft:${threadId}`));
-    if ((restoreDraft.images?.length ?? 0) > 0)
-      attachments.addFiles(restoreDraft.images ?? [], "drop");
-  }, [restoreDraft, threadId, attachments.addFiles]);
-
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (text.trim() === "" && attachments.images.length === 0) return;
+    if (
+      runtimeUnavailable ||
+      (text.trim() === "" && attachments.images.length === 0)
+    )
+      return;
     // Before the request, not after it: sending is the moment the reader
     // expects to be taken to the bottom, and waiting for the response would
     // leave them staring at old history for the length of a round trip.
     onSent?.();
     mutation.mutate();
   };
+  // The composer names the agent that will actually read the message; a Codex
+  // chat inviting you to "Ask Pi" would be simply wrong.
+  const agentLabel = BACKEND_LABEL[snapshot.thread.runtime];
   // A thread the server no longer serves. Retry can never clear it while the
   // thread stays archived, and "Thread was not found in this project." is
   // both written for a developer and untrue -- the thread exists.
@@ -765,7 +885,7 @@ export function Composer({
         />
         <textarea
           ref={textareaRef}
-          aria-label="Message Pi"
+          aria-label={`Message ${agentLabel}`}
           // The mode was previously visible ONLY on the submit button's
           // aria-label, i.e. after the decision to send had already been
           // made. Placeholder, hint line and the rule above them now say it
@@ -773,8 +893,8 @@ export function Composer({
           // answerable before the keystroke rather than after it.
           placeholder={
             active
-              ? "Steer this run — Pi picks it up mid-task…"
-              : "Ask Pi to work in this project…"
+              ? `Steer this run — ${agentLabel} picks it up mid-task…`
+              : `Ask ${agentLabel} to work in this project…`
           }
           rows={1}
           value={text}
@@ -835,6 +955,7 @@ export function Composer({
             aria-label={active ? "Steer current run" : "Send message"}
             title={active ? "Steer current run" : "Send message"}
             disabled={
+              runtimeUnavailable ||
               mutation.isPending ||
               (text.trim() === "" && attachments.images.length === 0)
             }
@@ -1031,7 +1152,7 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   );
   // Minted, never reused, so an echo's React key is fixed for its lifetime.
   const nextOrdinal = useRef(0);
-  const settledTranscript = snapshot.data?.transcript;
+  const settledTranscript = snapshot.data?.transcriptPage.items;
   const onSteered = useCallback(
     (
       text: string,
@@ -1109,8 +1230,17 @@ function ThreadPaneBody(props: ThreadPaneProps) {
         ? stale
         : dropSettledSteers(settledTranscript, stale);
     if (lost.length === 0) return;
-    // Do not merge the queued files into the draft: it may already have four
-    // attachments, and each steer is a separately bounded message.
+    // Keep the reader's in-memory draft and caret untouched, but preserve the
+    // lost text in the reload-safe draft as well as the explicit retry queue.
+    // Image files remain in the retry records because browser storage cannot
+    // safely or durably represent them.
+    const draftKey = `pi-draft:${threadId}`;
+    writeDraft(
+      draftKey,
+      [readDraft(draftKey), ...lost.map((steer) => steer.text)]
+        .filter((part) => part !== "")
+        .join("\n\n"),
+    );
     setUndelivered((current) => ({
       steers: [...(current?.steers ?? []), ...lost],
     }));
@@ -1165,7 +1295,11 @@ function ThreadPaneBody(props: ThreadPaneProps) {
   }${threadWorkspace.branchName === null ? "" : ` · ⑂ ${threadWorkspace.branchName}`}`;
   // The header clamps its detail line to one row, so the full text lives on
   // the tooltip rather than being lost.
-  const detailTitle = `${workspaceLabel} · ${TRUST_NOTICE}`;
+  const trustNotice =
+    snapshot.data?.thread.runtime === "codex"
+      ? "Confined execution: Codex runs without application approval, inside the boundary this server was configured with."
+      : TRUST_NOTICE;
+  const detailTitle = `${workspaceLabel} · ${trustNotice}`;
   // A failed run used to be a red dot and nothing else, and an INTERRUPTED
   // one was worse: it rendered as a green "Done" with no notice at all, so a
   // run the user cancelled was presented exactly like one that succeeded.
@@ -1190,8 +1324,13 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       const files = lost.images ?? [];
       if (currentRun?.state === "running" && currentSnapshot !== undefined) {
         const baseline = {
-          priorCopies: countUserMessages(currentSnapshot.transcript, lost.text),
-          priorUserMessages: countAllUserMessages(currentSnapshot.transcript),
+          priorCopies: countUserMessages(
+            currentSnapshot.transcriptPage.items,
+            lost.text,
+          ),
+          priorUserMessages: countAllUserMessages(
+            currentSnapshot.transcriptPage.items,
+          ),
         };
         const result =
           files.length === 0
@@ -1231,18 +1370,20 @@ function ThreadPaneBody(props: ThreadPaneProps) {
     () =>
       snapshot.data === undefined
         ? pendingSteers
-        : dropSettledSteers(snapshot.data.transcript, pendingSteers),
+        : dropSettledSteers(snapshot.data.transcriptPage.items, pendingSteers),
     [snapshot.data, pendingSteers],
   );
   const items = useMemo(() => {
     if (snapshot.data === undefined) return [];
     return displayTranscript(
       mergePendingSteers(
-        mergeLiveTurn(snapshot.data.transcript, live.turn),
+        mergeLiveTurn(snapshot.data.transcriptPage.items, live.turn),
         visibleSteers,
       ),
     );
   }, [snapshot.data, live.turn, visibleSteers]);
+  const [historyAtLatest, setHistoryAtLatest] = useState(true);
+  const [historyReset, setHistoryReset] = useState(0);
   const transcript = useStickToBottom<HTMLDivElement>(
     threadId,
     transcriptContentKey(
@@ -1269,6 +1410,7 @@ function ThreadPaneBody(props: ThreadPaneProps) {
         elapsed={elapsed}
         title={snapshot.data?.thread.title ?? "Thread"}
         projectLabel={snapshot.data?.project.displayName ?? ""}
+        runtime={snapshot.data?.thread.runtime ?? null}
         focused={focused}
         detailTitle={detailTitle}
         detail={
@@ -1276,20 +1418,24 @@ function ThreadPaneBody(props: ThreadPaneProps) {
             <span className="pane-meta">{workspaceLabel}</span>
             <span className="trust-note">
               <span className="trust-dot" aria-hidden="true" />
-              {/* The complete notice, always in the accessibility tree
-                  regardless of which visual form the pane is wide enough
-                  for. The two visible forms are hidden from it so the
-                  warning is never announced twice, and never announced in
-                  its shortened form. */}
-              <span className="sr-only">{TRUST_NOTICE}</span>
+              {/* The complete notice remains in the accessibility tree while
+                  narrow panes use a shorter visual form. */}
+              <span className="sr-only">{trustNotice}</span>
               <span aria-hidden="true">
-                <strong>Direct execution:</strong>{" "}
+                <strong>
+                  {snapshot.data?.thread.runtime === "codex"
+                    ? "Confined execution:"
+                    : "Direct execution:"}
+                </strong>{" "}
                 <span className="trust-note-long">
-                  Pi tools run with your user permissions, without application
-                  approval or an OS sandbox.
+                  {snapshot.data?.thread.runtime === "codex"
+                    ? "Codex runs without application approval, inside the boundary this server was configured with."
+                    : "Pi tools run with your user permissions, without application approval or an OS sandbox."}
                 </span>
                 <span className="trust-note-short">
-                  no sandbox, no approvals.
+                  {snapshot.data?.thread.runtime === "codex"
+                    ? "configured boundary, no approvals."
+                    : "no sandbox, no approvals."}
                 </span>
               </span>
             </span>
@@ -1337,10 +1483,14 @@ function ThreadPaneBody(props: ThreadPaneProps) {
       ) : (
         <main className="center">
           <Transcript
+            projectId={projectId}
+            threadId={threadId}
             snapshot={snapshot.data}
             items={items}
             diagnostic={live.diagnostic}
             scrollRef={transcript.attach}
+            resetToLatest={historyReset}
+            onLatestChange={setHistoryAtLatest}
           />
           {/* In normal flow between the transcript and the composer, never
               over the transcript: an overlay would hide the newest line,
@@ -1348,12 +1498,16 @@ function ThreadPaneBody(props: ThreadPaneProps) {
               from. It is the only route back during a fast run -- the
               content grows faster than a reader can scroll, so scrolling
               down by hand does not converge. */}
-          {!transcript.pinned && (
+          {(!transcript.pinned || !historyAtLatest) && (
             <div className="jump-latest">
               <button
                 type="button"
                 className="jump-latest-btn"
-                onClick={transcript.pinToBottom}
+                aria-label="Jump to latest"
+                onClick={() => {
+                  if (!historyAtLatest) setHistoryReset((value) => value + 1);
+                  requestAnimationFrame(transcript.pinToBottom);
+                }}
               >
                 ↓ Jump to latest
               </button>

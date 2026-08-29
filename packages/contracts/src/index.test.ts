@@ -15,8 +15,15 @@ import {
   SessionIdSchema,
   RelativePathSchema,
   StartThreadRequestSchema,
+  CreateThreadRequestSchema,
+  ImportThreadRequestSchema,
+  RuntimeKindSchema,
+  SessionDescriptorSchema,
+  ThreadSummarySchema,
   GitBranchSchema,
   TerminalClientFrameSchema,
+  TranscriptCursorSchema,
+  TranscriptPageSchema,
   TerminalServerFrameSchema,
   TerminalsResponseSchema,
   TERMINAL_MAX_PER_SCOPE,
@@ -430,5 +437,147 @@ describe("LiveDiagnosticSchema", () => {
       { type: "diagnostic", level: "warning" },
     ])
       expect(LiveDiagnosticSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("bounded transcript pages", () => {
+  const message = (index: number) => ({
+    id: `message-${String(index)}`,
+    kind: "message" as const,
+    role: "assistant" as const,
+    text: `message ${String(index)}`,
+    timestamp: null,
+  });
+
+  it("accepts one strict bounded chronological page", () => {
+    const cursor = TranscriptCursorSchema.parse("abcdefghijklmnop");
+    expect(
+      TranscriptPageSchema.parse({
+        items: [message(1), message(2)],
+        olderCursor: cursor,
+        atLatest: true,
+      }).items,
+    ).toHaveLength(2);
+    expect(
+      TranscriptPageSchema.safeParse({
+        items: [],
+        olderCursor: null,
+        atLatest: true,
+        nativePath: "/private/history.jsonl",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects more than 100 wire items and malformed cursors", () => {
+    expect(
+      TranscriptPageSchema.safeParse({
+        items: Array.from({ length: 101 }, (_, index) => message(index)),
+        olderCursor: null,
+        atLatest: false,
+      }).success,
+    ).toBe(false);
+    expect(TranscriptCursorSchema.safeParse("../history").success).toBe(false);
+  });
+});
+
+describe("agent backend runtime kind", () => {
+  const summary = {
+    id: threadId,
+    projectId: id,
+    title: "A chat",
+    createdAt: "2026-08-22T00:00:00.000Z",
+    lastActivityAt: "2026-08-22T00:00:00.000Z",
+    runState: null,
+    unread: false,
+    runtimeAvailable: true,
+    runtime: "codex",
+    workspace: { mode: "shared", branchName: "main", available: true },
+  };
+
+  it("accepts exactly the two supported backends", () => {
+    expect(RuntimeKindSchema.parse("pi")).toBe("pi");
+    expect(RuntimeKindSchema.parse("codex")).toBe("codex");
+    for (const value of ["claude", "PI", "", "codex ", null, 1])
+      expect(RuntimeKindSchema.safeParse(value).success).toBe(false);
+  });
+
+  it("requires a backend on every thread summary", () => {
+    expect(ThreadSummarySchema.parse(summary).runtime).toBe("codex");
+    const { runtime, ...withoutRuntime } = summary;
+    expect(runtime).toBe("codex");
+    expect(ThreadSummarySchema.safeParse(withoutRuntime).success).toBe(false);
+    expect(
+      ThreadSummarySchema.safeParse({ ...summary, runtime: "claude" }).success,
+    ).toBe(false);
+  });
+
+  it("treats the backend as optional when starting a chat", () => {
+    const request = {
+      prompt: "Start on Codex",
+      workspace: { mode: "shared" as const },
+      idempotencyKey: id,
+    };
+    expect(StartThreadRequestSchema.parse(request).runtime).toBeUndefined();
+    expect(
+      StartThreadRequestSchema.parse({ ...request, runtime: "pi" }).runtime,
+    ).toBe("pi");
+    expect(
+      StartThreadRequestSchema.safeParse({ ...request, runtime: "claude" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("treats the backend as optional when creating or importing a chat", () => {
+    expect(
+      CreateThreadRequestSchema.parse({ idempotencyKey: id }).runtime,
+    ).toBeUndefined();
+    expect(
+      CreateThreadRequestSchema.parse({ idempotencyKey: id, runtime: "codex" })
+        .runtime,
+    ).toBe("codex");
+    expect(
+      ImportThreadRequestSchema.parse({
+        runtimeSessionId: id,
+        idempotencyKey: id,
+      }).runtime,
+    ).toBeUndefined();
+    expect(
+      ImportThreadRequestSchema.parse({
+        runtimeSessionId: id,
+        idempotencyKey: id,
+        runtime: "pi",
+      }).runtime,
+    ).toBe("pi");
+  });
+
+  it("accepts a Codex UUIDv7 session identifier unchanged", () => {
+    const codexThreadId = "019fa011-c136-7dc0-8c67-e5f7926bd517";
+    expect(SessionIdSchema.parse(codexThreadId)).toBe(codexThreadId);
+    expect(
+      ImportThreadRequestSchema.parse({
+        runtimeSessionId: codexThreadId,
+        idempotencyKey: id,
+        runtime: "codex",
+      }).runtimeSessionId,
+    ).toBe(codexThreadId);
+  });
+
+  it("labels every discovered session with the backend that owns it", () => {
+    const descriptor = {
+      id,
+      name: null,
+      createdAt: "2026-08-22T00:00:00.000Z",
+      modifiedAt: "2026-08-22T00:00:00.000Z",
+      messageCount: 2,
+      preview: "hello",
+      imported: false,
+      runtime: "codex",
+    };
+    expect(SessionDescriptorSchema.parse(descriptor).runtime).toBe("codex");
+    const { runtime, ...withoutRuntime } = descriptor;
+    expect(runtime).toBe("codex");
+    expect(SessionDescriptorSchema.safeParse(withoutRuntime).success).toBe(
+      false,
+    );
   });
 });

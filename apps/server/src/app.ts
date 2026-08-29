@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 import multipart from "@fastify/multipart";
 import staticPlugin from "@fastify/static";
 import websocket from "@fastify/websocket";
-import type { AgentRuntime } from "@pi-web/agent-runtime";
+import { RuntimeFailure, type AgentRuntime } from "@pi-web/agent-runtime";
+import type { RuntimeKind } from "@pi-web/contracts";
 import type { RawData } from "ws";
 import {
   ArchiveThreadRequestSchema,
@@ -30,10 +31,12 @@ import {
   TerminalServerFrameSchema,
   TerminalsResponseSchema,
   ThreadIdSchema,
+  TranscriptPageQuerySchema,
   UpdateProjectRequestSchema,
   type TerminalErrorCode,
   type TerminalServerFrame,
 } from "@pi-web/contracts";
+import { CodexAgentRuntime } from "@pi-web/codex-adapter";
 import { PiAgentRuntime } from "@pi-web/pi-adapter";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
@@ -50,6 +53,7 @@ import {
   createNativeDirectoryPicker,
   type DirectoryPicker,
 } from "./directory-picker/native.js";
+import { RuntimeRegistry } from "./domain/runtimes.js";
 import { WorkspaceService } from "./domain/workspace.js";
 import { previewProjectFile, listProjectFiles } from "./inspector/files.js";
 import { getGitDiff, getGitStatus } from "./inspector/git.js";
@@ -95,7 +99,13 @@ const fileQuerySchema = z.object({
 export interface BuildServerOptions {
   config?: ServerConfig;
   store?: MetadataStore;
+  /**
+   * Test seam: a single adapter registered as every backend, so existing
+   * fixtures keep working without knowing about the registry.
+   */
   runtime?: AgentRuntime;
+  /** Explicit per-backend adapters; takes precedence over `runtime`. */
+  runtimes?: Partial<Record<RuntimeKind, AgentRuntime>>;
   ptyFactory?: PtyFactory;
   directoryPicker?: DirectoryPicker;
   logger?: boolean;
@@ -133,6 +143,19 @@ function safeError(error: unknown): {
       code: "invalid_request",
       message: "The request is malformed.",
     };
+  if (error instanceof RuntimeFailure)
+    return error.code === "rejected"
+      ? {
+          status: 409,
+          code: "stale_transcript",
+          message:
+            "Conversation history changed. Return to the latest messages and try again.",
+        }
+      : {
+          status: 502,
+          code: "runtime_failure",
+          message: error.message,
+        };
   if (error instanceof ReceiptConflictError)
     return {
       status: 409,
@@ -501,7 +524,23 @@ export async function buildServer(
   const terminals = new ProjectTerminalManager(options.ptyFactory);
   const workspace = new WorkspaceService(
     store,
-    options.runtime ?? new PiAgentRuntime(undefined, config.namingModel),
+    new RuntimeRegistry(
+      options.runtimes ??
+        (options.runtime === undefined
+          ? {
+              pi: new PiAgentRuntime(undefined, config.namingModel),
+              codex: new CodexAgentRuntime({
+                command: config.codexCommand,
+                sandbox: config.codexSandbox,
+                ...(config.codexHome === undefined
+                  ? {}
+                  : { codexHome: config.codexHome }),
+                replayTools: config.codexReplayTools,
+              }),
+            }
+          : { pi: options.runtime, codex: options.runtime }),
+      config.defaultRuntime,
+    ),
     broker,
     terminals,
   );
@@ -612,6 +651,7 @@ export async function buildServer(
         parsed.input,
         parsed.metadata.workspace,
         parsed.metadata.idempotencyKey,
+        parsed.metadata.runtime,
       );
     }
     const body = StartThreadRequestSchema.parse(request.body);
@@ -620,9 +660,14 @@ export async function buildServer(
       parseTextChatInput(body.prompt),
       body.workspace,
       body.idempotencyKey,
+      body.runtime,
     );
   });
 
+  server.get(
+    "/api/agent-backends",
+    async () => await workspace.agentBackends(),
+  );
   server.get("/api/projects/:projectId/sessions", async (request) => {
     const params = projectParamsSchema.parse(request.params);
     return await workspace.discoverSessions(params.projectId);
@@ -636,6 +681,7 @@ export async function buildServer(
         body.runtimeSessionId,
         body.title,
         body.idempotencyKey,
+        body.runtime,
       ),
     };
   });
@@ -677,9 +723,9 @@ export async function buildServer(
   );
   // Deliberately not `/threads/archived`: that would sit under the
   // `:threadId` param route and depend on segment-priority rules to resolve.
-  server.get("/api/projects/:projectId/archived-threads", (request) => {
+  server.get("/api/projects/:projectId/archived-threads", async (request) => {
     const params = projectParamsSchema.parse(request.params);
-    return { threads: workspace.listArchivedThreads(params.projectId) };
+    return { threads: await workspace.listArchivedThreads(params.projectId) };
   });
   server.get("/api/projects/:projectId/threads/:threadId", async (request) => {
     const params = threadParamsSchema.parse(request.params);
@@ -693,6 +739,18 @@ export async function buildServer(
         params.projectId,
         params.threadId,
         params.imageId,
+      );
+    },
+  );
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/transcript",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      const query = TranscriptPageQuerySchema.parse(request.query);
+      return await workspace.olderTranscriptPage(
+        params.projectId,
+        params.threadId,
+        query.cursor,
       );
     },
   );
