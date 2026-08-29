@@ -26,11 +26,22 @@ export type PaneNode = TreeLeaf<"pane", PaneId>;
 export type SplitNode = TreeSplit<"pane", PaneId>;
 export type LayoutNode = TreeNode<"pane", PaneId>;
 
+export type PaneAssignment =
+  | { type: "thread"; threadId: ThreadId }
+  | { type: "new" }
+  | { type: "continuation"; sourceThreadId: ThreadId };
+
 export interface WorkspaceLayout {
   root: LayoutNode | null; // null = no tiled panes
-  panes: Record<PaneId, { threadId: ThreadId | null }>; // all panes, all tiled
+  panes: Record<PaneId, PaneAssignment>; // all panes, all tiled
   focusedPaneId: PaneId | null;
   boundPaneId: PaneId | null; // right-panel binding (carried; used in a later phase)
+}
+
+export function paneThreadId(
+  pane: PaneAssignment | undefined,
+): ThreadId | null {
+  return pane?.type === "thread" ? pane.threadId : null;
 }
 
 // Picks the next focus target after a pane leaves the tree: keep the
@@ -49,7 +60,7 @@ export function createInitialLayout(makeId: () => PaneId): WorkspaceLayout {
   const id = makeId();
   return {
     root: { type: "pane", id },
-    panes: { [id]: { threadId: null } },
+    panes: { [id]: { type: "new" } },
     focusedPaneId: id,
     boundPaneId: null,
   };
@@ -75,7 +86,7 @@ export function splitPane(
   return {
     ...l,
     root,
-    panes: { ...l.panes, [newId]: { threadId: null } },
+    panes: { ...l.panes, [newId]: { type: "new" } },
     focusedPaneId: newId,
   };
 }
@@ -134,7 +145,40 @@ export function assignThread(
   threadId: ThreadId,
 ): WorkspaceLayout {
   if (!(id in l.panes)) return l;
-  return { ...l, panes: { ...l.panes, [id]: { threadId } } };
+  return {
+    ...l,
+    panes: { ...l.panes, [id]: { type: "thread", threadId } },
+  };
+}
+
+export function assignNew(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {
+  if (!(id in l.panes)) return l;
+  return { ...l, panes: { ...l.panes, [id]: { type: "new" } } };
+}
+
+export function restoreContinuation(
+  l: WorkspaceLayout,
+  id: PaneId,
+  sourceThreadId: ThreadId,
+): WorkspaceLayout {
+  if (!(id in l.panes)) return l;
+  return {
+    ...l,
+    panes: {
+      ...l.panes,
+      [id]: { type: "continuation", sourceThreadId },
+    },
+  };
+}
+
+export function beginContinuation(
+  l: WorkspaceLayout,
+  id: PaneId,
+  sourceThreadId: ThreadId,
+): WorkspaceLayout {
+  const pane = l.panes[id];
+  if (pane?.type !== "thread" || pane.threadId !== sourceThreadId) return l;
+  return restoreContinuation(l, id, sourceThreadId);
 }
 
 export function focusPane(l: WorkspaceLayout, id: PaneId): WorkspaceLayout {

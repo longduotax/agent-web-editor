@@ -87,6 +87,16 @@ superseded, or abandoned.
   plan-v3 work — page-free away-from-latest refresh, its bounded streaming
   projection, full bidirectional navigation/viewport behavior, and the
   restrained scrollbar acceptance set — remains paused pending approval.
+- [Same-worktree new-chat command](2026-08-29-same-worktree-new-chat-command.md) —
+  Active plan version 2, approved by the user on 2026-08-29. The approved version 1
+  immediate-creation implementation exists in this worktree, but the user
+  selected a material deferred-creation revision before promotion: exact `/new`
+  should open a device-local pending same-worktree composer and create no thread
+  or agent session until its first real prompt. Plan v2 adds a parsed pending-pane
+  layout state, read-only command preflight, recovery-safe first-prompt creation,
+  and forward migration compatibility while retaining one-to-many worktree
+  ownership, the one-active-sibling-agent lease, panel/terminal scope, and blank
+  context.
 - [Codex agent runtime](2026-08-22-codex-agent-runtime.md) — Active plan version 1,
   technical approval granted 2026-08-22, governed by Agent backends specification
   version 1. The Pi/Codex runtime discriminator, Codex adapter, runtime registry,

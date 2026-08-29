@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  continuationCreationKey,
   newChatDraftKey,
   pruneNewChatDrafts,
   readDraft,
@@ -63,7 +64,9 @@ describe("composer drafts", () => {
   it("prunes drafts whose pane is gone, including the pre-per-pane key, and only for this project", () => {
     const values = stubStorage({
       [newChatDraftKey("p1", "pane-live")]: "keep me",
+      [continuationCreationKey("p1", "pane-live")]: "keep identity",
       [newChatDraftKey("p1", "pane-gone")]: "orphan",
+      [continuationCreationKey("p1", "pane-gone")]: "orphan identity",
       [newChatDraftKey("p1", "pane-also-gone")]: "",
       // The legacy project-wide key: no pane suffix, unreachable, and never
       // matched by the per-pane prefix (NEW-R3-5).
@@ -78,6 +81,7 @@ describe("composer drafts", () => {
     expect([...values.keys()].sort()).toEqual(
       [
         newChatDraftKey("p1", "pane-live"),
+        continuationCreationKey("p1", "pane-live"),
         newChatDraftKey("p2", "pane-other"),
         "pi-new-draft:p2",
         "pi-draft:thread-1",

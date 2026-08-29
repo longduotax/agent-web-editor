@@ -15,6 +15,7 @@ import {
   ChatCommandMultipartMetadataSchema,
   ChatImageIdSchema,
   CommandRequestSchema,
+  ContinueThreadRequestSchema,
   ImportThreadRequestSchema,
   LiveSubscribeSchema,
   ProjectIdSchema,
@@ -243,6 +244,16 @@ function safeError(error: unknown): {
         code: "project_busy",
         message: "Another agent run is active in this thread.",
       },
+      workspace_busy: {
+        status: 409,
+        code: "workspace_busy",
+        message: "Another agent run is active in this worktree.",
+      },
+      worktree_required: {
+        status: 409,
+        code: "worktree_required",
+        message: "The /new command requires a managed worktree chat.",
+      },
       run_not_active: {
         status: 409,
         code: "run_not_active",
@@ -458,6 +469,12 @@ function safeError(error: unknown): {
         code: string;
         message: string;
       };
+    if (error.message.includes("UNIQUE constraint failed: runs.worktree_id"))
+      return known.workspace_busy as {
+        status: number;
+        code: string;
+        message: string;
+      };
   }
   return {
     status: 500,
@@ -663,6 +680,43 @@ export async function buildServer(
       body.runtime,
     );
   });
+
+  server.get(
+    "/api/projects/:projectId/threads/:threadId/continue/preflight",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      return await workspace.preflightContinuation(
+        params.projectId,
+        params.threadId,
+      );
+    },
+  );
+
+  server.post(
+    "/api/projects/:projectId/threads/:threadId/continue",
+    async (request) => {
+      const params = threadParamsSchema.parse(request.params);
+      if (request.isMultipart()) {
+        const parsed = await parseMultipartChatInput(
+          request,
+          ChatCommandMultipartMetadataSchema,
+        );
+        return await workspace.continueThread(
+          params.projectId,
+          params.threadId,
+          parsed.input,
+          parsed.metadata.idempotencyKey,
+        );
+      }
+      const body = ContinueThreadRequestSchema.parse(request.body);
+      return await workspace.continueThread(
+        params.projectId,
+        params.threadId,
+        parseTextChatInput(body.prompt),
+        body.idempotencyKey,
+      );
+    },
+  );
 
   server.get(
     "/api/agent-backends",

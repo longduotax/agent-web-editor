@@ -1,7 +1,10 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
+import { GitBranchSchema } from "@pi-web/contracts";
 import type {
   AgentRuntime,
   OpenRuntimeSession,
@@ -24,6 +27,7 @@ import {
 import { RuntimeRegistry } from "./runtimes.js";
 import { fallbackTitle, WorkspaceService } from "./workspace.js";
 
+const exec = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -133,6 +137,7 @@ class ControlledSession implements OpenRuntimeSession {
 class ControlledRuntime implements AgentRuntime {
   private readonly sessions = new Map<string, ControlledSession>();
   public created = 0;
+  public readonly createdPaths: string[] = [];
   public createFailure: Error | undefined;
   public openFailure: Error | undefined;
   public openCount = 0;
@@ -162,10 +167,11 @@ class ControlledRuntime implements AgentRuntime {
       diagnostics: [],
     });
   }
-  public create() {
+  public create(projectPath: string) {
     if (this.createFailure !== undefined)
       return Promise.reject(this.createFailure);
     this.created += 1;
+    this.createdPaths.push(projectPath);
     const sessionId = `10000000-0000-4000-8000-${String(this.created).padStart(12, "0")}`;
     this.sessions.set(sessionId, new ControlledSession(sessionId));
     return Promise.resolve({ sessionId });
@@ -554,6 +560,123 @@ describe("run coordination", () => {
     expect(later.id).not.toBe(initial.run.id);
     expect(replay.thread.id).toBe(initial.thread.id);
     expect(replay.run.id).toBe(initial.run.id);
+    await context.service.close();
+    context.store.close();
+  });
+
+  it("preflights without allocation, then creates the sibling on its first prompt", async () => {
+    const context = await fixture();
+    await exec("git", ["init", "-b", "main"], { cwd: context.projectPath });
+    await exec("git", ["config", "user.email", "test@example.com"], {
+      cwd: context.projectPath,
+    });
+    await exec("git", ["config", "user.name", "Test"], {
+      cwd: context.projectPath,
+    });
+    await writeFile(join(context.projectPath, "README.md"), "checkpoint\n");
+    await exec("git", ["add", "README.md"], { cwd: context.projectPath });
+    await exec("git", ["commit", "-m", "checkpoint"], {
+      cwd: context.projectPath,
+    });
+
+    const started = await context.service.startThread(
+      context.project.id,
+      parseTextChatInput("Build the feature"),
+      {
+        mode: "worktree",
+        baseBranch: GitBranchSchema.parse("main"),
+        sourceChanges: "none",
+      },
+      "90000000-0000-4000-8000-000000000010",
+      "pi",
+    );
+    const source = context.store.getThread(
+      context.project.id,
+      started.thread.id,
+    );
+    if (source?.worktree_id === null || source === null)
+      throw new Error("isolated source thread was not stored");
+    await expect(
+      context.service.preflightContinuation(context.project.id, source.id),
+    ).rejects.toThrow("workspace_busy");
+    context.runtime.sessionById(source.runtime_session_id).complete();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const createdBeforePreflight = context.runtime.created;
+    const threadsBeforePreflight = context.store.listThreads(
+      context.project.id,
+    ).length;
+    await expect(
+      context.service.preflightContinuation(context.project.id, source.id),
+    ).resolves.toEqual({ available: true, imageInput: "unknown" });
+    expect(context.runtime.created).toBe(createdBeforePreflight);
+    expect(context.store.listThreads(context.project.id)).toHaveLength(
+      threadsBeforePreflight,
+    );
+
+    const key = "90000000-0000-4000-8000-000000000011";
+    const continuationInput = parseImageChatInput("Continue implementation", [
+      png(1, 1),
+    ]);
+    const attachRun = vi
+      .spyOn(context.store, "attachContinuationRun")
+      .mockImplementationOnce(() => {
+        throw new Error("crash_after_continuation_prompt");
+      });
+    await expect(
+      context.service.continueThread(
+        context.project.id,
+        source.id,
+        continuationInput,
+        key,
+      ),
+    ).rejects.toThrow("crash_after_continuation_prompt");
+    attachRun.mockRestore();
+
+    const continued = await context.service.continueThread(
+      context.project.id,
+      source.id,
+      continuationInput,
+      key,
+    );
+    const replay = await context.service.continueThread(
+      context.project.id,
+      source.id,
+      continuationInput,
+      key,
+    );
+    const sibling = context.store.getThread(
+      context.project.id,
+      continued.thread.id,
+    );
+    const worktree = context.store.getWorktree(source.worktree_id);
+    if (sibling === null || worktree === null)
+      throw new Error("continuation metadata was not stored");
+
+    expect(replay.thread.id).toBe(continued.thread.id);
+    expect(replay.run.id).toBe(continued.run.id);
+    expect(sibling.id).not.toBe(source.id);
+    expect(sibling.runtime).toBe(source.runtime);
+    expect(sibling.runtime_session_id).not.toBe(source.runtime_session_id);
+    expect(sibling.worktree_id).toBe(source.worktree_id);
+    expect(sibling.title).toBe("Continue implementation");
+    expect(sibling.initial_title_pending).toBe(0);
+    const siblingSession = context.runtime.sessionById(
+      sibling.runtime_session_id,
+    );
+    expect(siblingSession.promptCount).toBe(1);
+    expect(siblingSession.lastPrompt).toEqual({
+      text: continuationInput.text,
+      images: continuationInput.images,
+    });
+    expect(context.runtime.createdPaths.at(-1)).toBe(worktree.execution_root);
+    expect(
+      (
+        await exec("git", ["status", "--porcelain"], {
+          cwd: worktree.execution_root,
+        })
+      ).stdout,
+    ).toBe("");
     await context.service.close();
     context.store.close();
   });

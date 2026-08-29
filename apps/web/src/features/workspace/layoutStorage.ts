@@ -6,7 +6,7 @@ import { preferenceStorage } from "../storage/preferenceStorage.js";
 import { createInitialLayout, restoreIntoTree } from "./layoutTree.js";
 import type { LayoutNode, PaneId, WorkspaceLayout } from "./layoutTree.js";
 
-export const WORKSPACE_LAYOUT_VERSION = 2;
+export const WORKSPACE_LAYOUT_VERSION = 3;
 
 const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
   z.discriminatedUnion("type", [
@@ -24,30 +24,56 @@ const LayoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
   ]),
 );
 
+const LegacyPaneSchema = z.object({ threadId: ThreadIdSchema.nullable() });
+
 // Retained only to read pre-migration (v1) payloads, which had a
-// `docked: PaneId[]` collapse-to-dock tier that v2 no longer has.
+// `docked: PaneId[]` collapse-to-dock tier.
 const WorkspaceLayoutV1Schema = z.object({
   version: z.literal(1),
   root: LayoutNodeSchema.nullable(),
-  panes: z.record(
-    z.string(),
-    z.object({ threadId: ThreadIdSchema.nullable() }),
-  ),
+  panes: z.record(z.string(), LegacyPaneSchema),
   docked: z.array(z.string()),
   focusedPaneId: z.string().nullable(),
   boundPaneId: z.string().nullable(),
 });
 
-const WorkspaceLayoutSchema = z.object({
+const WorkspaceLayoutV2Schema = z.object({
   version: z.literal(2),
   root: LayoutNodeSchema.nullable(),
-  panes: z.record(
-    z.string(),
-    z.object({ threadId: ThreadIdSchema.nullable() }),
-  ),
+  panes: z.record(z.string(), LegacyPaneSchema),
   focusedPaneId: z.string().nullable(),
   boundPaneId: z.string().nullable(),
 });
+
+const PaneAssignmentSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("thread"), threadId: ThreadIdSchema }),
+  z.object({ type: z.literal("new") }),
+  z.object({
+    type: z.literal("continuation"),
+    sourceThreadId: ThreadIdSchema,
+  }),
+]);
+
+const WorkspaceLayoutSchema = z.object({
+  version: z.literal(3),
+  root: LayoutNodeSchema.nullable(),
+  panes: z.record(z.string(), PaneAssignmentSchema),
+  focusedPaneId: z.string().nullable(),
+  boundPaneId: z.string().nullable(),
+});
+
+function migratePanes(
+  panes: Record<string, z.infer<typeof LegacyPaneSchema>>,
+): WorkspaceLayout["panes"] {
+  return Object.fromEntries(
+    Object.entries(panes).map(([id, pane]) => [
+      id,
+      pane.threadId === null
+        ? { type: "new" as const }
+        : { type: "thread" as const, threadId: pane.threadId },
+    ]),
+  );
+}
 
 export function layoutStorageKey(projectId: ProjectId): string {
   return `pi-workspace:layout:${projectId}`;
@@ -79,17 +105,25 @@ export function readLayout(
       const { root, panes, focusedPaneId, boundPaneId } = parsed.data;
       return { root, panes, focusedPaneId, boundPaneId };
     }
+    const parsedV2 = WorkspaceLayoutV2Schema.safeParse(parsedJson);
+    if (parsedV2.success) {
+      const { root, panes, focusedPaneId, boundPaneId } = parsedV2.data;
+      return {
+        root,
+        panes: migratePanes(panes),
+        focusedPaneId,
+        boundPaneId,
+      };
+    }
     const parsedV1 = WorkspaceLayoutV1Schema.safeParse(parsedJson);
     if (parsedV1.success) {
       const { root, panes, docked, focusedPaneId, boundPaneId } = parsedV1.data;
       let migrated: WorkspaceLayout = {
         root,
-        panes,
+        panes: migratePanes(panes),
         focusedPaneId,
         boundPaneId,
       };
-      // Fold every previously-docked pane back into the tiled tree — a v1
-      // docked pane must never be dropped by the migration.
       for (const id of docked) migrated = restoreIntoTree(migrated, id);
       return migrated;
     }

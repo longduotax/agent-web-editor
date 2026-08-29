@@ -6,6 +6,7 @@ import {
   type JSX,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import type { ProjectId, ThreadId } from "@pi-web/contracts";
 
 import type { LayoutNode, PaneId, SplitId, SplitNode } from "./layoutTree.js";
@@ -152,7 +153,9 @@ function PaneRegion({
   onThreadStarted: (paneId: PaneId, threadId: ThreadId) => void;
 }) {
   const focused = paneId === controller.layout.focusedPaneId;
-  const threadId = controller.layout.panes[paneId]?.threadId ?? null;
+  const assignment = controller.layout.panes[paneId];
+  const navigate = useNavigate();
+  const params = useParams();
   const tileRef = useRef<HTMLDivElement>(null);
   // Read through a ref inside the focus effect below, never listed as a
   // dependency of it. Focus must follow a COMMAND, and `focused` also turns
@@ -209,10 +212,10 @@ function PaneRegion({
         if (event.key === "Enter") event.preventDefault();
       }}
     >
-      {threadId !== null ? (
+      {assignment?.type === "thread" ? (
         <ThreadPane
           projectId={projectId}
-          threadId={threadId}
+          threadId={assignment.threadId}
           focused={focused}
           onFocus={() => {
             controller.focus(paneId);
@@ -224,11 +227,23 @@ function PaneRegion({
             controller.focus(paneId);
             controller.dispatch({ type: "split", axis: "row" });
           }}
+          onContinue={() => {
+            controller.beginContinuationInPane(paneId, assignment.threadId);
+            if (params.threadId === assignment.threadId)
+              void navigate(
+                `/projects/${projectId}/threads/${assignment.threadId}/new`,
+              );
+          }}
         />
       ) : (
         <NewChatPane
           projectId={projectId}
           paneId={paneId}
+          continuationSourceThreadId={
+            assignment?.type === "continuation"
+              ? assignment.sourceThreadId
+              : null
+          }
           focused={focused}
           onFocus={() => {
             controller.focus(paneId);

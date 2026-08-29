@@ -46,6 +46,7 @@ import { RuntimeRegistry } from "./runtimes.js";
 import {
   canonicalRequestHash,
   MetadataStore,
+  ReceiptConflictError,
   type ProjectRecord,
   type RunRecord,
   type ThreadRecord,
@@ -395,6 +396,7 @@ export class WorkspaceService {
   private readonly transcriptPages = new Map<ThreadId, TranscriptPage>();
   private readonly runtimeUnavailableReasons = new Map<ThreadId, string>();
   private readonly activeThreads = new Set<ThreadId>();
+  private readonly activeWorktrees = new Set<WorktreeId>();
   private readonly preflightPrompts = new Map<ThreadId, PendingPreflight>();
   private readonly removingProjects = new Set<ProjectId>();
   private readonly inFlightCommands = new Map<
@@ -465,6 +467,7 @@ export class WorkspaceService {
           ? { mode: "shared", branchName: null, available: true }
           : {
               mode: "worktree",
+              worktreeId: worktree.id,
               branchName: worktree.branch_name,
               baseBranch: worktree.base_branch,
               baseCommit: worktree.base_commit,
@@ -1066,6 +1069,12 @@ export class WorkspaceService {
             if (this.preflightPrompts.get(threadId) === preflight)
               this.preflightPrompts.delete(threadId);
             this.activeThreads.delete(threadId);
+            const thread = this.store.getThread(project.id, threadId);
+            if (
+              thread?.worktree_id !== null &&
+              thread?.worktree_id !== undefined
+            )
+              this.activeWorktrees.delete(thread.worktree_id);
           }
           this.interruptRunsForProjectRemoval(project.id);
           for (const thread of this.store.listThreads(project.id))
@@ -1112,6 +1121,8 @@ export class WorkspaceService {
         ),
       );
       this.activeThreads.delete(run.thread_id);
+      if (run.worktree_id !== null)
+        this.activeWorktrees.delete(run.worktree_id);
       this.broker.publish(run.thread_id, "completion", settled);
     }
   }
@@ -1125,6 +1136,200 @@ export class WorkspaceService {
       // A removed project must release its preflight lease even if the native
       // runtime cannot be interrupted.
     }
+  }
+
+  public async preflightContinuation(
+    projectId: ProjectId,
+    sourceThreadId: ThreadId,
+  ): Promise<{ available: true; imageInput: ImageInputCapability }> {
+    const source = this.requireThread(projectId, sourceThreadId);
+    const context = await this.executionContexts.resolve(source);
+    if (context.worktree === null) throw new Error("worktree_required");
+    if (
+      this.activeWorktrees.has(context.worktree.id) ||
+      this.store.runningRunForWorktree(context.worktree.id) !== null
+    )
+      throw new Error("workspace_busy");
+    return {
+      available: true as const,
+      imageInput: await inspectImageInput(
+        this.adapters.get(source.runtime),
+        context.executionRoot,
+      ),
+    };
+  }
+
+  public async continueThread(
+    projectId: ProjectId,
+    sourceThreadId: ThreadId,
+    input: ParsedChatInput,
+    idempotencyKey: string,
+  ) {
+    const text = input.text;
+    const operationName = "continue-thread";
+    const hash = canonicalRequestHash(
+      operationName,
+      input.images.length === 0
+        ? { projectId, sourceThreadId, text }
+        : { projectId, sourceThreadId, input: canonicalInput(input) },
+    );
+    return await this.serialized(
+      projectId,
+      idempotencyKey,
+      operationName,
+      hash,
+      StartThreadResponseSchema,
+      async () => {
+        let operation = this.store.getContinuation(projectId, idempotencyKey);
+        if (operation !== null && operation.request_hash !== hash)
+          throw new ReceiptConflictError();
+        if (operation?.run_id !== null && operation?.run_id !== undefined) {
+          const thread = this.requireThread(
+            projectId,
+            operation.thread_id ?? "",
+          );
+          const run = this.store.getRun(operation.run_id);
+          if (run?.project_id !== projectId || run.thread_id !== thread.id)
+            throw new Error("continuation_run_mismatch");
+          return StartThreadResponseSchema.parse({
+            thread: this.threadDto(thread),
+            run: runDto(run),
+          });
+        }
+        if (
+          operation?.thread_id !== null &&
+          operation?.thread_id !== undefined &&
+          operation.prompt_command_id !== null
+        ) {
+          const promptHash = canonicalRequestHash(
+            "prompt",
+            input.images.length === 0
+              ? { projectId, threadId: operation.thread_id, text }
+              : {
+                  projectId,
+                  threadId: operation.thread_id,
+                  input: canonicalInput(input),
+                },
+          );
+          const receipt = this.store.readReceipt(
+            projectId,
+            operation.prompt_command_id,
+            "prompt",
+            promptHash,
+            RunSchema,
+          );
+          if (receipt !== null) {
+            if (receipt.threadId !== operation.thread_id)
+              throw new Error("continuation_run_mismatch");
+            operation = this.store.attachContinuationRun(
+              projectId,
+              idempotencyKey,
+              receipt.id,
+            );
+            return StartThreadResponseSchema.parse({
+              thread: this.threadDto(
+                this.requireThread(projectId, operation.thread_id ?? ""),
+              ),
+              run: receipt,
+            });
+          }
+        }
+        const source = this.requireThread(projectId, sourceThreadId);
+        const context = await this.executionContexts.resolve(source);
+        if (context.worktree === null) throw new Error("worktree_required");
+        const adapter = await this.adapters.usable(source.runtime);
+        if (
+          input.images.length > 0 &&
+          (await inspectImageInput(adapter, context.executionRoot)) ===
+            "unsupported"
+        )
+          throw new Error("chat_image_input_unsupported");
+        const worktreeId = context.worktree.id;
+        if (
+          this.activeWorktrees.has(worktreeId) ||
+          this.store.runningRunForWorktree(worktreeId) !== null
+        )
+          throw new Error("workspace_busy");
+        this.activeWorktrees.add(worktreeId);
+        let leaseTransferred = false;
+        try {
+          operation = this.store.reserveContinuation({
+            projectId,
+            sourceThreadId,
+            worktreeId,
+            idempotencyKey,
+            requestHash: hash,
+          });
+          if (operation.title === null) {
+            let suggested: TitleSuggestion = { outcome: "unavailable" };
+            try {
+              suggested =
+                (await adapter.suggestTitle?.(context.executionRoot, text)) ??
+                suggested;
+            } catch {
+              // Naming is optional; use the deterministic product fallback.
+            }
+            operation = this.store.nameContinuation(
+              projectId,
+              idempotencyKey,
+              suggested.outcome === "available"
+                ? suggested.title
+                : fallbackTitle(text),
+            );
+          }
+          if (operation.runtime_session_id === null) {
+            const created = await adapter.create(
+              context.executionRoot,
+              operation.title ?? fallbackTitle(text),
+              operation.id,
+            );
+            operation = this.store.attachContinuationSession(
+              projectId,
+              idempotencyKey,
+              created.sessionId,
+            );
+          }
+          const thread = this.store.finishContinuation(
+            projectId,
+            idempotencyKey,
+          );
+          operation = this.store.getContinuation(projectId, idempotencyKey);
+          if (
+            operation?.prompt_command_id === null ||
+            operation?.prompt_command_id === undefined ||
+            operation.initial_prompt_dispatch_id === null
+          )
+            throw new Error("continuation_prompt_missing");
+          const dispatch = { id: operation.initial_prompt_dispatch_id };
+          const recovered = await (
+            await this.openRuntime(thread)
+          ).recoverPrompt(runtimeInput(input), dispatch);
+          const run =
+            recovered.outcome === "accepted"
+              ? this.store.acceptRecoveredContinuationPrompt(
+                  projectId,
+                  idempotencyKey,
+                  thread.id,
+                )
+              : await this.prompt(
+                  projectId,
+                  thread.id,
+                  input,
+                  operation.prompt_command_id,
+                  dispatch,
+                  worktreeId,
+                );
+          leaseTransferred = recovered.outcome !== "accepted";
+          this.store.attachContinuationRun(projectId, idempotencyKey, run.id);
+          return StartThreadResponseSchema.parse({
+            thread: this.threadDto(this.requireThread(projectId, thread.id)),
+            run,
+          });
+        } finally {
+          if (!leaseTransferred) this.activeWorktrees.delete(worktreeId);
+        }
+      },
+    );
   }
 
   public async createThread(
@@ -1673,6 +1878,7 @@ export class WorkspaceService {
     input: ParsedChatInput,
     idempotencyKey: string,
     dispatch?: { id: string },
+    preownedWorktreeId?: WorktreeId,
   ): Promise<Run> {
     const operation = "prompt";
     const hash = canonicalRequestHash(
@@ -1699,12 +1905,21 @@ export class WorkspaceService {
         );
         if (prior !== null) return prior;
         const thread = this.requireThread(projectId, threadId);
+        const worktreeId = thread.worktree_id;
         if (
           this.activeThreads.has(threadId) ||
           this.store.runningRunForThread(threadId) !== null
         )
           throw new Error("project_busy");
+        if (
+          worktreeId !== null &&
+          worktreeId !== preownedWorktreeId &&
+          (this.activeWorktrees.has(worktreeId) ||
+            this.store.runningRunForWorktree(worktreeId) !== null)
+        )
+          throw new Error("workspace_busy");
         this.activeThreads.add(threadId);
+        if (worktreeId !== null) this.activeWorktrees.add(worktreeId);
         const preflight: PendingPreflight = {
           projectId: thread.project_id,
           runtime: undefined,
@@ -1714,6 +1929,24 @@ export class WorkspaceService {
         let pendingAcceptance: PromptAcceptance | undefined;
         let acceptedRuntime: OpenRuntimeSession | undefined;
         try {
+          let initialTitle: string | null = null;
+          if (thread.initial_title_pending === 1) {
+            const context = await this.executionContexts.resolve(thread);
+            let suggested: TitleSuggestion = { outcome: "unavailable" };
+            try {
+              suggested =
+                (await this.adapters
+                  .get(thread.runtime)
+                  .suggestTitle?.(context.executionRoot, input.text)) ??
+                suggested;
+            } catch {
+              // Naming is optional; use the deterministic product fallback.
+            }
+            initialTitle =
+              suggested.outcome === "available"
+                ? suggested.title
+                : fallbackTitle(input.text);
+          }
           const runtime = await this.openRuntime(thread);
           acceptedRuntime = runtime;
           preflight.runtime = runtime;
@@ -1742,6 +1975,8 @@ export class WorkspaceService {
                 idempotencyKey,
               );
               if (created === null) throw new Error("project_not_found");
+              if (initialTitle !== null)
+                this.store.applyInitialTitle(projectId, threadId, initialTitle);
               return runDto(created);
             },
           );
@@ -1771,6 +2006,7 @@ export class WorkspaceService {
                 ),
               );
               this.activeThreads.delete(threadId);
+              if (worktreeId !== null) this.activeWorktrees.delete(worktreeId);
               this.broker.publish(threadId, "completion", settled);
             })
             .catch(() => {
@@ -1785,6 +2021,7 @@ export class WorkspaceService {
                 ),
               );
               this.activeThreads.delete(threadId);
+              if (worktreeId !== null) this.activeWorktrees.delete(worktreeId);
               this.broker.publish(threadId, "completion", settled);
             });
           return run;
@@ -1804,7 +2041,10 @@ export class WorkspaceService {
             }
           }
           pendingAcceptance?.discardEvents();
-          if (ownsPreflightLease) this.activeThreads.delete(threadId);
+          if (ownsPreflightLease) {
+            this.activeThreads.delete(threadId);
+            if (worktreeId !== null) this.activeWorktrees.delete(worktreeId);
+          }
           throw error;
         }
       },
@@ -1911,7 +2151,11 @@ export class WorkspaceService {
               ),
             ),
         ).response;
-        if (settlesCapturedRun) this.activeThreads.delete(threadId);
+        if (settlesCapturedRun) {
+          this.activeThreads.delete(threadId);
+          if (thread.worktree_id !== null)
+            this.activeWorktrees.delete(thread.worktree_id);
+        }
         this.broker.publish(threadId, "completion", settled);
         return settled;
       },

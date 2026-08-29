@@ -12,6 +12,8 @@ import { showsWorktreeChip, threadTabContext } from "./tabContext.js";
 const projectId = "10000000-0000-4000-8000-000000000001" as ProjectId;
 const threadId = "20000000-0000-4000-8000-000000000001" as ThreadId;
 const otherThreadId = "20000000-0000-4000-8000-000000000002" as ThreadId;
+const worktreeId = "30000000-0000-4000-8000-000000000001";
+const otherWorktreeId = "30000000-0000-4000-8000-000000000002";
 
 const project: Project = {
   id: projectId,
@@ -53,6 +55,7 @@ const shared: ThreadSummary["workspace"] = {
 const isolated: ThreadSummary["workspace"] = ThreadWorkspaceSummarySchema.parse(
   {
     mode: "worktree",
+    worktreeId,
     branchName: "pi/feature",
     baseBranch: "main",
     baseCommit: "abc1234",
@@ -74,7 +77,7 @@ describe("threadTabContext", () => {
     expect(threadTabContext(project, thread(threadId, isolated))).toEqual({
       projectId,
       threadId,
-      scopeKey: threadId,
+      scopeKey: worktreeId,
       label: "pi/feature",
     });
   });
@@ -88,9 +91,20 @@ describe("threadTabContext", () => {
     expect(second.label).toBe(first.label);
   });
 
-  it("gives two isolated threads different scopes", () => {
+  it("gives sibling chats in one isolated worktree the same scope", () => {
     const first = threadTabContext(project, thread(threadId, isolated));
     const second = threadTabContext(project, thread(otherThreadId, isolated));
+    expect(second.scopeKey).toBe(first.scopeKey);
+  });
+
+  it("gives chats in different isolated worktrees different scopes", () => {
+    const other = ThreadWorkspaceSummarySchema.parse({
+      ...isolated,
+      worktreeId: otherWorktreeId,
+      branchName: "pi/other",
+    });
+    const first = threadTabContext(project, thread(threadId, isolated));
+    const second = threadTabContext(project, thread(otherThreadId, other));
     expect(second.scopeKey).not.toBe(first.scopeKey);
   });
 });
@@ -106,6 +120,11 @@ describe("showsWorktreeChip", () => {
   it("is hidden for a second shared thread of the same project", () => {
     const sibling = threadTabContext(project, thread(otherThreadId, shared));
     expect(showsWorktreeChip(sharedContext, sibling)).toBe(false);
+  });
+
+  it("recognises a persisted legacy thread-keyed context for the same worktree", () => {
+    const legacy = { ...isolatedContext, scopeKey: isolatedContext.threadId };
+    expect(showsWorktreeChip(legacy, isolatedContext)).toBe(false);
   });
 
   it("is shown when the tab reads a different worktree", () => {

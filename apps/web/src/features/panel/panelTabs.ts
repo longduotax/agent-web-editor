@@ -212,7 +212,10 @@ function browserTitle(url: string): string {
 // null context matches nothing, including another null one.
 function sameScope(a: TabContext | null, b: TabContext | null): boolean {
   if (a === null || b === null) return false;
-  return a.projectId === b.projectId && a.scopeKey === b.scopeKey;
+  if (a.projectId !== b.projectId) return false;
+  if (a.scopeKey === b.scopeKey) return true;
+  const legacy = a.scopeKey === a.threadId || b.scopeKey === b.threadId;
+  return legacy && a.label === b.label;
 }
 
 // True when two tabs address the identical thing, so opening the second

@@ -25,6 +25,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from "react-router-dom";
@@ -1138,6 +1139,7 @@ function ProjectWorkspace({
  */
 function ProjectWorkspaceRoute() {
   const params = useParams();
+  const location = useLocation();
   const projectResult = ProjectIdSchema.safeParse(params.projectId);
   if (!projectResult.success) return <NotFound />;
   // `/new` has no thread id at all; on the thread path an unparseable one is
@@ -1149,7 +1151,9 @@ function ProjectWorkspaceRoute() {
   return (
     <ProjectWorkspace
       projectId={projectResult.data}
-      routeThreadId={threadResult.data}
+      routeThreadId={
+        location.pathname.endsWith("/new") ? undefined : threadResult.data
+      }
     />
   );
 }
@@ -1348,6 +1352,10 @@ export function App() {
       <Route path="/projects/:projectId" element={<ProjectRoute />} />
       <Route
         path="/projects/:projectId/new"
+        element={<ProjectWorkspaceRoute />}
+      />
+      <Route
+        path="/projects/:projectId/threads/:threadId/new"
         element={<ProjectWorkspaceRoute />}
       />
       <Route

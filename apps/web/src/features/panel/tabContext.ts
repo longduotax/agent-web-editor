@@ -23,10 +23,9 @@ export function threadTabContext(
     return {
       projectId: project.id,
       threadId: thread.id,
-      // One worktree per isolated thread, so the thread id identifies the
-      // working tree as well as any server-side worktree id would — and
-      // unlike that id, the browser already has it.
-      scopeKey: thread.id,
+      // Several chats may share one managed worktree. Its opaque server-owned
+      // id identifies the execution scope without exposing a filesystem path.
+      scopeKey: thread.workspace.worktreeId,
       label: thread.workspace.branchName,
     };
   return {
@@ -43,7 +42,14 @@ export function sameExecutionScope(
   b: TabContext | null,
 ): boolean {
   if (a === null || b === null) return false;
-  return a.projectId === b.projectId && a.scopeKey === b.scopeKey;
+  if (a.projectId !== b.projectId) return false;
+  if (a.scopeKey === b.scopeKey) return true;
+  // Panel storage written before worktrees could own sibling chats used the
+  // authorizing thread id as its isolated scope key. Recognize that exact
+  // legacy shape by its stable branch label; shared contexts never have
+  // scopeKey === threadId, so they cannot enter this fallback.
+  const legacy = a.scopeKey === a.threadId || b.scopeKey === b.threadId;
+  return legacy && a.label === b.label;
 }
 
 /**

@@ -37,6 +37,13 @@ export function newChatDraftKey(projectId: string, paneId: string): string {
   return `pi-new-draft:${projectId}:${paneId}`;
 }
 
+export function continuationCreationKey(
+  projectId: string,
+  paneId: string,
+): string {
+  return `pi-continuation-key:${projectId}:${paneId}`;
+}
+
 /**
  * Removes every new-chat draft belonging to `projectId` whose pane is no
  * longer in the layout.
@@ -64,13 +71,20 @@ export function pruneNewChatDrafts(
       typeof removeItem !== "function"
     )
       return;
-    const prefix = `pi-new-draft:${projectId}:`;
+    const prefixes = [
+      `pi-new-draft:${projectId}:`,
+      `pi-continuation-key:${projectId}:`,
+    ];
     // Drafts predate per-pane keys and were stored project-wide under
     // `pi-new-draft:<projectId>` with no pane suffix. That key can never be
     // read or written again, and the prefix above (with its trailing colon)
     // does not match it, so it survived every prune (NEW-R3-5).
     const legacyKey = `pi-new-draft:${projectId}`;
-    const live = new Set(livePaneIds.map((paneId) => prefix + paneId));
+    const live = new Set(
+      prefixes.flatMap((prefix) =>
+        livePaneIds.map((paneId) => prefix + paneId),
+      ),
+    );
     const stale: string[] = [];
     const readKey = key.bind(storage) as (index: number) => string | null;
     for (let index = 0; index < length; index += 1) {
@@ -80,7 +94,10 @@ export function pruneNewChatDrafts(
         stale.push(candidate);
         continue;
       }
-      if (candidate.startsWith(prefix) && !live.has(candidate))
+      if (
+        prefixes.some((prefix) => candidate.startsWith(prefix)) &&
+        !live.has(candidate)
+      )
         stale.push(candidate);
     }
     const drop = removeItem.bind(storage) as (name: string) => void;

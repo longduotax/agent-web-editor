@@ -28,6 +28,7 @@ import {
   getSnapshot,
   getWorkspace,
   markViewed,
+  preflightContinuation,
   prompt,
   renameThread,
   steer,
@@ -71,6 +72,7 @@ export interface ThreadPaneProps {
   onFocus(): void;
   onClose(): void;
   onSplit(): void;
+  onContinue?(): void;
 }
 
 /**
@@ -701,6 +703,7 @@ export function Composer({
   snapshot,
   onSteered,
   onSent,
+  onContinue,
   onFocus,
 }: {
   projectId: ProjectId;
@@ -725,6 +728,8 @@ export function Composer({
     | undefined;
   /** Anything was sent: re-pin the transcript to the bottom. */
   onSent?: (() => void) | undefined;
+  /** Exact `/new` passed preflight and should open a pending sibling pane. */
+  onContinue?: (() => void) | undefined;
   onFocus?: (() => void) | undefined;
 }) {
   const queryClient = useQueryClient();
@@ -745,6 +750,14 @@ export function Composer({
   const activeRun =
     snapshot.currentRun?.state === "running" ? snapshot.currentRun : null;
   const active = activeRun !== null;
+  const continuing = useMutation({
+    mutationFn: async () => await preflightContinuation(projectId, threadId),
+    onSuccess: () => {
+      setText("");
+      removeDraft(`pi-draft:${threadId}`);
+      onContinue?.();
+    },
+  });
   const runtimeUnavailable = !snapshot.thread.runtimeAvailable;
   // Stop used to be `void stop(...).then(...)` with no rejection handler: a
   // Stop the server refused produced an unhandled promise rejection in the
@@ -816,11 +829,18 @@ export function Composer({
   }, [text, threadId]);
   const submit = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const submitted = text.trim();
     if (
       runtimeUnavailable ||
-      (text.trim() === "" && attachments.images.length === 0)
+      (submitted === "" && attachments.images.length === 0)
     )
       return;
+    // Never discard pending photos by interpreting their caption as an app
+    // command. Exact text-only `/new` remains the continuation command.
+    if (submitted === "/new" && attachments.images.length === 0) {
+      continuing.mutate();
+      return;
+    }
     // Before the request, not after it: sending is the moment the reader
     // expects to be taken to the bottom, and waiting for the response would
     // leave them staring at old history for the length of a round trip.
@@ -865,105 +885,142 @@ export function Composer({
           Drop photos here
         </div>
       )}
-      <div className="composer-input">
-        <ChatAttachmentStrip
-          images={attachments.images}
-          error={attachments.error}
-          onRemove={attachments.remove}
-          onAdd={(files) => {
-            attachments.addFiles(files, "picker");
-          }}
-          disabled={
-            mutation.isPending ||
-            snapshot.capabilities.imageInput === "unsupported"
-          }
-          unavailableExplanation={
-            snapshot.capabilities.imageInput === "unsupported"
-              ? "The selected Pi model or settings cannot receive images."
-              : undefined
-          }
-        />
-        <textarea
-          ref={textareaRef}
-          aria-label={`Message ${agentLabel}`}
-          // The mode was previously visible ONLY on the submit button's
-          // aria-label, i.e. after the decision to send had already been
-          // made. Placeholder, hint line and the rule above them now say it
-          // too, so "am I adding to this run or starting a new turn?" is
-          // answerable before the keystroke rather than after it.
-          placeholder={
-            active
-              ? `Steer this run — ${agentLabel} picks it up mid-task…`
-              : `Ask ${agentLabel} to work in this project…`
-          }
-          rows={1}
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-          }}
-          onPasteCapture={(event) => {
-            if (
-              mutation.isPending &&
-              [...event.clipboardData.items].some(
-                (item) =>
-                  item.kind === "file" && item.type.startsWith("image/"),
-              )
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-            }
-          }}
-          onPaste={attachments.onPaste}
-          readOnly={mutation.isPending}
-          onKeyDown={(event) => {
-            if (isReleaseKey(event)) {
-              event.preventDefault();
-              releaseFocusToPane(event.currentTarget);
-              return;
-            }
-            if (
-              event.key !== "Enter" ||
-              event.shiftKey ||
-              event.nativeEvent.isComposing
-            )
-              return;
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }}
-        />
-        <div className="composer-actions">
-          <span>
-            {active
-              ? "Enter to steer this run · Shift + Enter for a new line · Esc to leave the composer"
-              : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
-          </span>
-          {active && (
-            <button
-              type="button"
-              className="stop"
-              disabled={stopping.isPending}
-              onClick={() => {
-                stopping.mutate();
-              }}
-            >
-              ■ Stop
-            </button>
-          )}
+      <div className="composer-stack">
+        {text.trimStart().startsWith("/") && (
           <button
-            type="submit"
-            className="send"
-            aria-label={active ? "Steer current run" : "Send message"}
-            title={active ? "Steer current run" : "Send message"}
-            disabled={
-              runtimeUnavailable ||
-              mutation.isPending ||
-              (text.trim() === "" && attachments.images.length === 0)
-            }
+            type="button"
+            className="composer-command"
+            aria-label="/new — New chat in this worktree"
+            onClick={() => {
+              setText("/new");
+              textareaRef.current?.focus();
+            }}
           >
-            <span aria-hidden="true">↑</span>
+            <code>/new</code> — New chat in this worktree
           </button>
+        )}
+        <div className="composer-input">
+          <ChatAttachmentStrip
+            images={attachments.images}
+            error={attachments.error}
+            onRemove={attachments.remove}
+            onAdd={(files) => {
+              attachments.addFiles(files, "picker");
+            }}
+            disabled={
+              mutation.isPending ||
+              snapshot.capabilities.imageInput === "unsupported"
+            }
+            unavailableExplanation={
+              snapshot.capabilities.imageInput === "unsupported"
+                ? "The selected Pi model or settings cannot receive images."
+                : undefined
+            }
+          />
+          <textarea
+            ref={textareaRef}
+            aria-label={`Message ${agentLabel}`}
+            // The mode was previously visible ONLY on the submit button's
+            // aria-label, i.e. after the decision to send had already been
+            // made. Placeholder, hint line and the rule above them now say it
+            // too, so "am I adding to this run or starting a new turn?" is
+            // answerable before the keystroke rather than after it.
+            placeholder={
+              active
+                ? `Steer this run — ${agentLabel} picks it up mid-task…`
+                : `Ask ${agentLabel} to work in this project…`
+            }
+            rows={1}
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+            }}
+            onPasteCapture={(event) => {
+              if (
+                mutation.isPending &&
+                [...event.clipboardData.items].some(
+                  (item) =>
+                    item.kind === "file" && item.type.startsWith("image/"),
+                )
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+            onPaste={attachments.onPaste}
+            readOnly={mutation.isPending}
+            onKeyDown={(event) => {
+              if (isReleaseKey(event)) {
+                event.preventDefault();
+                releaseFocusToPane(event.currentTarget);
+                return;
+              }
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing
+              )
+                return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
+          />
+          <div className="composer-actions">
+            <span>
+              {active
+                ? "Enter to steer this run · Shift + Enter for a new line · Esc to leave the composer"
+                : "Enter to send · Shift + Enter for a new line · Esc to leave the composer"}
+            </span>
+            {active && (
+              <button
+                type="button"
+                className="stop"
+                disabled={stopping.isPending}
+                onClick={() => {
+                  stopping.mutate();
+                }}
+              >
+                ■ Stop
+              </button>
+            )}
+            <button
+              type="submit"
+              className="send"
+              aria-label={
+                text.trim() === "/new" && attachments.images.length === 0
+                  ? "Start new chat in this worktree"
+                  : active
+                    ? "Steer current run"
+                    : "Send message"
+              }
+              title={
+                text.trim() === "/new" && attachments.images.length === 0
+                  ? "Start new chat in this worktree"
+                  : active
+                    ? "Steer current run"
+                    : "Send message"
+              }
+              disabled={
+                runtimeUnavailable ||
+                mutation.isPending ||
+                continuing.isPending ||
+                (text.trim() === "" && attachments.images.length === 0)
+              }
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          </div>
         </div>
       </div>
+      {continuing.error !== null && (
+        <ErrorNotice
+          error={continuing.error}
+          context="Could not start a new chat in this worktree"
+          onRetry={() => {
+            continuing.mutate();
+          }}
+        />
+      )}
       {stopping.error !== null && (
         <ErrorNotice
           error={stopping.error}
@@ -1573,6 +1630,9 @@ function ThreadPaneBody(props: ThreadPaneProps) {
               threadId={threadId}
               snapshot={snapshot.data}
               onSteered={onSteered}
+              onContinue={() => {
+                props.onContinue?.();
+              }}
               onFocus={() => {
                 props.onFocus();
               }}

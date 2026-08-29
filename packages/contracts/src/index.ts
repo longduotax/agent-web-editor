@@ -330,6 +330,7 @@ export const ThreadWorkspaceSummarySchema = z
     }),
     z.object({
       mode: z.literal("worktree"),
+      worktreeId: WorktreeIdSchema,
       branchName: GitBranchSchema,
       baseBranch: GitBranchSchema,
       baseCommit: z.string().regex(/^[0-9a-f]{7,64}$/),
@@ -618,6 +619,21 @@ export const ImportThreadRequestSchema = z
     runtime: RuntimeKindSchema.optional(),
     idempotencyKey: IdempotencyKeySchema,
   })
+  .strict();
+export const ContinueThreadPreflightResponseSchema = z
+  .object({
+    available: z.literal(true),
+    imageInput: ImageInputCapabilitySchema.optional(),
+  })
+  .strict();
+export const ContinueThreadRequestSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(200_000),
+    idempotencyKey: IdempotencyKeySchema,
+  })
+  .strict();
+export const ContinueThreadResponseSchema = z
+  .object({ thread: ThreadSummarySchema, run: RunSchema })
   .strict();
 export const PromptRequestSchema = z
   .object({

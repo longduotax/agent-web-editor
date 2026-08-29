@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectId, RuntimeKind, ThreadId } from "@pi-web/contracts";
+import {
+  IdempotencyKeySchema,
+  type ProjectId,
+  type RuntimeKind,
+  type ThreadId,
+} from "@pi-web/contracts";
 
 import {
   commandId,
+  continueThread,
   getAgentBackends,
   getWorkspace,
   getWorkspacePreflight,
+  preflightContinuation,
   startThread,
 } from "../../api/client.js";
 import { ActivityStep } from "../../components/Activity.js";
@@ -17,6 +24,7 @@ import {
 import { ErrorNotice } from "../../components/ErrorNotice.js";
 import { Markdown } from "../../components/Markdown.js";
 import {
+  continuationCreationKey,
   newChatDraftKey,
   readDraft,
   removeDraft,
@@ -165,6 +173,7 @@ function BranchOptions({
 export interface NewChatPaneProps {
   projectId: ProjectId;
   paneId: PaneId;
+  continuationSourceThreadId?: ThreadId | null;
   focused: boolean;
   onFocus(): void;
   onClose(): void;
@@ -179,7 +188,18 @@ const AGENT_OPTIONS: readonly { value: RuntimeKind; label: string }[] = [
 
 export function NewChatPane(props: NewChatPaneProps) {
   const { projectId, paneId, focused } = props;
+  const continuationSourceThreadId = props.continuationSourceThreadId ?? null;
   const draftKey = newChatDraftKey(projectId, paneId);
+  const creationStorageKey = continuationCreationKey(projectId, paneId);
+  const initialCreationKey = () => {
+    if (continuationSourceThreadId !== null) {
+      const stored = IdempotencyKeySchema.safeParse(
+        readDraft(creationStorageKey),
+      );
+      if (stored.success) return stored.data;
+    }
+    return commandId();
+  };
   const queryClient = useQueryClient();
   const workspace = useQuery({
     queryKey: ["workspace"],
@@ -188,18 +208,28 @@ export function NewChatPane(props: NewChatPaneProps) {
   const preflight = useQuery({
     queryKey: ["workspace-preflight", projectId],
     queryFn: () => getWorkspacePreflight(projectId),
+    enabled: continuationSourceThreadId === null,
+  });
+  const continuationPreflight = useQuery({
+    queryKey: ["continuation-preflight", projectId, continuationSourceThreadId],
+    queryFn: () => {
+      if (continuationSourceThreadId === null)
+        throw new Error("Continuation source is required");
+      return preflightContinuation(projectId, continuationSourceThreadId);
+    },
+    enabled: continuationSourceThreadId !== null,
   });
   const [mode, setMode] = useState<"worktree" | "shared">("worktree");
   const [sourceChanges, setSourceChanges] = useState<
     "none" | "tracked_and_untracked"
   >("none");
   const [baseBranch, setBaseBranch] = useState("");
-  const [creationKey, setCreationKey] = useState(commandId);
+  const [creationKey, setCreationKey] = useState(initialCreationKey);
   const backends = useQuery({
     queryKey: ["agent-backends"],
     queryFn: getAgentBackends,
   });
-  // Non-sticky by design: the composer opens on the resolved default every
+  // Non-sticky by design: a new composer opens on the resolved default every
   // time, so an incidental one-off pick never becomes a standing choice.
   const backendChoice = readBackendChoice();
   const resolvedDefault = resolveDefaultBackend(
@@ -213,23 +243,42 @@ export function NewChatPane(props: NewChatPaneProps) {
   const fallbackRuntime = backends.data?.backends.find(
     (backend) => backend.available,
   )?.kind;
-  // A default is a policy, not an explicit one-off choice. If that policy
-  // names an unavailable backend, pick the first server-advertised available
-  // backend. An explicit choice stays visible so its refusal is explainable.
   const selectedRuntime =
     runtime ??
     (resolvedDefaultBackend?.available === false
       ? (fallbackRuntime ?? resolvedDefault)
       : resolvedDefault);
-  const selectedBackend = backendFor(selectedRuntime);
-  const selectedUnavailable = selectedBackend?.available === false;
-  const selectedUnavailableReason =
-    selectedBackend?.reason ?? "This agent backend is unavailable.";
-  const agentLabel = selectedRuntime === "codex" ? "Codex" : "Pi";
+  const continuationThread = workspace.data?.threads.find(
+    (thread) => thread.id === continuationSourceThreadId,
+  );
+  // A continuation inherits its source chat's immutable backend. A brand-new
+  // chat uses the selectable machine/default policy above.
+  const effectiveRuntime = continuationThread?.runtime ?? selectedRuntime;
+  const selectedBackend = backendFor(effectiveRuntime);
+  const waitingForContinuationSource =
+    continuationSourceThreadId !== null && workspace.data === undefined;
+  const continuationSourceMissing =
+    continuationSourceThreadId !== null &&
+    workspace.data !== undefined &&
+    continuationThread === undefined;
+  const selectedUnavailable =
+    waitingForContinuationSource ||
+    continuationSourceMissing ||
+    selectedBackend?.available === false;
+  const selectedUnavailableReason = continuationSourceMissing
+    ? "The source chat is no longer available."
+    : (selectedBackend?.reason ?? "This agent backend is unavailable.");
+  const agentLabel = effectiveRuntime === "codex" ? "Codex" : "Pi";
   const imageInputCapability =
-    selectedRuntime === "pi"
-      ? (preflight.data?.imageInput ?? "unknown")
-      : "unsupported";
+    continuationSourceThreadId === null
+      ? selectedRuntime === "pi"
+        ? (preflight.data?.imageInput ?? "unknown")
+        : "unsupported"
+      : continuationThread === undefined
+        ? "unknown"
+        : continuationThread.runtime === "pi"
+          ? (continuationPreflight.data?.imageInput ?? "unknown")
+          : "unsupported";
   const [text, setText] = useState(() => readDraft(draftKey));
   const textareaRef = useAutoGrow<HTMLTextAreaElement>(text);
   const attachments = useChatAttachments(imageInputCapability, () => {
@@ -252,11 +301,15 @@ export function NewChatPane(props: NewChatPaneProps) {
     setMode("worktree");
     setSourceChanges("none");
     setBaseBranch("");
-    setCreationKey(commandId());
+    setCreationKey(initialCreationKey());
     setSentPrompt(null);
     attachments.clear();
     setText(readDraft(newChatDraftKey(projectId, paneId)));
-  }, [paneId, projectId, attachments.clear]);
+  }, [continuationSourceThreadId, paneId, projectId, attachments.clear]);
+  useEffect(() => {
+    if (continuationSourceThreadId === null) removeDraft(creationStorageKey);
+    else writeDraft(creationStorageKey, creationKey);
+  }, [continuationSourceThreadId, creationKey, creationStorageKey]);
   useEffect(() => {
     if (preflight.data?.currentBranch !== null && baseBranch === "")
       setBaseBranch(preflight.data?.currentBranch ?? "");
@@ -273,33 +326,42 @@ export function NewChatPane(props: NewChatPaneProps) {
   }, [draftKey, sentPrompt, text]);
   const create = useMutation({
     mutationFn: async (promptText: string) =>
-      await startThread(
-        projectId,
-        promptText,
-        mode === "shared"
-          ? { mode: "shared" }
-          : {
-              mode: "worktree",
-              baseBranch,
-              sourceChanges,
-              ...(sourceChanges === "tracked_and_untracked" &&
-              preflight.data?.changes !== null &&
-              preflight.data?.changes !== undefined
-                ? { sourceStateToken: preflight.data.changes.token }
-                : {}),
-            },
-        creationKey,
-        runtime === null &&
-          backendChoice === "follow-machine" &&
-          backends.data === undefined
-          ? undefined
-          : selectedRuntime,
-        attachments.files,
-      ),
+      continuationSourceThreadId === null
+        ? await startThread(
+            projectId,
+            promptText,
+            mode === "shared"
+              ? { mode: "shared" }
+              : {
+                  mode: "worktree",
+                  baseBranch,
+                  sourceChanges,
+                  ...(sourceChanges === "tracked_and_untracked" &&
+                  preflight.data?.changes !== null &&
+                  preflight.data?.changes !== undefined
+                    ? { sourceStateToken: preflight.data.changes.token }
+                    : {}),
+                },
+            creationKey,
+            runtime === null &&
+              backendChoice === "follow-machine" &&
+              backends.data === undefined
+              ? undefined
+              : selectedRuntime,
+            attachments.files,
+          )
+        : await continueThread(
+            projectId,
+            continuationSourceThreadId,
+            promptText,
+            creationKey,
+            attachments.files,
+          ),
     onSuccess: async (result) => {
       setSentPrompt(null);
       attachments.clear();
       removeDraft(draftKey);
+      removeDraft(creationStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       props.onThreadStarted(result.thread.id);
     },
@@ -321,7 +383,8 @@ export function NewChatPane(props: NewChatPaneProps) {
     if (create.isPending || selectedUnavailable) return;
     if (
       (value.trim() === "" && attachments.images.length === 0) ||
-      (mode === "worktree" &&
+      (continuationSourceThreadId === null &&
+        mode === "worktree" &&
         (!preflight.data?.worktreeAvailable || baseBranch === ""))
     )
       return;
@@ -363,7 +426,9 @@ export function NewChatPane(props: NewChatPaneProps) {
         focused={focused}
         detail={
           <span className="pane-meta">
-            Pick where {agentLabel} runs, then describe the work.
+            {continuationSourceThreadId === null
+              ? `Pick where ${agentLabel} runs, then describe the work.`
+              : `Same managed worktree · fresh ${agentLabel} conversation`}
           </span>
         }
         onSplit={() => {
@@ -374,7 +439,7 @@ export function NewChatPane(props: NewChatPaneProps) {
         }}
       />
       <main className="center new-chat">
-        {sentPrompt === null && (
+        {sentPrompt === null && continuationSourceThreadId === null && (
           // ~450px of empty white sat here: a header, a composer, and nothing
           // in between, on the screen where a first-time user decides what
           // this tool is. Two things fill it, and both are things the pane
@@ -504,9 +569,11 @@ export function NewChatPane(props: NewChatPaneProps) {
               label={{
                 action: "Preparing",
                 target:
-                  mode === "worktree"
-                    ? "new git worktree"
-                    : (project?.displayPath ?? "local checkout"),
+                  continuationSourceThreadId !== null
+                    ? "same managed worktree"
+                    : mode === "worktree"
+                      ? "new git worktree"
+                      : (project?.displayPath ?? "local checkout"),
                 meta: "naming the thread",
               }}
               status="running"
@@ -567,194 +634,226 @@ export function NewChatPane(props: NewChatPaneProps) {
               Drop photos here
             </div>
           )}
-          <div className="new-chat-toolbar" aria-label="New chat configuration">
-            <label>
-              <span className="sr-only">Agent</span>
-              <select
-                aria-label="Agent"
-                value={selectedRuntime}
-                onChange={(event) => {
-                  setRuntime(event.target.value === "pi" ? "pi" : "codex");
-                  setCreationKey(commandId());
-                }}
-              >
-                {AGENT_OPTIONS.map((option) => {
-                  const backend = backends.data?.backends.find(
-                    (entry) => entry.kind === option.value,
-                  );
-                  const unusable = backend !== undefined && !backend.available;
-                  return (
-                    <option
-                      key={option.value}
-                      value={option.value}
-                      disabled={unusable}
-                    >
-                      {unusable
-                        ? `${option.label} — ${backend.reason ?? "unavailable"}`
-                        : option.label}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Execution location</span>
-              <select
-                aria-label="Execution location"
-                value={mode}
-                onChange={(event) => {
-                  setMode(
-                    event.target.value === "shared" ? "shared" : "worktree",
-                  );
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                <option
-                  value="worktree"
-                  disabled={preflight.data?.worktreeAvailable === false}
+          {continuationSourceThreadId !== null ? (
+            <div
+              className="new-chat-toolbar"
+              aria-label="Same-worktree chat configuration"
+            >
+              <span>Same managed worktree</span>
+            </div>
+          ) : (
+            <div
+              className="new-chat-toolbar"
+              aria-label="New chat configuration"
+            >
+              <label>
+                <span className="sr-only">Agent</span>
+                <select
+                  aria-label="Agent"
+                  value={selectedRuntime}
+                  onChange={(event) => {
+                    setRuntime(event.target.value === "pi" ? "pi" : "codex");
+                    setCreationKey(commandId());
+                  }}
                 >
-                  New worktree
-                </option>
-                <option value="shared">Local checkout</option>
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Starting state</span>
-              <select
-                aria-label="Starting state"
-                value={mode === "shared" ? "current" : sourceChanges}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setSourceChanges(
-                    event.target.value === "tracked_and_untracked"
-                      ? "tracked_and_untracked"
-                      : "none",
-                  );
-                  setCreationKey(commandId());
-                }}
-              >
-                {mode === "shared" && (
-                  <option value="current">Current local files</option>
-                )}
-                {mode === "worktree" && (
-                  <>
-                    <option value="none">Clean start</option>
-                    <option
-                      value="tracked_and_untracked"
-                      disabled={
-                        baseBranch !==
-                          (preflight.data === undefined
-                            ? null
-                            : preflight.data.currentBranch) ||
-                        (preflight.data?.changes?.files.length ?? 0) === 0
-                      }
-                    >
-                      Include local changes
-                    </option>
-                  </>
-                )}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Base branch</span>
-              <select
-                aria-label="Base branch"
-                // In shared mode this control does not apply, and a greyed
-                // select still DISPLAYING a branch reads as "it will use
-                // master" rather than "branch does not apply". The shared
-                // option states the fact instead: whatever is checked out
-                // now is what Pi works on, and it is not a choice made here.
-                value={mode === "shared" ? "current" : baseBranch}
-                disabled={mode === "shared"}
-                onChange={(event) => {
-                  setBaseBranch(event.target.value);
-                  setSourceChanges("none");
-                  setCreationKey(commandId());
-                }}
-              >
-                {mode === "shared" ? (
-                  <option value="current">
-                    {currentBranch === null
-                      ? "Whatever is checked out"
-                      : `Already on ${currentBranch}`}
+                  {AGENT_OPTIONS.map((option) => {
+                    const backend = backendFor(option.value);
+                    const unusable =
+                      backend !== undefined && !backend.available;
+                    return (
+                      <option
+                        key={option.value}
+                        value={option.value}
+                        disabled={unusable}
+                      >
+                        {unusable
+                          ? `${option.label} — ${backend.reason ?? "unavailable"}`
+                          : option.label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Execution location</span>
+                <select
+                  aria-label="Execution location"
+                  value={mode}
+                  onChange={(event) => {
+                    setMode(
+                      event.target.value === "shared" ? "shared" : "worktree",
+                    );
+                    setSourceChanges("none");
+                    setCreationKey(commandId());
+                  }}
+                >
+                  <option
+                    value="worktree"
+                    disabled={preflight.data?.worktreeAvailable === false}
+                  >
+                    New worktree
                   </option>
-                ) : (
-                  <>
-                    <BranchOptions
-                      branches={branchGroups.project}
-                      labels={branchLabelsByBranch}
-                    />
-                    {branchGroups.generated.length > 0 && (
-                      // Grouped, not hidden: these are real branches a user
-                      // may legitimately want to branch from again. They just
-                      // must not bury the handful of branches a person named.
-                      <optgroup label="Previous Pi runs">
-                        <BranchOptions
-                          branches={branchGroups.generated}
-                          labels={branchLabelsByBranch}
-                        />
-                      </optgroup>
-                    )}
-                  </>
-                )}
-              </select>
-            </label>
-          </div>
-          {mode === "worktree" &&
-            preflight.data?.worktreeAvailable === false && (
-              <p className="new-chat-note" role="alert">
-                {preflight.data.unavailableReason}
-              </p>
-            )}
-          {selectedUnavailable && (
+                  <option value="shared">Local checkout</option>
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Starting state</span>
+                <select
+                  aria-label="Starting state"
+                  value={mode === "shared" ? "current" : sourceChanges}
+                  disabled={mode === "shared"}
+                  onChange={(event) => {
+                    setSourceChanges(
+                      event.target.value === "tracked_and_untracked"
+                        ? "tracked_and_untracked"
+                        : "none",
+                    );
+                    setCreationKey(commandId());
+                  }}
+                >
+                  {mode === "shared" && (
+                    <option value="current">Current local files</option>
+                  )}
+                  {mode === "worktree" && (
+                    <>
+                      <option value="none">Clean start</option>
+                      <option
+                        value="tracked_and_untracked"
+                        disabled={
+                          baseBranch !==
+                            (preflight.data === undefined
+                              ? null
+                              : preflight.data.currentBranch) ||
+                          (preflight.data?.changes?.files.length ?? 0) === 0
+                        }
+                      >
+                        Include local changes
+                      </option>
+                    </>
+                  )}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Base branch</span>
+                <select
+                  aria-label="Base branch"
+                  // In shared mode this control does not apply, and a greyed
+                  // select still DISPLAYING a branch reads as "it will use
+                  // master" rather than "branch does not apply". The shared
+                  // option states the fact instead: whatever is checked out
+                  // now is what Pi works on, and it is not a choice made here.
+                  value={mode === "shared" ? "current" : baseBranch}
+                  disabled={mode === "shared"}
+                  onChange={(event) => {
+                    setBaseBranch(event.target.value);
+                    setSourceChanges("none");
+                    setCreationKey(commandId());
+                  }}
+                >
+                  {mode === "shared" ? (
+                    <option value="current">
+                      {currentBranch === null
+                        ? "Whatever is checked out"
+                        : `Already on ${currentBranch}`}
+                    </option>
+                  ) : (
+                    <>
+                      <BranchOptions
+                        branches={branchGroups.project}
+                        labels={branchLabelsByBranch}
+                      />
+                      {branchGroups.generated.length > 0 && (
+                        // Grouped, not hidden: these are real branches a user
+                        // may legitimately want to branch from again. They just
+                        // must not bury the handful of branches a person named.
+                        <optgroup label="Previous Pi runs">
+                          <BranchOptions
+                            branches={branchGroups.generated}
+                            labels={branchLabelsByBranch}
+                          />
+                        </optgroup>
+                      )}
+                    </>
+                  )}
+                </select>
+              </label>
+            </div>
+          )}
+          {selectedUnavailable && !waitingForContinuationSource && (
             <p className="new-chat-note" role="alert">
               {selectedUnavailableReason}
             </p>
           )}
-          {mode === "worktree" && sourceChanges === "none" && (
-            <p className="new-chat-note">
-              Starts from committed {baseBranch || "HEAD"}. Local changes are
-              not copied.
-            </p>
-          )}
-          {mode === "worktree" && sourceChanges === "tracked_and_untracked" && (
-            <div className="new-chat-note warning">
-              <p>
-                Including {String(preflight.data?.changes?.files.length ?? 0)}{" "}
-                local changes. Ignored files are excluded.
-              </p>
-              <details>
-                <summary>Review files</summary>
-                <ul>
-                  {preflight.data?.changes?.files.map((path) => (
-                    <li key={path}>{path}</li>
-                  ))}
-                </ul>
-              </details>
-            </div>
-          )}
-          {mode === "shared" && (
-            <p className="new-chat-note warning" role="status">
-              {selectedRuntime === "codex" ? (
-                <>
-                  <strong>Codex starts in your project directory.</strong> It
-                  runs without application approval inside the boundary this
-                  server was configured with.
-                </>
-              ) : (
-                <>
-                  <strong>Pi writes to your project directory.</strong> It
-                  edits, creates and deletes files in{" "}
-                  {project?.displayPath ?? "this project"}
-                  {currentBranch === null
-                    ? ""
-                    : ` on your current branch, ${currentBranch},`}{" "}
-                  alongside your uncommitted changes. Nothing is copied first
-                  and there is no undo.
-                </>
+          {continuationSourceThreadId === null && (
+            <>
+              {mode === "worktree" &&
+                preflight.data?.worktreeAvailable === false && (
+                  <p className="new-chat-note" role="alert">
+                    {preflight.data.unavailableReason}
+                  </p>
+                )}
+              {mode === "worktree" && sourceChanges === "none" && (
+                <p className="new-chat-note">
+                  Starts from committed {baseBranch || "HEAD"}. Local changes
+                  are not copied.
+                </p>
               )}
-            </p>
+              {mode === "worktree" &&
+                sourceChanges === "tracked_and_untracked" && (
+                  <div className="new-chat-note warning">
+                    <p>
+                      Including{" "}
+                      {String(preflight.data?.changes?.files.length ?? 0)} local
+                      changes. Ignored files are excluded.
+                    </p>
+                    <details>
+                      <summary>Review files</summary>
+                      <ul>
+                        {preflight.data?.changes?.files.map((path) => (
+                          <li key={path}>{path}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                )}
+              {mode === "shared" && (
+                // The old note read "Pi will work directly in the existing
+                // checkout and see its current files." Every word of that was
+                // about READING. Verified against the server: a shared thread
+                // resolves its execution root to the project's own canonical
+                // path (ThreadExecutionContextResolver.resolve, worktree_id
+                // null) and Pi's tools run there with the user's permissions,
+                // no approval step and no sandbox -- so it edits, creates and
+                // deletes files in the directory the user has open, on whatever
+                // branch is checked out, with their uncommitted work in place.
+                // That is the defining property of the mode and the one
+                // irreversible choice on this screen, so it is what the note
+                // says first.
+                // `status`, not `alert`: it appears in response to the user's own
+                // choice, so it should be announced, but politely -- and not
+                // `note`, which is silent on appearance.
+                <p className="new-chat-note warning" role="status">
+                  {selectedRuntime === "codex" ? (
+                    <>
+                      <strong>Codex starts in your project directory.</strong>{" "}
+                      It runs without application approval inside the boundary
+                      this server was configured with.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Pi writes to your project directory.</strong> It
+                      edits, creates and deletes files in{" "}
+                      {project?.displayPath ?? "this project"}
+                      {currentBranch === null
+                        ? ""
+                        : ` on your current branch, ${currentBranch},`}{" "}
+                      alongside your uncommitted changes. Nothing is copied
+                      first and there is no undo.
+                    </>
+                  )}
+                </p>
+              )}
+            </>
           )}
           <div className="composer-input new-chat-input">
             <ChatAttachmentStrip
@@ -769,9 +868,11 @@ export function NewChatPane(props: NewChatPaneProps) {
               }
               unavailableExplanation={
                 imageInputCapability === "unsupported"
-                  ? selectedRuntime === "pi"
+                  ? effectiveRuntime === "pi"
                     ? "The selected Pi model or settings cannot receive images."
-                    : "Codex image input is not supported. Choose Pi to attach photos."
+                    : continuationSourceThreadId === null
+                      ? "Codex image input is not supported. Choose Pi to attach photos."
+                      : "Codex image input is not supported for this chat."
                   : undefined
               }
             />

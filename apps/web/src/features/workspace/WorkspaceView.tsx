@@ -13,8 +13,12 @@ import {
   resolveCommand,
   type KeyEventLike,
 } from "./keybindings.js";
-import { newChatDraftKey, removeDraft } from "./drafts.js";
-import type { PaneId } from "./layoutTree.js";
+import {
+  continuationCreationKey,
+  newChatDraftKey,
+  removeDraft,
+} from "./drafts.js";
+import { paneThreadId, type PaneId } from "./layoutTree.js";
 import { TilingSurface } from "./TilingSurface.js";
 import { useWorkspaceLayout } from "./useWorkspaceLayout.js";
 import type { WorkspaceLayoutController } from "./useWorkspaceLayout.js";
@@ -35,7 +39,7 @@ export function WorkspaceView(props: {
   const focusedThreadId =
     focusedPaneId === null
       ? null
-      : (controller.layout.panes[focusedPaneId]?.threadId ?? null);
+      : paneThreadId(controller.layout.panes[focusedPaneId]);
   useEffect(() => {
     onFocusedThreadChange?.(focusedThreadId);
   }, [focusedThreadId, onFocusedThreadChange]);
@@ -71,38 +75,43 @@ export function WorkspaceView(props: {
     // eslint-disable-next-line @typescript-eslint/unbound-method
   }, [controller.layout, controller.assignThreadToPane]);
 
-  const openThread = useCallback((threadId: ThreadId) => {
-    const current = controllerRef.current;
-    const { layout } = current;
-    const existingPaneId = Object.entries(layout.panes).find(
-      ([, pane]) => pane.threadId === threadId,
-    )?.[0];
-    if (existingPaneId !== undefined) {
-      current.focus(existingPaneId);
-      return;
-    }
-    const focusedPaneId = layout.focusedPaneId;
-    const focusedPane =
-      focusedPaneId !== null ? layout.panes[focusedPaneId] : undefined;
-    if (focusedPaneId !== null && focusedPane?.threadId === null) {
-      current.assignThreadToPane(focusedPaneId, threadId);
-      return;
-    }
-    // An assignment for this thread is already in flight, so the pane that
-    // will receive it exists (or is about to). Calling newPane() again would
-    // make a SECOND one and only the second would get the thread, leaving an
-    // orphan "New chat" pane beside it.
-    //
-    // This is the same hazard `handledNewChatEntryRef` guards below, for the
-    // same reason: newPane() is a functional setState, so under StrictMode's
-    // mount -> cleanup -> mount the second invocation still reads the
-    // pre-update layout and takes the same branch. It only becomes reachable
-    // when this effect runs against an EMPTY surface, which is exactly what
-    // closing the last pane and letting the route re-resolve produces.
-    if (pendingThreadAssignmentRef.current === threadId) return;
-    pendingThreadAssignmentRef.current = threadId;
-    current.newPane();
-  }, []);
+  const openThread = useCallback(
+    (threadId: ThreadId) => {
+      const current = controllerRef.current;
+      const { layout } = current;
+      const existingPaneId = Object.entries(layout.panes).find(
+        ([, pane]) => pane.type === "thread" && pane.threadId === threadId,
+      )?.[0];
+      if (existingPaneId !== undefined) {
+        current.focus(existingPaneId);
+        return;
+      }
+      const focusedPaneId = layout.focusedPaneId;
+      const focusedPane =
+        focusedPaneId !== null ? layout.panes[focusedPaneId] : undefined;
+      if (focusedPaneId !== null && focusedPane?.type !== "thread") {
+        removeDraft(newChatDraftKey(projectId, focusedPaneId));
+        removeDraft(continuationCreationKey(projectId, focusedPaneId));
+        current.assignThreadToPane(focusedPaneId, threadId);
+        return;
+      }
+      // An assignment for this thread is already in flight, so the pane that
+      // will receive it exists (or is about to). Calling newPane() again would
+      // make a SECOND one and only the second would get the thread, leaving an
+      // orphan "New chat" pane beside it.
+      //
+      // This is the same hazard `handledNewChatEntryRef` guards below, for the
+      // same reason: newPane() is a functional setState, so under StrictMode's
+      // mount -> cleanup -> mount the second invocation still reads the
+      // pre-update layout and takes the same branch. It only becomes reachable
+      // when this effect runs against an EMPTY surface, which is exactly what
+      // closing the last pane and letting the route re-resolve produces.
+      if (pendingThreadAssignmentRef.current === threadId) return;
+      pendingThreadAssignmentRef.current = threadId;
+      current.newPane();
+    },
+    [projectId],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -147,8 +156,10 @@ export function WorkspaceView(props: {
   const handleClose = useCallback(
     (paneId: PaneId) => {
       removeDraft(newChatDraftKey(projectId, paneId));
-      const closedThreadId =
-        controllerRef.current.layout.panes[paneId]?.threadId ?? null;
+      removeDraft(continuationCreationKey(projectId, paneId));
+      const closedThreadId = paneThreadId(
+        controllerRef.current.layout.panes[paneId],
+      );
       // The close is computed once, by the controller, and the result is what
       // decides the route. Recomputing closePane() here as well was correct
       // only for as long as the controller's close stayed identical to it.
@@ -186,7 +197,7 @@ export function WorkspaceView(props: {
           void navigate(`/projects/${projectId}`, { replace: true });
         return;
       }
-      const nextThreadId = after.panes[nextPaneId]?.threadId ?? null;
+      const nextThreadId = paneThreadId(after.panes[nextPaneId]);
       void navigate(
         nextThreadId === null
           ? `/projects/${projectId}/new`
@@ -209,10 +220,11 @@ export function WorkspaceView(props: {
   // rather than opening a second one, so re-running on unrelated navigations
   // only ever moves focus to the thread the URL names.
   useEffect(() => {
+    if (isNewChatRoute) return;
     const parsed = ThreadIdSchema.safeParse(params.threadId);
     if (!parsed.success) return;
     openThread(parsed.data);
-  }, [params.threadId, location.key, openThread]);
+  }, [isNewChatRoute, params.threadId, location.key, openThread]);
 
   // The "/new" route is the tiling surface's entry point for starting a
   // fresh chat: on entering it (or switching projects while already on it),
@@ -228,21 +240,56 @@ export function WorkspaceView(props: {
   // persisted to device-local layout storage). The ref survives the double
   // invocation; it is cleared when the route leaves /new, so a later
   // re-entry (or a project switch while on /new) dispatches again.
-  const handledNewChatEntryRef = useRef<ProjectId | null>(null);
+  const handledNewChatEntryRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isNewChatRoute) {
       handledNewChatEntryRef.current = null;
       return;
     }
-    if (handledNewChatEntryRef.current === projectId) return;
-    handledNewChatEntryRef.current = projectId;
-    const layout = controllerRef.current.layout;
+    const entryKey = `${projectId}:${location.pathname}`;
+    if (handledNewChatEntryRef.current === entryKey) return;
+    handledNewChatEntryRef.current = entryKey;
+    const current = controllerRef.current;
+    const { layout } = current;
     const focusedPaneId = layout.focusedPaneId;
     const focusedPane =
       focusedPaneId !== null ? layout.panes[focusedPaneId] : undefined;
-    if (focusedPaneId !== null && focusedPane?.threadId === null) return;
-    controllerRef.current.newPane();
-  }, [isNewChatRoute, projectId]);
+    const pendingSource = ThreadIdSchema.safeParse(params.threadId);
+    if (pendingSource.success) {
+      const existing = Object.entries(layout.panes).find(
+        ([, pane]) =>
+          pane.type === "continuation" &&
+          pane.sourceThreadId === pendingSource.data,
+      )?.[0];
+      if (existing !== undefined) {
+        current.focus(existing);
+        return;
+      }
+      const sourcePane = Object.entries(layout.panes).find(
+        ([, pane]) =>
+          pane.type === "thread" && pane.threadId === pendingSource.data,
+      )?.[0];
+      if (sourcePane !== undefined) {
+        current.focus(sourcePane);
+        current.beginContinuationInPane(sourcePane, pendingSource.data);
+        return;
+      }
+      if (focusedPaneId !== null && focusedPane?.type !== "thread") {
+        current.restoreContinuationInPane(focusedPaneId, pendingSource.data);
+      } else {
+        current.newContinuationPane(pendingSource.data);
+      }
+      return;
+    }
+    if (focusedPaneId !== null && focusedPane?.type === "new") return;
+    if (focusedPaneId !== null && focusedPane?.type === "continuation") {
+      removeDraft(newChatDraftKey(projectId, focusedPaneId));
+      removeDraft(continuationCreationKey(projectId, focusedPaneId));
+      current.resetPaneToNew(focusedPaneId);
+      return;
+    }
+    current.newPane();
+  }, [isNewChatRoute, location.pathname, params.threadId, projectId]);
 
   // A pane's "New chat" form starting a thread always assigns the thread to
   // that pane. It also navigates to the thread's route, but only when that
@@ -253,12 +300,15 @@ export function WorkspaceView(props: {
   // this never creates a second pane or loops.
   const handleThreadStarted = useCallback(
     (paneId: PaneId, threadId: ThreadId) => {
+      const replacedThreadId = paneThreadId(
+        controllerRef.current.layout.panes[paneId],
+      );
       controllerRef.current.assignThreadToPane(paneId, threadId);
-      if (isNewChatRoute) {
+      if (isNewChatRoute || params.threadId === replacedThreadId) {
         void navigate(`/projects/${projectId}/threads/${threadId}`);
       }
     },
-    [isNewChatRoute, navigate, projectId],
+    [isNewChatRoute, navigate, params.threadId, projectId],
   );
 
   return (

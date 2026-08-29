@@ -6,6 +6,8 @@ import {
   UnarchiveThreadResponseSchema,
   BrowseProjectResponseSchema,
   ChatImageResponseSchema,
+  ContinueThreadPreflightResponseSchema,
+  ContinueThreadResponseSchema,
   FilePreviewResponseSchema,
   FileTreeResponseSchema,
   GitDiffResponseSchema,
@@ -251,6 +253,34 @@ export async function startThread(
     },
   );
 }
+export async function preflightContinuation(
+  projectId: ProjectId,
+  threadId: ThreadId,
+) {
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/continue/preflight`,
+    ContinueThreadPreflightResponseSchema,
+  );
+}
+
+export async function continueThread(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  prompt: string,
+  idempotencyKey: string,
+  images: readonly File[] = [],
+) {
+  const metadata = { prompt, idempotencyKey };
+  return await request(
+    `/api/projects/${projectId}/threads/${threadId}/continue`,
+    ContinueThreadResponseSchema,
+    {
+      method: "POST",
+      body: images.length === 0 ? body(metadata) : chatForm(metadata, images),
+    },
+  );
+}
+
 export async function getAgentBackends() {
   return await request("/api/agent-backends", AgentBackendsResponseSchema);
 }

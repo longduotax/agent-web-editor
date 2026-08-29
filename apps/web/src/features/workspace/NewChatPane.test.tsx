@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -12,7 +18,9 @@ const api = vi.hoisted(() => ({
   getAgentBackends: vi.fn(),
   getWorkspace: vi.fn(),
   getWorkspacePreflight: vi.fn(),
+  preflightContinuation: vi.fn(),
   startThread: vi.fn(),
+  continueThread: vi.fn(),
 }));
 
 vi.mock("../../api/client.js", async (importOriginal) => {
@@ -20,7 +28,11 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   return { ...client, ...api };
 });
 
-import { newChatDraftKey, readDraft } from "./drafts.js";
+import {
+  continuationCreationKey,
+  newChatDraftKey,
+  readDraft,
+} from "./drafts.js";
 import {
   NewChatPane,
   partitionBranches,
@@ -41,7 +53,7 @@ afterEach(() => {
 
 function renderNewChat(
   preflight: Record<string, unknown> = {},
-  backendMetadataPending = false,
+  continuationOrBackendPending: ThreadId | null | boolean = null,
   backendMetadata?: {
     defaultRuntime: "pi" | "codex";
     backends: {
@@ -51,6 +63,11 @@ function renderNewChat(
     }[];
   },
 ) {
+  const continuationSourceThreadId =
+    typeof continuationOrBackendPending === "string"
+      ? continuationOrBackendPending
+      : null;
+  const backendMetadataPending = continuationOrBackendPending === true;
   if (backendMetadataPending)
     api.getAgentBackends.mockImplementation(
       async () => await new Promise<never>(() => undefined),
@@ -79,8 +96,15 @@ function renderNewChat(
         lastOpenedThreadId: null,
       },
     ],
-    threads: [],
+    threads:
+      continuationSourceThreadId === null
+        ? []
+        : [{ id: continuationSourceThreadId, runtime: "pi" }],
     diagnostics: [],
+  });
+  api.preflightContinuation.mockResolvedValue({
+    available: true,
+    imageInput: "unknown",
   });
   api.getWorkspacePreflight.mockResolvedValue({
     worktreeAvailable: true,
@@ -101,6 +125,7 @@ function renderNewChat(
         <NewChatPane
           projectId={projectId}
           paneId={paneId}
+          continuationSourceThreadId={continuationSourceThreadId}
           focused
           onFocus={onFocus}
           onClose={vi.fn()}
@@ -112,6 +137,110 @@ function renderNewChat(
   );
   return { onThreadStarted, onFocus };
 }
+
+describe("pending same-worktree continuation", () => {
+  it("reuses the persisted first-prompt identity after a pending-page reload", async () => {
+    const persistedKey = "90000000-0000-4000-8000-000000000090";
+    localStorage.setItem(
+      continuationCreationKey(projectId, paneId),
+      persistedKey,
+    );
+    localStorage.setItem(
+      newChatDraftKey(projectId, paneId),
+      "Continue after reload",
+    );
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    renderNewChat({}, threadId);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Create chat and send" }),
+      ).toBeEnabled();
+    });
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Continue after reload",
+        persistedKey,
+        [],
+      );
+    });
+  });
+
+  it("creates the durable thread only when its first real prompt is submitted", async () => {
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    const { onThreadStarted } = renderNewChat({}, threadId);
+
+    expect(
+      await screen.findByText("Same managed worktree"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Execution location"),
+    ).not.toBeInTheDocument();
+    expect(api.continueThread).not.toHaveBeenCalled();
+
+    const composer = screen.getByRole("textbox", { name: "First message" });
+    await user.type(composer, "Continue implementation");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Continue implementation",
+        expect.any(String),
+        [],
+      );
+    });
+    expect(api.startThread).not.toHaveBeenCalled();
+    expect(onThreadStarted).toHaveBeenCalledWith(threadId);
+  });
+
+  it("sends photos with the first prompt of an inherited Pi chat", async () => {
+    api.continueThread.mockResolvedValue({
+      thread: { id: threadId },
+      run: { id: "30000000-0000-4000-8000-000000000001" },
+    });
+    const user = userEvent.setup();
+    renderNewChat({}, threadId);
+    const image = new File([new Uint8Array([1, 2, 3])], "context.png", {
+      type: "image/png",
+    });
+
+    fireEvent.change(await screen.findByLabelText("＋ Add photos"), {
+      target: { files: [image] },
+    });
+    expect(
+      await screen.findByRole("list", { name: "Attached photos" }),
+    ).toBeInTheDocument();
+    await user.type(
+      screen.getByRole("textbox", { name: "First message" }),
+      "Use this screenshot",
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(api.continueThread).toHaveBeenCalledWith(
+        projectId,
+        threadId,
+        "Use this screenshot",
+        expect.any(String),
+        [image],
+      );
+    });
+  });
+});
 
 // F7. Starting the first thread creates a git worktree, measured at 1.6-2.6s.
 // For all of that time the typed text sat in the composer, the header still
